@@ -120,6 +120,6 @@ func (d *DownloadDao) FileGetGenerator(repoType, org, repo, commit, filePath str
 	return err
 }
 
-func (d *DownloadDao) getPathsInfo() {
-
+func (d *DownloadDao) getPathsInfo() error {
+	return nil
 }
