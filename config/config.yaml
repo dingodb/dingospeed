@@ -1,0 +1,11 @@
+server:
+    mode: debug
+    port: 8090
+    online: true
+    hfEndpoint: https://huggingface.co
+    repos: ./repos
+
+log:
+    MaxSize: 1      # 日志文件最大的尺寸（MB）
+    MaxBackups: 10  #保留旧文件的最大个数
+    MaxAge: 90      #保留旧文件的最大天数
