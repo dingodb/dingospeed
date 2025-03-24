@@ -25,7 +25,7 @@ import (
 	"time"
 
 	"dingo-hfmirror/pkg/config"
-	"dingo-hfmirror/pkg/log"
+	log "dingo-hfmirror/pkg/logger"
 	"dingo-hfmirror/pkg/server"
 
 	"golang.org/x/sync/errgroup"
