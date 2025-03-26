@@ -32,8 +32,8 @@ func InitLogger() {
 		logMode = zapcore.DebugLevel
 	}
 	core := zapcore.NewCore(getEncoder(), zapcore.NewMultiWriteSyncer(getWriteSyncer(), zapcore.AddSync(os.Stdout)), logMode)
-	Logger := zap.New(core)
-	zap.ReplaceGlobals(Logger)
+	logger := zap.New(core, zap.AddCaller())
+	zap.ReplaceGlobals(logger)
 }
 
 func getEncoder() zapcore.Encoder {
@@ -43,6 +43,8 @@ func getEncoder() zapcore.Encoder {
 	encoder.EncodeTime = func(t time.Time, encoder zapcore.PrimitiveArrayEncoder) {
 		encoder.AppendString(t.Local().Format(time.DateTime))
 	}
+	encoder.CallerKey = "caller"
+	encoder.EncodeCaller = zapcore.ShortCallerEncoder
 	return zapcore.NewJSONEncoder(encoder)
 }
 

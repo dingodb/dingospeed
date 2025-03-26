@@ -18,6 +18,7 @@ import (
 	"encoding/gob"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"dingo-hfmirror/pkg/common"
 )
@@ -32,11 +33,21 @@ func GetOrgRepo(org, repo string) string {
 
 // MakeDirs 确保指定路径对应的目录存在
 func MakeDirs(path string) error {
+	fileInfo, err := os.Stat(path)
+	if err == nil {
+		if fileInfo.IsDir() {
+			// 如果路径本身就是目录，直接使用该路径
+			return nil
+		}
+	}
+
+	// 如果路径不是目录，获取其父目录
+	saveDir := filepath.Dir(path)
 	// 检查目录是否存在
-	_, err := os.Stat(path)
+	_, err = os.Stat(saveDir)
 	if os.IsNotExist(err) {
 		// 目录不存在，创建目录
-		err = os.MkdirAll(path, 0755)
+		err = os.MkdirAll(saveDir, 0755)
 		if err != nil {
 			return err
 		}
@@ -45,6 +56,15 @@ func MakeDirs(path string) error {
 		return err
 	}
 	return nil
+}
+
+// FileExists 函数用于判断文件是否存在
+func FileExists(filename string) bool {
+	_, err := os.Stat(filename)
+	if os.IsNotExist(err) {
+		return false
+	}
+	return err == nil
 }
 
 // IsDir 判断所给路径是否为文件夹
@@ -91,6 +111,10 @@ func StoreMetadata(filePath string, metadata *common.FileMetadata) error {
 		return err
 	}
 	return nil
+}
+
+func ReadFileToBytes(filename string) ([]byte, error) {
+	return os.ReadFile(filename)
 }
 
 func SplitFileToSegment(fileSize int64, blockSize int64) (int, []*common.Segment) {

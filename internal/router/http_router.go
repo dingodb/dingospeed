@@ -21,24 +21,31 @@ import (
 )
 
 type HttpRouter struct {
-	echo            *echo.Echo
-	downloadHandler *handler.DownloadHandler
+	echo        *echo.Echo
+	fileHandler *handler.FileHandler
+	metaHandler *handler.MetaHandler
 }
 
-func NewHttpRouter(echo *echo.Echo, downloadHandler *handler.DownloadHandler) *HttpRouter {
+func NewHttpRouter(echo *echo.Echo, fileHandler *handler.FileHandler, metaHandler *handler.MetaHandler) *HttpRouter {
 	r := &HttpRouter{
-		echo:            echo,
-		downloadHandler: downloadHandler,
+		echo:        echo,
+		fileHandler: fileHandler,
+		metaHandler: metaHandler,
 	}
 	r.initFlowRouter()
 	return r
 }
 
 func (r *HttpRouter) initFlowRouter() {
-	r.echo.HEAD("/:repoType/:org/:repo/resolve/:commit/:filePath", r.downloadHandler.HeadDownloadHandler1)
-	r.echo.HEAD("/:orgOrRepoType/:repo/resolve/:commit/:filePath", r.downloadHandler.HeadDownloadHandler2)
-	r.echo.HEAD("/:repo/resolve/:commit/:filePath", r.downloadHandler.HeadDownloadHandler3)
+	r.echo.HEAD("/:repoType/:org/:repo/resolve/:commit/:filePath", r.fileHandler.HeadFileHandler1)
+	r.echo.HEAD("/:orgOrRepoType/:repo/resolve/:commit/:filePath", r.fileHandler.HeadFileHandler2)
+	r.echo.HEAD("/:repo/resolve/:commit/:filePath", r.fileHandler.HeadFileHandler3)
 
-	r.echo.GET("/:org_or_repo_type/:repo_name/resolve/:commit/:file_path", r.downloadHandler.GetDownloadHandler)
+	r.echo.GET("/:repoType/:org/:repo/resolve/:commit/:filePath", r.fileHandler.GetFileHandler1)
+	r.echo.GET("/:orgOrRepoType/:repo/resolve/:commit/:filePath", r.fileHandler.GetFileHandler2)
+	r.echo.GET("/:repo/resolve/:commit/:filePath", r.fileHandler.GetFileHandler3)
+
+	r.echo.HEAD("/api/:repoType/:org/:repo/revision/:commit", r.metaHandler.MetaProxyCommonHandler)
+	r.echo.GET("/api/:repoType/:org/:repo/revision/:commit", r.metaHandler.MetaProxyCommonHandler)
 
 }

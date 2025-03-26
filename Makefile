@@ -21,8 +21,6 @@ endif
 .PHONY: init
 # init env
 init:
-	go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
 	go install github.com/google/wire/cmd/wire@latest
 
 .PHONY: wire
@@ -59,6 +57,20 @@ vet:
 # build
 build:
 	mkdir -p bin/ && go build -ldflags "-s -w -X main.Version=$(VERSION)" -o ./bin/dingo-hfmirror dingo-hfmirror/cmd
+
+.PHONY: macbuild
+macbuild:
+	mkdir -p bin/ && CGO_ENABLED=0 GOOS=linux GOARCH=amd64  go build -ldflags "-s -w -X main.Version=$(VERSION)" -o ./bin/dingo-hfmirror dingo-hfmirror/cmd
+
+.PHONY: macscp
+macscp:
+    scp bin/dingo-hfmirror root@172.30.14.123:/root/hub-download/dingo-hfmirror
+
+.PHONY: deploy
+# generate all
+deploy:
+	make macbuild;
+	make macscp
 
 # go install github.com/superproj/addlicense@latest
 .PHONY: license

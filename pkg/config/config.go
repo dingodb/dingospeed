@@ -23,8 +23,9 @@ import (
 var SysConfig *Config
 
 type Config struct {
-	Server ServerConfig `json:"server" yaml:"server"`
-	Log    LogConfig    `json:"log" yaml:"log"`
+	Server   ServerConfig `json:"server" yaml:"server"`
+	Download Download     `json:"download" yaml:"download"`
+	Log      LogConfig    `json:"log" yaml:"log"`
 }
 
 type ServerConfig struct {
@@ -33,6 +34,14 @@ type ServerConfig struct {
 	Online     bool   `json:"online" yaml:"online"`
 	HfEndpoint string `json:"hfEndpoint" yaml:"hfEndpoint"`
 	Repos      string `json:"repos" yaml:"repos"`
+}
+
+type Download struct {
+	RetryChannelNum        int   `json:"retryChannelNum" yaml:"retryChannelNum"`
+	GoroutineMaxNumPerFile int   `json:"goroutineMaxNumPerFile" yaml:"goroutineMaxNumPerFile"`
+	WaitNextBlockTime      int   `json:"waitNextBlockTime" yaml:"waitNextBlockTime"`
+	BlockSize              int64 `json:"blockSize" yaml:"blockSize"`
+	Timeout                int64 `json:"timeout" yaml:"timeout"`
 }
 
 type LogConfig struct {

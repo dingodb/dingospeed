@@ -20,6 +20,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"dingo-hfmirror/pkg/common"
 )
 
 // Get 方法用于发送带请求头的 GET 请求
@@ -65,7 +67,7 @@ func Head(url string, headers map[string]string, timeout time.Duration) (*http.R
 }
 
 // Post 方法用于发送带请求头的 POST 请求
-func Post(url string, contentType string, data []byte, headers map[string]string) ([]byte, error) {
+func Post(url string, contentType string, data []byte, headers map[string]string) (*common.Response, error) {
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(data))
 	if err != nil {
 		return nil, err
@@ -80,12 +82,19 @@ func Post(url string, contentType string, data []byte, headers map[string]string
 		return nil, err
 	}
 	defer resp.Body.Close()
-
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
-	return body, nil
+	respHeaders := make(map[string]interface{})
+	for key, value := range resp.Header {
+		respHeaders[key] = value
+	}
+	return &common.Response{
+		StatusCode: resp.StatusCode,
+		Headers:    respHeaders,
+		Body:       body,
+	}, nil
 }
 
 func GetDomain(hfURL string) (string, error) {

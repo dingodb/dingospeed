@@ -46,3 +46,16 @@ type FileMetadata struct {
 	ModifyTime time.Time // 文件修改时间
 	Segments   []*Segment
 }
+
+type Response struct {
+	StatusCode int
+	Headers    map[string]interface{}
+	Body       []byte
+}
+
+type PathsInfo struct {
+	Type string `json:"type"`
+	Oid  string `json:"oid"`
+	Size int64  `json:"size"`
+	Path string `json:"path"`
+}

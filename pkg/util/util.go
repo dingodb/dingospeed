@@ -15,6 +15,8 @@
 package util
 
 import (
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"hash/crc32"
 	"io"
@@ -210,4 +212,10 @@ func CalculatePercentage(a, b float32) (float32, error) {
 
 func UUID() string {
 	return uuid.New().String()
+}
+
+func Md5(str string) string {
+	hash := md5.Sum([]byte(str))
+	hashString := hex.EncodeToString(hash[:])
+	return hashString
 }

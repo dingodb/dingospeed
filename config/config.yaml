@@ -2,8 +2,15 @@ server:
     mode: debug
     port: 8090
     online: true
-    hfEndpoint: https://huggingface.co
+    hfEndpoint: https://hf-mirror.com
     repos: ./repos
+download:
+    retryChannelNum: 100
+    goroutineMaxNumPerFile: 10
+    waitNextBlockTime: 10 #等待获取下一个块的时间，单位（s）
+    blockSize: 8388608    #默认文件块大小为8MB，单位字节
+    timeout: 300       #下载超时时间，单位秒
+
 
 log:
     MaxSize: 1      # 日志文件最大的尺寸（MB）

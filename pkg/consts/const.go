@@ -38,14 +38,12 @@ func (a RepoType) Value() string {
 var ApiTimeOut = 15 * time.Second
 
 // 定义常量
-const SmallFileSize = 1024 * 1024   // 小文件大小
-const SliceBytes = 1024 * 1024 * 1  // 分片大小
-const UploadRetryChannelNum = 100   // 上传的重试通道队列大小
-const DownloadRetryChannelNum = 100 // 下载的重试通道队列大小
-const UploadTimeout = 300           // 上传超时时间，单位秒
-const DownloadTimeout = 300         // 上传超时时间，单位秒
-const UpGoroutineMaxNumPerFile = 10 // 每个上传文件开启的goroutine最大数量
-const DpGoroutineMaxNumPerFile = 10 // 每个下载文件开启的goroutine最大数量
+const SmallFileSize = 1024 * 1024  // 小文件大小
+const SliceBytes = 1024 * 1024 * 1 // 分片大小
 
-// const BlockSize = 1024 //8 * 1024 *
-const BlockSize = 8 * 1024 * 1024 // 8 * 1024 *
+const HUGGINGFACE_HEADER_X_REPO_COMMIT = "X-Repo-Commit"
+
+const (
+	RequestTypeHead = "head"
+	RequestTypeGet  = "get"
+)
