@@ -19,10 +19,12 @@ import (
 
 func wireApp(configConfig *config.Config) (*App, func(), error) {
 	echo := server.NewEngine()
-	downloadDao := dao.NewDownloadDao()
-	downloadService := service.NewDownloadService(downloadDao)
-	downloadHandler := handler.NewDownloadHandler(downloadService)
-	httpRouter := router.NewHttpRouter(echo, downloadHandler)
+	fileDao := dao.NewFileDao()
+	fileService := service.NewFileService(fileDao)
+	fileHandler := handler.NewFileHandler(fileService)
+	metaService := service.NewMetaService(fileDao)
+	metaHandler := handler.NewMetaHandler(metaService)
+	httpRouter := router.NewHttpRouter(echo, fileHandler, metaHandler)
 	serverServer := server.NewServer(configConfig, echo, httpRouter)
 	app := newApp(serverServer)
 	return app, func() {

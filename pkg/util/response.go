@@ -15,9 +15,9 @@
 package util
 
 import (
+	"fmt"
 	"net/http"
 
-	"github.com/gin-gonic/gin"
 	"github.com/labstack/echo/v4"
 )
 
@@ -41,14 +41,12 @@ var (
 	CodeStopFailed    = NewAPICode(506, "停止失败")
 )
 
-func ResponseOk(ctx *gin.Context, data interface{}) {
-	ctx.JSON(http.StatusOK, gin.H{
-		"code": http.StatusOK,
-		"data": data,
-	})
+func ResponseHeaders(ctx echo.Context, headers map[string]string) error {
+	fullHeaders(ctx, headers)
+	return ctx.JSON(http.StatusOK, nil)
 }
 
-// func ResponseError(ctx *gin.Context, apiCode APICode, cause ...error) {
+// func Response(ctx *gin.Context, apiCode APICode, cause ...error) {
 // 	msg := apiCode.Msg
 // 	if len(cause) > 0 {
 // 		c := cause[0]
@@ -71,7 +69,7 @@ func ErrorRepoNotFound(ctx echo.Context) error {
 		"x-error-code":    "RepoNotFound",
 		"x-error-message": "Repository not found",
 	}
-	return ResponseError(ctx, http.StatusUnauthorized, headers, content)
+	return Response(ctx, http.StatusUnauthorized, headers, content)
 }
 
 func ErrorPageNotFound(ctx echo.Context) error {
@@ -82,10 +80,42 @@ func ErrorPageNotFound(ctx echo.Context) error {
 		"x-error-code":    "RepoNotFound",
 		"x-error-message": "Sorry, we can't find the page you are looking for.",
 	}
-	return ResponseError(ctx, http.StatusNotFound, headers, content)
+	return Response(ctx, http.StatusNotFound, headers, content)
 }
 
-func ResponseError(ctx echo.Context, httpStatus int, headers map[string]string, data interface{}) error {
+func ErrorEntryNotFoundBranch(ctx echo.Context, branch, path string) error {
+	headers := map[string]string{
+		"x-error-code":    "EntryNotFound",
+		"x-error-message": fmt.Sprintf("%s does not exist on %s", branch, path),
+	}
+	return Response(ctx, http.StatusUnauthorized, headers, nil)
+}
+
+func ErrorEntryNotFound(ctx echo.Context) error {
+	headers := map[string]string{
+		"x-error-code":    "EntryNotFound",
+		"x-error-message": "Entry not found",
+	}
+	return Response(ctx, http.StatusNotFound, headers, nil)
+}
+
+func ErrorProxyTimeout(ctx echo.Context) error {
+	headers := map[string]string{
+		"x-error-code":    "ProxyTimeout",
+		"x-error-message": "Proxy Timeout",
+	}
+	return Response(ctx, http.StatusGatewayTimeout, headers, nil)
+}
+
+func ErrorProxyError(ctx echo.Context) error {
+	headers := map[string]string{
+		"x-error-code":    "Proxy error",
+		"x-error-message": "Proxy error",
+	}
+	return Response(ctx, http.StatusInternalServerError, headers, nil)
+}
+
+func Response(ctx echo.Context, httpStatus int, headers map[string]string, data interface{}) error {
 	fullHeaders(ctx, headers)
 	return ctx.JSON(httpStatus, data)
 }

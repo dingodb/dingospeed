@@ -12,8 +12,31 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
-package service
+package handler
 
-import "github.com/google/wire"
+import (
+	"strings"
 
-var ServiceProvider = wire.NewSet(NewFileService, NewMetaService)
+	"dingo-hfmirror/internal/service"
+
+	"github.com/labstack/echo/v4"
+)
+
+type MetaHandler struct {
+	metaService *service.MetaService
+}
+
+func NewMetaHandler(fileService *service.MetaService) *MetaHandler {
+	return &MetaHandler{
+		metaService: fileService,
+	}
+}
+
+func (handler *MetaHandler) MetaProxyCommonHandler(c echo.Context) error {
+	repoType := c.Param("repoType")
+	org := c.Param("org")
+	repo := c.Param("repo")
+	commit := c.Param("commit")
+	method := strings.ToLower(c.Request().Method)
+	return handler.metaService.MetaProxyCommon(c, repoType, org, repo, commit, method)
+}

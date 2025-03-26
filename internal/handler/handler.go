@@ -18,4 +18,4 @@ import (
 	"github.com/google/wire"
 )
 
-var HandlerProvider = wire.NewSet(NewDownloadHandler)
+var HandlerProvider = wire.NewSet(NewFileHandler, NewMetaHandler)
