@@ -1,9 +1,14 @@
 server:
+    host: localhost
     mode: debug
     port: 8090
     online: true
     hfEndpoint: https://hf-mirror.com
     repos: ./repos
+    hfNetLoc: huggingface.co
+    hfScheme: https
+    hfLfsNetLoc : cdn-lfs.huggingface.co
+
 download:
     retryChannelNum: 100
     goroutineMaxNumPerFile: 10

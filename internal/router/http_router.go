@@ -47,5 +47,6 @@ func (r *HttpRouter) initFlowRouter() {
 
 	r.echo.HEAD("/api/:repoType/:org/:repo/revision/:commit", r.metaHandler.MetaProxyCommonHandler)
 	r.echo.GET("/api/:repoType/:org/:repo/revision/:commit", r.metaHandler.MetaProxyCommonHandler)
+	r.echo.GET("/api/whoami-v2", r.metaHandler.WhoamiV2Handler)
 
 }

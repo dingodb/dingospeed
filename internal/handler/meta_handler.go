@@ -40,3 +40,7 @@ func (handler *MetaHandler) MetaProxyCommonHandler(c echo.Context) error {
 	method := strings.ToLower(c.Request().Method)
 	return handler.metaService.MetaProxyCommon(c, repoType, org, repo, commit, method)
 }
+
+func (handler *MetaHandler) WhoamiV2Handler(c echo.Context) error {
+	return handler.metaService.WhoamiV2(c)
+}

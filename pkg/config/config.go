@@ -29,11 +29,15 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Mode       string `json:"mode" yaml:"mode"`
-	Port       int    `json:"port" yaml:"port"`
-	Online     bool   `json:"online" yaml:"online"`
-	HfEndpoint string `json:"hfEndpoint" yaml:"hfEndpoint"`
-	Repos      string `json:"repos" yaml:"repos"`
+	Host        string `json:"host" yaml:"host"`
+	Mode        string `json:"mode" yaml:"mode"`
+	Port        int    `json:"port" yaml:"port"`
+	Online      bool   `json:"online" yaml:"online"`
+	HfEndpoint  string `json:"hfEndpoint" yaml:"hfEndpoint"`
+	Repos       string `json:"repos" yaml:"repos"`
+	HfNetLoc    string `json:"hfNetLoc" yaml:"hfNetLoc"`
+	HfScheme    string `json:"hfScheme" yaml:"hfScheme"`
+	HfLfsNetLoc string `json:"hfLfsNetLoc" yaml:"hfLfsNetLoc"`
 }
 
 type Download struct {
@@ -60,6 +64,26 @@ func (c *Config) Online() bool {
 
 func (c *Config) Repos() string {
 	return c.Server.Repos
+}
+
+func (c *Config) GetHost() string {
+	return c.Server.Host
+}
+
+func (c *Config) GetHfNetLoc() string {
+	return c.Server.HfNetLoc
+}
+
+func (c *Config) GetHfScheme() string {
+	return c.Server.HfScheme
+}
+
+func (c *Config) GetHfLfsNetLoc() string {
+	return c.Server.HfLfsNetLoc
+}
+
+func (c *Config) GetHFURLBase() string {
+	return c.Server.HfScheme + "://" + c.GetHfNetLoc()
 }
 
 func Scan(path string) (*Config, error) {

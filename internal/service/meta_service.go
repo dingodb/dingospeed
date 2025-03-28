@@ -41,3 +41,8 @@ func (d *MetaService) MetaProxyCommon(c echo.Context, repoType, org, repo, commi
 	err := d.fileDao.FileGetGenerator(c, repoType, org, repo, commitSha, method, consts.RequestTypeGet)
 	return err
 }
+
+func (d *MetaService) WhoamiV2(c echo.Context) error {
+	err := d.fileDao.WhoamiV2Generator(c)
+	return err
+}
