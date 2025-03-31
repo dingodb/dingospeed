@@ -21,6 +21,8 @@ import (
 	"path/filepath"
 
 	"dingo-hfmirror/pkg/common"
+
+	"github.com/bytedance/sonic"
 )
 
 func GetOrgRepo(org, repo string) string {
@@ -94,6 +96,27 @@ func GetFileSize(path string) int64 {
 	return fh.Size()
 }
 
+func ReadFileToBytes(filename string) ([]byte, error) {
+	return os.ReadFile(filename)
+}
+
+func WriteDataToFile(filename string, data interface{}) error {
+	jsonData, err := sonic.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("JSON 编码出错: %w", err)
+	}
+	file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return fmt.Errorf("打开文件出错: %w", err)
+	}
+	defer file.Close()
+	_, err = file.Write(jsonData)
+	if err != nil {
+		return fmt.Errorf("写入文件出错: %w", err)
+	}
+	return nil
+}
+
 // StoreMetadata 保存文件元数据
 func StoreMetadata(filePath string, metadata *common.FileMetadata) error {
 	// 写入文件
@@ -111,10 +134,6 @@ func StoreMetadata(filePath string, metadata *common.FileMetadata) error {
 		return err
 	}
 	return nil
-}
-
-func ReadFileToBytes(filename string) ([]byte, error) {
-	return os.ReadFile(filename)
 }
 
 func SplitFileToSegment(fileSize int64, blockSize int64) (int, []*common.Segment) {

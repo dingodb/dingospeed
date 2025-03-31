@@ -15,6 +15,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -33,7 +34,6 @@ type ServerConfig struct {
 	Mode        string `json:"mode" yaml:"mode"`
 	Port        int    `json:"port" yaml:"port"`
 	Online      bool   `json:"online" yaml:"online"`
-	HfEndpoint  string `json:"hfEndpoint" yaml:"hfEndpoint"`
 	Repos       string `json:"repos" yaml:"repos"`
 	HfNetLoc    string `json:"hfNetLoc" yaml:"hfNetLoc"`
 	HfScheme    string `json:"hfScheme" yaml:"hfScheme"`
@@ -54,8 +54,8 @@ type LogConfig struct {
 	MaxAge     int `json:"maxAge" yaml:"maxAge"`
 }
 
-func (c *Config) GetHfEndpoint() string {
-	return c.Server.HfEndpoint
+func (c *Config) GetHFURLBase() string {
+	return fmt.Sprintf("%s://%s", c.GetHfScheme(), c.GetHfNetLoc())
 }
 
 func (c *Config) Online() bool {
@@ -80,10 +80,6 @@ func (c *Config) GetHfScheme() string {
 
 func (c *Config) GetHfLfsNetLoc() string {
 	return c.Server.HfLfsNetLoc
-}
-
-func (c *Config) GetHFURLBase() string {
-	return c.Server.HfScheme + "://" + c.GetHfNetLoc()
 }
 
 func Scan(path string) (*Config, error) {

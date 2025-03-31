@@ -12,11 +12,13 @@ import (
 
 type MetaService struct {
 	fileDao *dao.FileDao
+	metaDao *dao.MetaDao
 }
 
-func NewMetaService(fileDao *dao.FileDao) *MetaService {
+func NewMetaService(fileDao *dao.FileDao, metaDao *dao.MetaDao) *MetaService {
 	return &MetaService{
 		fileDao: fileDao,
+		metaDao: metaDao,
 	}
 }
 
@@ -30,15 +32,27 @@ func (d *MetaService) MetaProxyCommon(c echo.Context, repoType, org, repo, commi
 	}
 	authorization := c.Request().Header.Get("authorization")
 	if config.SysConfig.Online() {
-		if !d.fileDao.CheckCommitHf(repoType, org, repo, commit, authorization) {
+		// check repo
+		if !d.fileDao.CheckCommitHf(repoType, org, repo, "", authorization) {
 			return util.ErrorRepoNotFound(c)
+		}
+		// check repo commit
+		if !d.fileDao.CheckCommitHf(repoType, org, repo, commit, authorization) {
+			return util.ErrorRevisionNotFound(c, commit)
+
 		}
 	}
 	commitSha := d.fileDao.GetCommitHf(repoType, org, repo, commit, authorization)
 	if commitSha == "" {
 		return util.ErrorRepoNotFound(c)
 	}
-	err := d.fileDao.FileGetGenerator(c, repoType, org, repo, commitSha, method, consts.RequestTypeGet)
+	var err error
+	if config.SysConfig.Online() {
+		err = d.metaDao.MetaGetGenerator(c, repoType, org, repo, commitSha, method)
+	} else {
+		err = d.metaDao.MetaGetGenerator(c, repoType, org, repo, commitSha, method)
+	}
+	err = d.fileDao.FileGetGenerator(c, repoType, org, repo, commitSha, method, consts.RequestTypeGet)
 	return err
 }
 

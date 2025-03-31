@@ -35,7 +35,7 @@ func (a RepoType) Value() string {
 	return string(a)
 }
 
-var ApiTimeOut = 15 * time.Second
+var ApiTimeOut = 15 * time.Minute
 
 // 定义常量
 const SmallFileSize = 1024 * 1024  // 小文件大小
@@ -47,3 +47,5 @@ const (
 	RequestTypeHead = "head"
 	RequestTypeGet  = "get"
 )
+
+const ChunkSize = 1024 * 2

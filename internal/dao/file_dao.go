@@ -21,7 +21,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"path"
 	"strings"
 	"time"
@@ -52,9 +51,9 @@ func (d *FileDao) CheckCommitHf(repoType, org, repo, commit, authorization strin
 	orgRepo := util.GetOrgRepo(org, repo)
 	var reqUrl string
 	if commit == "" {
-		reqUrl = fmt.Sprintf("%s/api/%s/%s", config.SysConfig.GetHfEndpoint(), repoType, orgRepo)
+		reqUrl = fmt.Sprintf("%s/api/%s/%s", config.SysConfig.GetHFURLBase(), repoType, orgRepo)
 	} else {
-		reqUrl = fmt.Sprintf("%s/api/%s/%s/revision/%s", config.SysConfig.GetHfEndpoint(), repoType, orgRepo, commit)
+		reqUrl = fmt.Sprintf("%s/api/%s/%s/revision/%s", config.SysConfig.GetHFURLBase(), repoType, orgRepo, commit)
 	}
 	headers := map[string]string{}
 	if authorization != "" {
@@ -77,7 +76,7 @@ func (d *FileDao) GetCommitHf(repoType, org, repo, commit, authorization string)
 	}
 	orgRepo := util.GetOrgRepo(org, repo)
 	var reqUrl string
-	reqUrl = fmt.Sprintf("%s/api/%s/%s/revision/%s", config.SysConfig.GetHfEndpoint(), repoType, orgRepo, commit)
+	reqUrl = fmt.Sprintf("%s/api/%s/%s/revision/%s", config.SysConfig.GetHFURLBase(), repoType, orgRepo, commit)
 	headers := map[string]string{}
 	if authorization != "" {
 		headers["authorization"] = authorization
@@ -88,7 +87,7 @@ func (d *FileDao) GetCommitHf(repoType, org, repo, commit, authorization string)
 		return d.getCommitHfOffline(repoType, org, repo, commit)
 	}
 	var sha CommitHfSha
-	if err = sonic.Unmarshal(resp, &sha); err != nil {
+	if err = sonic.Unmarshal(resp.Body, &sha); err != nil {
 		zap.S().Errorf("unmarshal error.%v", err)
 		return d.getCommitHfOffline(repoType, org, repo, commit)
 	}
@@ -117,9 +116,9 @@ func (d *FileDao) FileGetGenerator(c echo.Context, repoType, org, repo, commit, 
 	}
 	var hfUrl string
 	if repoType == "models" {
-		hfUrl = fmt.Sprintf("%s/%s/resolve/%s/%s", config.SysConfig.GetHfEndpoint(), orgRepo, commit, fileName)
+		hfUrl = fmt.Sprintf("%s/%s/resolve/%s/%s", config.SysConfig.GetHFURLBase(), orgRepo, commit, fileName)
 	} else {
-		hfUrl = fmt.Sprintf("%s/%s/%s/resolve/%s/%s", config.SysConfig.GetHfEndpoint(), repoType, orgRepo, commit, fileName)
+		hfUrl = fmt.Sprintf("%s/%s/%s/resolve/%s/%s", config.SysConfig.GetHFURLBase(), repoType, orgRepo, commit, fileName)
 	}
 	headers := map[string]string{}
 	request := c.Request()
@@ -157,13 +156,13 @@ func (d *FileDao) FileGetGenerator(c echo.Context, repoType, org, repo, commit, 
 		return util.ErrorProxyTimeout(c)
 	}
 	respHeaders["etag"] = etag
-	zap.S().Debugf("exec FileGetGenerator:commit:%s,etag:%s", commit, etag)
+	zap.S().Debugf("FileGetGenerator-fileName:%s,commit:%s,etag:%s", fileName, commit, etag)
 	if method == consts.RequestTypeHead {
 		return util.ResponseHeaders(c, respHeaders)
 	} else if method == consts.RequestTypeGet {
-		return d.FileChunkGet(c, respHeaders, hfUrl, fileName, pathInfo.Size, filesDir)
+		return d.FileChunkGet(c, respHeaders, hfUrl, pathInfo.Size, fileName, filesPath)
 	} else {
-		return nil
+		return util.ErrorMethodError(c)
 	}
 }
 
@@ -186,7 +185,7 @@ func (d *FileDao) pathsInfoGenerator(repoType, org, repo, commit, authorization 
 		for k := range filePathMap {
 			filePaths = append(filePaths, k)
 		}
-		pathsInfoUrl := fmt.Sprintf("%s/api/%s/%s/paths-info/%s", config.SysConfig.GetHfEndpoint(), repoType, orgRepo, commit)
+		pathsInfoUrl := fmt.Sprintf("%s/api/%s/%s/paths-info/%s", config.SysConfig.GetHFURLBase(), repoType, orgRepo, commit)
 		response, err := d.pathsInfoProxy(pathsInfoUrl, authorization, filePaths)
 		if err != nil {
 			zap.S().Errorf("req %s err.%v", pathsInfoUrl, err)
@@ -212,35 +211,13 @@ func (d *FileDao) writeCacheRequest(apiPath string, statusCode int, headers map[
 		zap.S().Errorf("create %s dir err.%v", apiPath, err)
 		return err
 	}
-	lowerCaseHeaders := make(map[string]interface{})
-	for k, v := range headers {
-		if strSlice, ok := v.([]string); ok {
-			if len(strSlice) > 0 {
-				lowerCaseHeaders[strings.ToLower(k)] = strSlice[0]
-			}
-		} else {
-			lowerCaseHeaders[strings.ToLower(k)] = v
-		}
+	lowerCaseHeaders := util.ExtractHeaders(headers)
+	cacheContent := common.CacheContent{
+		StatusCode: statusCode,
+		Headers:    lowerCaseHeaders,
+		Content:    hex.EncodeToString(content),
 	}
-	m := map[string]interface{}{
-		"status_code": statusCode,
-		"headers":     lowerCaseHeaders,
-		"content":     hex.EncodeToString(content),
-	}
-	jsonData, err := sonic.Marshal(m)
-	if err != nil {
-		return fmt.Errorf("JSON 编码出错: %w", err)
-	}
-	file, err := os.OpenFile(apiPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		return fmt.Errorf("打开文件出错: %w", err)
-	}
-	defer file.Close()
-	_, err = file.Write(jsonData)
-	if err != nil {
-		return fmt.Errorf("写入文件出错: %w", err)
-	}
-	return nil
+	return util.WriteDataToFile(apiPath, cacheContent)
 }
 
 func (d *FileDao) pathsInfoProxy(targetUrl, authorization string, filePaths []string) (*common.Response, error) {
@@ -283,48 +260,42 @@ func (d *FileDao) getResourceEtag(hfUrl, authorization string) (string, error) {
 	return retEtag, nil
 }
 
-func (d *FileDao) FileChunkGet(c echo.Context, headers map[string]string, hfUrl, fileName string, fileSize int64, fileDir string) error {
-	// 1.针对每个文件获取一个下载器
-	loader, err := downloader.GetDownLoader(downloader.FileInfo{
-		FileName: fileName, FileSize: fileSize,
-	}, fileDir)
-	if err != nil {
-		return util.ErrorProxyError(c)
-	}
-	loader.DownloadUrl = hfUrl
-	if err = loader.DownloadFileBySlice(); err != nil {
-		return util.ErrorProxyError(c)
-	}
-	loader.MergeDownloadFiles()
-	return d.responseBlock(c, headers, loader.BlockData)
-}
+// func (d *FileDao) FileChunkGet(c echo.Context, headers map[string]string, hfUrl, fileName string, fileSize int64, fileDir string) error {
+// 	// 1.针对每个文件获取一个下载器
+// 	fInfo := downloader.FileInfo{
+// 		FileName: fileName, FileSize: fileSize,
+// 	}
+// 	var startPos, endPos int64 = 0, fileSize - 1
+// 	if v, ok := headers["range"]; ok {
+// 		startPos, endPos = parseRangeParams(v, fileSize)
+// 	}
+// 	fInfo.StartPos = startPos
+// 	fInfo.EndPos = endPos
+// 	loader, err := downloader.GetDownLoader(fInfo, fileDir)
+// 	if err != nil {
+// 		return util.ErrorProxyError(c)
+// 	}
+// 	loader.DownloadUrl = hfUrl
+// 	if err = loader.DownloadFileBySlice(); err != nil {
+// 		return util.ErrorProxyError(c)
+// 	}
+// 	if err = loader.MergeDownloadFiles(); err != nil {
+// 		return util.ErrorProxyTimeout(c)
+// 	}
+// 	if _, err = util.ResponseStream(c, fileName, headers, loader.BlockData, false); err != nil {
+// 		return util.ErrorProxyTimeout(c)
+// 	}
+// 	return nil
+// }
 
-func (d *FileDao) responseBlock(c echo.Context, headers map[string]string, content <-chan []byte) error {
-	c.Response().Header().Set("Content-Type", "text/event-stream")
-	c.Response().Header().Set("Cache-Control", "no-cache")
-	c.Response().Header().Set("Connection", "keep-alive")
-	for k, v := range headers {
-		c.Response().Header().Set(k, v)
+func (d *FileDao) FileChunkGet(c echo.Context, headers map[string]string, hfUrl string, fileSize int64, fileName, filesPath string) error {
+	contentChan := make(chan []byte, 100)
+	go downloader.FileDownload(hfUrl, filesPath, fileSize, headers, contentChan)
+	if _, err := util.ResponseStream(c, fileName, headers, contentChan, false); err != nil {
+		zap.S().Errorf("FileChunkGet stream err.%v", err)
+		return util.ErrorProxyTimeout(c)
 	}
-	c.Response().WriteHeader(http.StatusOK)
-	flusher, ok := c.Response().Writer.(http.Flusher)
-	if !ok {
-		return c.String(http.StatusInternalServerError, "Streaming unsupported!")
-	}
-	for {
-		select {
-		case b, ok := <-content:
-			if !ok {
-				return nil
-			}
-			zap.S().Infof("resp back:%d", len(b))
-			if _, err := c.Response().Write(b); err != nil {
-				zap.S().Errorf("resp write err.%v", err)
-				return err
-			}
-			flusher.Flush()
-		}
-	}
+	return nil
 }
 
 func (d *FileDao) WhoamiV2Generator(c echo.Context) error {

@@ -51,6 +51,7 @@ type Response struct {
 	StatusCode int
 	Headers    map[string]interface{}
 	Body       []byte
+	BodyChan   chan []byte
 }
 
 type PathsInfo struct {
@@ -58,4 +59,10 @@ type PathsInfo struct {
 	Oid  string `json:"oid"`
 	Size int64  `json:"size"`
 	Path string `json:"path"`
+}
+
+type CacheContent struct {
+	StatusCode int               `json:"statusCode"`
+	Headers    map[string]string `json:"headers"`
+	Content    string            `json:"content"`
 }

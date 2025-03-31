@@ -46,21 +46,6 @@ func ResponseHeaders(ctx echo.Context, headers map[string]string) error {
 	return ctx.JSON(http.StatusOK, nil)
 }
 
-// func Response(ctx *gin.Context, apiCode APICode, cause ...error) {
-// 	msg := apiCode.Msg
-// 	if len(cause) > 0 {
-// 		c := cause[0]
-// 		var t myerr.Error
-// 		if errors.As(c, &t) {
-// 			msg = t.Error()
-// 		}
-// 	}
-// 	ctx.JSON(apiCode.HTTPStatus(), gin.H{
-// 		"code": apiCode.Code,
-// 		"msg":  msg,
-// 	})
-// }
-
 func ErrorRepoNotFound(ctx echo.Context) error {
 	content := map[string]string{
 		"error": "Repository not found",
@@ -99,6 +84,17 @@ func ErrorEntryNotFound(ctx echo.Context) error {
 	return Response(ctx, http.StatusNotFound, headers, nil)
 }
 
+func ErrorRevisionNotFound(ctx echo.Context, revision string) error {
+	content := map[string]string{
+		"error": fmt.Sprintf("Invalid rev id: %s", revision),
+	}
+	headers := map[string]string{
+		"x-error-code":    "RevisionNotFound",
+		"x-error-message": fmt.Sprintf("Invalid rev id: %s", revision),
+	}
+	return Response(ctx, http.StatusNotFound, headers, content)
+}
+
 func ErrorProxyTimeout(ctx echo.Context) error {
 	headers := map[string]string{
 		"x-error-code":    "ProxyTimeout",
@@ -113,6 +109,17 @@ func ErrorProxyError(ctx echo.Context) error {
 		"x-error-message": "Proxy error",
 	}
 	return Response(ctx, http.StatusInternalServerError, headers, nil)
+}
+
+func ErrorMethodError(ctx echo.Context) error {
+	content := map[string]string{
+		"error": "request method error",
+	}
+	headers := map[string]string{
+		"x-error-code":    "request method error",
+		"x-error-message": "request method error",
+	}
+	return Response(ctx, http.StatusInternalServerError, headers, content)
 }
 
 func Response(ctx echo.Context, httpStatus int, headers map[string]string, data interface{}) error {

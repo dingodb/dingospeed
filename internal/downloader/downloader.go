@@ -15,374 +15,324 @@
 package downloader
 
 import (
-	"errors"
+	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
-	"path"
-	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
-	"time"
 
-	"dingo-hfmirror/pkg/common"
 	"dingo-hfmirror/pkg/config"
+	"dingo-hfmirror/pkg/consts"
 	"dingo-hfmirror/pkg/util"
 
 	"go.uber.org/zap"
 )
 
-type Downloader struct {
-	common.FileMetadata                     // 文件元数据
-	waitGoroutine       sync.WaitGroup      // 同步goroutine
-	DownloadDir         string              // 下载文件保存目录
-	RetryChannel        chan common.Segment // 重传channel通道
-	MaxGtChannel        chan struct{}       // 限制上传的goroutine的数量通道
-	StartTime           int64               // 下载开始时间
-	DownloadUrl         string              // 文件下载路径
-	IsOpen              bool                // 文件是否被打开
-	BlockData           chan []byte         // 块文件数据输出
-	NextBlock           chan int            // 发送下一个块文件
-}
-
-type FileInfo struct {
-	FileName string
-	FileSize int64
-}
-
-func GetDownLoader(fileInfo FileInfo, downloadDir string) (*Downloader, error) {
-	// downloadingFile := getDownloadMetaFile(path.Join(downloadDir, fileInfo.FileName))
-	// 检查下载文件是否存在，若存在表示是上次未下载完成的文件
-	// if util.IsFile(downloadingFile) {
-	// 	loader := &Downloader{
-	// 		DownloadDir:  downloadDir,
-	// 		RetryChannel: make(chan common.Segment, config.SysConfig.Download.RetryChannelNum),
-	// 		MaxGtChannel: make(chan struct{}, config.SysConfig.Download.GoroutineMaxNumPerFile),
-	// 		StartTime:    time.Now().Unix(),
-	// 	}
-	//
-	// 	file, err := os.Open(downloadingFile)
-	// 	if err != nil {
-	// 		fmt.Println("获取文件状态失败")
-	// 		return nil, err
-	// 	}
-	// 	var metadata common.FileMetadata
-	// 	filedata := gob.NewDecoder(file)
-	// 	err = filedata.Decode(&metadata)
-	// 	if err != nil {
-	// 		fmt.Println("格式化文件数据失败")
-	// 	}
-	// 	loader.FileMetadata = metadata
-	// 	// 计算还需下载的分片
-	// 	// sliceseq, err := loader.calNeededSlice()
-	// 	// if err != nil {
-	// 	//	os.Remove(downloadingFile)
-	// 	//	return nil
-	// 	// }
-	// 	return loader, nil
-	// } else {
-	// 没有downloading文件，重新下载
-	return NewDownLoader(fileInfo, downloadDir)
-	// }
-}
-
-// NewDownLoader 新建一个下载器
-func NewDownLoader(fileInfo FileInfo, downloadDir string) (*Downloader, error) {
-	var metadata common.FileMetadata
-	metadata.Fid = util.UUID()
-	metadata.Filesize = fileInfo.FileSize
-	metadata.Filename = fileInfo.FileName
-	count, segments := util.SplitFileToSegment(fileInfo.FileSize, config.SysConfig.Download.BlockSize)
-	metadata.SliceNum = count
-	metadata.Segments = segments
-
-	// 创建下载分片保存路径文件夹
-	dSliceDir := getSliceDir(path.Join(downloadDir, fileInfo.FileName), metadata.Fid)
-	err := os.MkdirAll(dSliceDir, 0766)
-	if err != nil {
-		zap.S().Error("创建下载分片目录失败", dSliceDir, err)
-		return nil, err
-	}
-	metadataPath := getDownloadMetaFile(path.Join(downloadDir, fileInfo.FileName))
-	err = util.StoreMetadata(metadataPath, &metadata)
-	if err != nil {
-		zap.S().Error("StoreMetadata err.%S,%v", metadataPath, err)
-		return nil, err
-	}
-	return &Downloader{
-		DownloadDir:  downloadDir,
-		FileMetadata: metadata,
-		RetryChannel: make(chan common.Segment, config.SysConfig.Download.RetryChannelNum),
-		MaxGtChannel: make(chan struct{}, config.SysConfig.Download.GoroutineMaxNumPerFile),
-		StartTime:    time.Now().Unix(),
-		BlockData:    make(chan []byte, 5),
-		NextBlock:    make(chan int, 5),
-	}, nil
-}
-
-// 获取上传元数据文件路径
-func getDownloadMetaFile(filePath string) string {
-	paths, fileName := filepath.Split(filePath)
-	return path.Join(paths, "."+fileName+".downloading")
-}
-
-func getSliceDir(filePath string, fid string) string {
-	paths, _ := filepath.Split(filePath)
-	return path.Join(paths, fid)
-}
-
-// 计算还需下载的分片序号
-func (d *Downloader) calNeededSlice() ([]*common.Segment, error) {
-	// initialSegments := d.Segments
-	//
-	// // 获取已下载的文件片序号
-	// storeSeq := make(map[string]bool)
-	// files, _ := ioutil.ReadDir(getSliceDir(path.Join(d.DownloadDir, d.Filename), d.Fid))
-	// for _, file := range files {
-	//	_, err := strconv.Atoi(file.Name())
-	//	if err != nil {
-	//		fmt.Println("文件片有错", err, file.Name())
-	//		continue
-	//	}
-	//	storeSeq[file.Name()] = true
-	// }
-	//
-	// i := 0
-	// for ; i < d.SliceNum && len(storeSeq) > 0; i++ {
-	//	indexStr := strconv.Itoa(i)
-	//	if _, ok := storeSeq[indexStr]; ok {
-	//		delete(storeSeq, indexStr)
-	//	} else {
-	//		seq.Slices = append(seq.Slices, i)
-	//	}
-	// }
-	//
-	// // -1指代slices的最大数字序号到最后一片都没有收到
-	// if i < d.SliceNum {
-	//	seq.Slices = append(seq.Slices, i)
-	//	i += 1
-	//	if i < d.SliceNum {
-	//		seq.Slices = append(seq.Slices, -1)
-	//	}
-	// }
-	//
-	// fmt.Printf("%s还需重新下载的片\n", d.Filename)
-	// fmt.Println(seq.Slices)
-	// return &seq, nil
-	return nil, nil
-}
-
-// DownloadFile 单个文件的下载
-func (d *Downloader) DownloadFile() error {
-	if !util.IsDir(d.DownloadDir) {
-		fmt.Printf("指定下载路径：%s 不存在\n", d.DownloadDir)
-		return errors.New("指定下载路径不存在")
-	}
-
-	client := http.Client{}
-	req, err := http.NewRequest(http.MethodGet, d.DownloadUrl, nil)
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	filePath := path.Join(d.DownloadDir, d.Filename)
-	f, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE, 0666)
-	if err != nil {
-		fmt.Printf(err.Error())
-		return err
-	}
-	defer f.Close()
-
-	_, err = io.Copy(f, resp.Body)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("%s 文件下载成功，保存路径：%s\n", d.Filename, filePath)
-	return nil
-}
-
-// DownloadFileBySlice 切片方式下载文件
-func (d *Downloader) DownloadFileBySlice() error {
-	// 启动重下载goroutine
-	go d.retryDownloadSlice()
-	go d.SendNextBlock()
-	metadata := &d.FileMetadata
-	for _, segment := range metadata.Segments {
-		tmp := segment
-		d.waitGoroutine.Add(1)
-		go d.downloadSlice(tmp)
-	}
-	// 等待各个分片都下载完成了
-	zap.S().Infof("%s启动分片下载\n", d.Filename)
-	d.waitGoroutine.Wait()
-	zap.S().Infof("%s分片都已下载完成\n", d.Filename)
-	return nil
-}
-
-// 重下载失败的分片
-func (d *Downloader) retryDownloadSlice() {
-	for segment := range d.RetryChannel {
-		// 检查下载是否超时了
-		if time.Now().Unix()-d.StartTime > config.SysConfig.Download.Timeout {
-			fmt.Println("下载超时，请重试")
-			d.waitGoroutine.Done()
-		}
-		fmt.Printf("重下载文件分片，文件名:%s, 分片序号:%d\n", d.Filename, segment)
-		go d.downloadSlice(&segment)
-	}
-}
-
-// 重下载失败的分片
-func (d *Downloader) SendNextBlock() error {
-	for {
-		index, ok := <-d.NextBlock
-		if !ok {
-			return nil
-		}
-		// 先判断文件划分了多少块，若只有1块，就直接关闭退出。
-		filePath := path.Join(getSliceDir(path.Join(d.DownloadDir, d.Filename), d.Fid), strconv.Itoa(index))
-		for !util.FileExists(filePath) {
-			waitTime := config.SysConfig.Download.WaitNextBlockTime
-			zap.S().Infof("file is not exist，need to wait %d second", waitTime)
-			time.Sleep(time.Duration(waitTime) * time.Second)
-		}
-		sliceFile, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE, 0666)
-		if err != nil {
-			return err
-		}
-		b, err := ioutil.ReadAll(sliceFile)
-		if err != nil {
-			return err
-		}
-		d.BlockData <- b
-		index++
-		if index == len(d.Segments) { // 这是最后一个segment
-			close(d.BlockData)
-			close(d.NextBlock)
-		} else {
-			d.NextBlock <- index
-		}
-	}
-}
-
-// 下载分片
-func (d *Downloader) downloadSlice(segment *common.Segment) error {
-	d.MaxGtChannel <- struct{}{}
-	defer func() {
-		<-d.MaxGtChannel
-	}()
-	client := http.Client{}
-	req, err := http.NewRequest(http.MethodGet, d.DownloadUrl, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Add("range", fmt.Sprintf("bytes=%d-%d", segment.Start, segment.End))
-	resp, err := client.Do(req)
-	if err != nil {
-		zap.S().Errorf("client do err.range:%d-%d,%v", segment.Start, segment.End, err)
-		d.RetryChannel <- *segment
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusPartialContent {
-		zap.S().Infof("resp statuscode:%d", resp.StatusCode)
-		d.RetryChannel <- *segment
-		errMsg, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			zap.S().Errorf("resp body read err,%v", err)
-			return err
-		}
-		return errors.New(string(errMsg))
-	}
-
-	filePath := path.Join(getSliceDir(path.Join(d.DownloadDir, d.Filename), d.Fid), strconv.Itoa(segment.Index))
-	sliceFile, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE, 0666)
-	if err != nil {
-		zap.S().Errorf("open file %s err,%v", filePath, err)
-		d.RetryChannel <- *segment
-		return err
-	}
-
-	// 写入cache，需要先写入文件落盘，才能写cache，避免文件写入失败导致数据不一致。
-	// key := GetFileBlockKey(d.DownloadDir, d.Filename, segment.Index)
-	// cache.FileBlockCache.Set(key, bodyBytes, 1)
-
-	// 将第一个块输出发送到用户侧
-	if segment.Index == 0 {
-		// buffer := make([]byte, 10000)
-		// _, err = io.Copy(bytes.NewBuffer(buffer), resp.Body)
-		// n, err := resp.Body.Read(buffer)
-		// 写入文件
-		// _, err = sliceFile.Write(buffer)
-		_, err = io.Copy(sliceFile, resp.Body)
-		if err != nil {
-			zap.S().Errorf("文件%s的%d分片拷贝失败，失败原因:%s\n", d.Filename, segment.Index, err.Error())
-			d.RetryChannel <- *segment
-			return err
-		}
-		sliceFile.Close()
-
-		buffer, err := util.ReadFileToBytes(filePath)
-		if err != nil {
-			zap.S().Errorf("open file %s err,%v", filePath, err)
-			return err
-		}
-
-		d.BlockData <- buffer
-		index := segment.Index + 1
-		if index == len(d.Segments) { // 这是最后一个segment
-			close(d.BlockData)
-			close(d.NextBlock)
-		} else {
-			d.NextBlock <- index
+func FileDownload(hfUrl, savePath string, fileSize int64, headers map[string]string, ret chan []byte) {
+	var dingFile *DingCache
+	if _, err := os.Stat(savePath); err == nil {
+		if dingFile, err = NewDingCache(savePath, config.SysConfig.Download.BlockSize); err != nil {
+			zap.S().Errorf("NewDingCache err.%v", err)
+			return
 		}
 	} else {
-		_, err = io.Copy(sliceFile, resp.Body)
-		if err != nil {
-			zap.S().Errorf("文件%s的%d分片拷贝失败，失败原因:%s\n", d.Filename, segment.Index, err.Error())
-			d.RetryChannel <- *segment
-			return err
+		if dingFile, err = NewDingCache(savePath, config.SysConfig.Download.BlockSize); err != nil {
+			zap.S().Errorf("NewDingCache err.%v", err)
+			return
 		}
-		sliceFile.Close()
+		dingFile.Resize(fileSize)
 	}
-	d.waitGoroutine.Done()
-	return nil
+	defer dingFile.Close()
+	var headRange = headers["range"]
+	if headRange == "" {
+		headRange = fmt.Sprintf("bytes=%d-%d", 0, fileSize-1)
+	}
+	startPos, endPos := parseRangeParams(headRange, fileSize)
+	endPos++
+	rangesAndCacheList := getContiguousRanges(dingFile, startPos, endPos)
+	var result []byte
+
+	contentChan := make(chan []byte, 100)
+	for _, rangeInfo := range rangesAndCacheList {
+		rangeStartPos, rangeEndPos := rangeInfo.StartPos, rangeInfo.EndPos
+		if rangeInfo.IsRemote {
+			go GetFileRangeFromRemote(headers, hfUrl, rangeStartPos, rangeEndPos, contentChan)
+		} else {
+			go GetFileRangeFromCache(dingFile, rangeStartPos, rangeEndPos, contentChan)
+		}
+
+		curPos := rangeStartPos
+		streamCache := bytes.Buffer{}
+		lastBlock, lastBlockStartPos, lastBlockEndPos := getBlockInfo(curPos, dingFile.getBlockSize(), dingFile.GetFileSize())
+		var curBlock int64
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer func() {
+				zap.S().Debugf("range go route exit.")
+				wg.Done()
+			}()
+			for {
+				select {
+				case chunk, ok := <-contentChan:
+					{
+						if !ok {
+							zap.S().Infof("contentChan is close.")
+							close(ret)
+							return
+						}
+						ret <- chunk
+						if len(chunk) != 0 {
+							result = append(result, chunk...)
+							streamCache.Write(chunk)
+							curPos += int64(len(chunk))
+						}
+						curBlock = curPos / dingFile.getBlockSize()
+						if curBlock != lastBlock {
+							splitPos := lastBlockEndPos - max(lastBlockStartPos, rangeStartPos)
+							streamCacheBytes := streamCache.Bytes()
+							if splitPos > int64(len(streamCacheBytes)) {
+								// 正常不会出现splitPos>len(streamCacheBytes),若出现只能降级处理。
+								zap.S().Errorf("splitPos err.%d-%d", splitPos, len(streamCacheBytes))
+								splitPos = int64(len(streamCacheBytes))
+							}
+							rawBlock := streamCacheBytes[:splitPos]  // 当前块的数据
+							nextBlock := streamCacheBytes[splitPos:] // 下一个块的数据
+							streamCache.Truncate(0)
+							streamCache.Write(nextBlock)
+							if int64(len(rawBlock)) == dingFile.getBlockSize() {
+								hasBlockBool, err := dingFile.HasBlock(lastBlock)
+								if err != nil {
+									zap.S().Errorf("%v", err)
+									return
+								}
+								if !hasBlockBool {
+									dingFile.WriteBlock(lastBlock, rawBlock)
+								}
+							}
+							lastBlock, lastBlockStartPos, lastBlockEndPos = getBlockInfo(curPos, dingFile.getBlockSize(), dingFile.GetFileSize())
+						}
+					}
+
+				}
+			}
+		}()
+		wg.Wait()
+		zap.S().Debugf("range %d-%d complete.", rangeInfo.StartPos, rangeInfo.EndPos)
+		rawBlock := streamCache.Bytes()
+		if curBlock == dingFile.getBlockNumber()-1 {
+			// 对不足一个block的数据做补全
+			if int64(len(rawBlock)) == dingFile.GetFileSize()%dingFile.getBlockSize() {
+				padding := bytes.Repeat([]byte{0}, int(dingFile.getBlockSize())-len(rawBlock))
+				rawBlock = append(rawBlock, padding...)
+			}
+			lastBlock = curBlock
+		}
+		if int64(len(rawBlock)) == dingFile.getBlockSize() {
+			hasBlockBool, err := dingFile.HasBlock(lastBlock)
+			if err != nil {
+				zap.S().Errorf("%v", err)
+				return
+			}
+			if !hasBlockBool {
+				dingFile.WriteBlock(lastBlock, rawBlock)
+			}
+		}
+
+		if curPos != rangeEndPos {
+			if rangeInfo.IsRemote {
+				zap.S().Errorf("The size of remote range (%d) is different from sent size (%d).", rangeEndPos-rangeStartPos, curPos-rangeStartPos)
+			} else {
+				zap.S().Errorf("The size of cached range (%d) is different from sent size (%d).", rangeEndPos-rangeStartPos, curPos-rangeStartPos)
+			}
+			return
+		}
+	}
 }
 
-func GetFileBlockKey(repoPath, fileName string, index int) string {
-	return util.Md5(fmt.Sprintf("%s/%s/%d", repoPath, fileName, index))
+func GetFileRangeFromCache(dingFile *DingCache, startPos, endPos int64, contentChan chan<- []byte) {
+	startBlock := startPos / dingFile.getBlockSize()
+	endBlock := (endPos - 1) / dingFile.getBlockSize()
+	curPos := startPos
+	for curBlock := startBlock; curBlock <= endBlock; curBlock++ {
+		_, blockStartPos, blockEndPos := getBlockInfo(curPos, dingFile.getBlockSize(), dingFile.GetFileSize())
+		hasBlockBool, err := dingFile.HasBlock(curBlock)
+		if err != nil {
+			zap.S().Errorf("%v", err)
+			return
+		}
+		if !hasBlockBool {
+			zap.S().Errorf("Unknown exception: read block which has not been cached.")
+			return
+		}
+		rawBlock, err := dingFile.ReadBlock(curBlock)
+		if err != nil {
+			zap.S().Errorf("dingFile.ReadBlock err.%v", err)
+			return
+		}
+		chunk := rawBlock[max(startPos, blockStartPos)-blockStartPos : min(endPos, blockEndPos)-blockStartPos]
+		contentChan <- chunk
+		curPos += int64(len(chunk))
+	}
+	if curPos != endPos {
+		zap.S().Errorf("The cache range from %d to %d is incomplete.", startPos, endPos)
+		return
+	}
 }
 
-// MergeDownloadFiles 合并分片文件为一个文件
-func (d *Downloader) MergeDownloadFiles() error {
-	fmt.Println("开始合并文件", d.Filename)
-	targetFile := path.Join(d.DownloadDir, d.Filename)
-	realFile, err := os.OpenFile(targetFile, os.O_WRONLY|os.O_CREATE, 0666)
+func GetFileRangeFromRemote(reqHeaders map[string]string, url string, startPos, endPos int64, contentChan chan<- []byte) {
+	client := &http.Client{}
+	client.Timeout = consts.ApiTimeOut
+	headers := make(map[string]string)
+	if auth, ok := reqHeaders["authorization"]; ok {
+		headers["authorization"] = auth
+	}
+	headers["range"] = fmt.Sprintf("bytes=%d-%d", startPos, endPos-1)
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		fmt.Println(err)
-		return err
+		zap.S().Errorf("new request err.%v", err)
+		return
 	}
-	sliceDir := getSliceDir(path.Join(d.DownloadDir, d.Filename), d.Fid)
-	// 计算md5值，这里要注意，一定要按分片顺序计算，不要使用读目录文件的方式，返回的文件顺序是无保证的
-	// md5hash := md5.New()
-	defer os.Remove(getDownloadMetaFile(targetFile))
-	defer os.RemoveAll(sliceDir)
-	for i := 0; i < d.SliceNum; i++ {
-		sliceFilePath := path.Join(sliceDir, strconv.Itoa(i))
-		sliceFile, err := os.Open(sliceFilePath)
-		if err != nil {
-			fmt.Printf("读取文件%s失败, err: %s\n", sliceFilePath, err)
-			return err
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		zap.S().Errorf("do request err.%v", err)
+		return
+	}
+	defer func() {
+		zap.S().Debugf("GetFileRangeFromRemote exit.")
+		defer resp.Body.Close()
+		defer close(contentChan)
+	}()
+	var rawData []byte
+	chunkBytes := 0
+	var contentEncoding = ""
+	chunk := make([]byte, consts.ChunkSize)
+	for {
+		n, err := resp.Body.Read(chunk)
+		if n > 0 {
+			contentEncoding = resp.Header.Get("content-encoding")
+			if contentEncoding != "" { // 数据有编码，先收集，后面解码
+				rawData = append(rawData, chunk[:n]...)
+			} else {
+				contentChan <- chunk[:n] // 没有编码，可以直接返回原始数据
+			}
+			chunkBytes += n // 原始数量
+			zap.S().Debugf("接收字节数量：%d", chunkBytes)
 		}
-		// 偏移量需要重新进行调整
-		io.Copy(realFile, sliceFile)
-		sliceFile.Close()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			zap.S().Errorf("req remote err.%v", err)
+			return
+		}
 	}
-	realFile.Close()
-	fmt.Printf("%s文件下载成功，保存路径：%s\n", d.Filename, targetFile)
-	return nil
+	if contentEncoding != "" {
+		// todo 完成解码操作
+		// 这里需要实现解压缩逻辑
+		// finalData := decompress_data(rawData, resp.Header.Get("content-encoding", None))
+		// chunkBytes = len(finalData)
+		// return finalData, nil
+		contentChan <- rawData
+	}
+	if contentLengthStr := resp.Header.Get("content-length"); contentLengthStr != "" {
+		contentLength, err := strconv.Atoi(contentLengthStr) // 原始数据长度
+		if err != nil {
+			zap.S().Errorf("contentLengthStr conv err.%s", contentLengthStr)
+			return
+		}
+		if contentEncoding != "" {
+			// contentLength = chunkBytes     //需要返回解码的长度
+		}
+		if endPos-startPos != int64(contentLength) {
+			zap.S().Errorf("The content of the response is incomplete. Expected-%d. Accepted-%d", endPos-startPos, contentLength)
+			return
+		}
+	}
+	if endPos-startPos != int64(chunkBytes) {
+		zap.S().Errorf("The block is incomplete. Expected-%d. Accepted-%d", endPos-startPos, chunkBytes)
+		return
+	}
+}
+
+func parseRangeParams(fileRange string, fileSize int64) (int64, int64) {
+	if strings.Contains(fileRange, "/") {
+		split := strings.SplitN(fileRange, "/", 2)
+		fileRange = split[0]
+	}
+	if strings.HasPrefix(fileRange, "bytes=") {
+		fileRange = fileRange[6:]
+	}
+	parts := strings.Split(fileRange, "-")
+	if len(parts) != 2 {
+		panic("file range err.")
+	}
+	var startPos, endPos int64
+	if len(parts[0]) != 0 {
+		startPos = util.Atoi64(parts[0])
+	} else {
+		startPos = 0
+	}
+	if len(parts[1]) != 0 {
+		endPos = util.Atoi64(parts[1])
+	} else {
+		endPos = fileSize - 1
+	}
+	return startPos, endPos
+}
+
+// get_block_info 函数
+func getBlockInfo(pos, blockSize, fileSize int64) (int64, int64, int64) {
+	curBlock := pos / blockSize
+	blockStartPos := curBlock * blockSize
+	blockEndPos := min((curBlock+1)*blockSize, fileSize)
+	return curBlock, blockStartPos, blockEndPos
+}
+
+// 获取
+func getContiguousRanges(dingFile *DingCache, startPos, endPos int64) []*RangeInfo {
+	startBlock := startPos / dingFile.GetFileSize()
+	endBlock := (endPos - 1) / dingFile.GetFileSize()
+
+	rangeStartPos := startPos
+	hasBlockBool, err := dingFile.HasBlock(startBlock)
+	if err != nil {
+		zap.S().Errorf("%v", err)
+		return nil
+	}
+	rangeIsRemote := !hasBlockBool // 不存在，从远程获取，为true
+	curPos := startPos
+	var rangesAndCacheList []*RangeInfo
+	for curBlock := startBlock; curBlock <= endBlock; curBlock++ {
+		_, _, blockEndPos := getBlockInfo(curPos, dingFile.getBlockSize(), dingFile.GetFileSize())
+		hasBlockBool, err = dingFile.HasBlock(curBlock)
+		if err != nil {
+			zap.S().Errorf("%v", err)
+			return nil
+		}
+		curIsRemote := !hasBlockBool // 不存在，从远程获取，为true，存在为false。
+		if rangeIsRemote != curIsRemote {
+			if rangeStartPos < curPos {
+				rangesAndCacheList = append(rangesAndCacheList, &RangeInfo{StartPos: rangeStartPos, EndPos: curPos, IsRemote: rangeIsRemote})
+			}
+			rangeStartPos = curPos
+			rangeIsRemote = curIsRemote
+		}
+		curPos = blockEndPos
+	}
+
+	rangesAndCacheList = append(rangesAndCacheList, &RangeInfo{StartPos: rangeStartPos, EndPos: endPos, IsRemote: rangeIsRemote})
+	return rangesAndCacheList
+}
+
+type RangeInfo struct {
+	StartPos int64
+	EndPos   int64
+	IsRemote bool
 }

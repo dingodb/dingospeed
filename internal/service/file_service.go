@@ -35,7 +35,6 @@ func NewFileService(fileDao *dao.FileDao) *FileService {
 }
 
 func (d *FileService) FileHeadCommon(c echo.Context, repoType, org, repo, commit, filePath string) error {
-	zap.S().Debugf("exec file head:%s/%s/%s/%s/%s", repoType, org, repo, commit, filePath)
 	if _, ok := consts.RepoTypesMapping[repoType]; !ok {
 		return util.ErrorPageNotFound(c)
 	}
@@ -52,8 +51,7 @@ func (d *FileService) FileHeadCommon(c echo.Context, repoType, org, repo, commit
 	if commitSha == "" {
 		return util.ErrorRepoNotFound(c)
 	}
-	err := d.fileDao.FileGetGenerator(c, repoType, org, repo, commitSha, filePath, consts.RequestTypeHead)
-	return err
+	return d.fileDao.FileGetGenerator(c, repoType, org, repo, commitSha, filePath, consts.RequestTypeHead)
 }
 
 func (d *FileService) FileGetCommon(c echo.Context, repoType, org, repo, commit, filePath string) error {
@@ -74,6 +72,5 @@ func (d *FileService) FileGetCommon(c echo.Context, repoType, org, repo, commit,
 	if commitSha == "" {
 		return util.ErrorRepoNotFound(c)
 	}
-	err := d.fileDao.FileGetGenerator(c, repoType, org, repo, commitSha, filePath, consts.RequestTypeGet)
-	return err
+	return d.fileDao.FileGetGenerator(c, repoType, org, repo, commitSha, filePath, consts.RequestTypeGet)
 }

@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"time"
 
 	"dingo-hfmirror/internal/router"
 	"dingo-hfmirror/pkg/config"
@@ -37,10 +36,10 @@ type Server struct {
 
 func NewServer(config *config.Config, echo *echo.Echo, httpr *router.HttpRouter) *Server {
 	server := &http.Server{
-		Addr:           fmt.Sprintf(":%d", config.Server.Port),
+		Addr:           fmt.Sprintf("%s:%d", config.Server.Host, config.Server.Port),
 		Handler:        echo,
-		ReadTimeout:    10 * time.Second,
-		WriteTimeout:   10 * time.Second,
+		ReadTimeout:    0,
+		WriteTimeout:   0, // 设置永不超时
 		MaxHeaderBytes: 1 << 20,
 	}
 
