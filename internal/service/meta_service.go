@@ -39,21 +39,14 @@ func (d *MetaService) MetaProxyCommon(c echo.Context, repoType, org, repo, commi
 		// check repo commit
 		if !d.fileDao.CheckCommitHf(repoType, org, repo, commit, authorization) {
 			return util.ErrorRevisionNotFound(c, commit)
-
 		}
 	}
-	commitSha := d.fileDao.GetCommitHf(repoType, org, repo, commit, authorization)
-	if commitSha == "" {
+	commitSha, err := d.fileDao.GetCommitHf(repoType, org, repo, commit, authorization)
+	if err != nil {
+		zap.S().Errorf("GetCommitHf err.%v", err)
 		return util.ErrorRepoNotFound(c)
 	}
-	var err error
-	if config.SysConfig.Online() {
-		err = d.metaDao.MetaGetGenerator(c, repoType, org, repo, commitSha, method)
-	} else {
-		err = d.metaDao.MetaGetGenerator(c, repoType, org, repo, commitSha, method)
-	}
-	err = d.fileDao.FileGetGenerator(c, repoType, org, repo, commitSha, method, consts.RequestTypeGet)
-	return err
+	return d.metaDao.MetaGetGenerator(c, repoType, org, repo, commitSha, method)
 }
 
 func (d *MetaService) WhoamiV2(c echo.Context) error {

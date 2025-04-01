@@ -5,10 +5,12 @@ go 1.23.0
 toolchain go1.23.1
 
 require (
+	github.com/andybalholm/brotli v1.1.1
 	github.com/bytedance/sonic v1.13.2
 	github.com/dgraph-io/ristretto/v2 v2.1.0
 	github.com/google/uuid v1.3.0
 	github.com/google/wire v0.6.0
+	github.com/klauspost/compress v1.18.0
 	github.com/labstack/echo/v4 v4.13.3
 	go.uber.org/zap v1.24.0
 	golang.org/x/sync v0.12.0

@@ -32,11 +32,12 @@ func NewHttpRouter(echo *echo.Echo, fileHandler *handler.FileHandler, metaHandle
 		fileHandler: fileHandler,
 		metaHandler: metaHandler,
 	}
-	r.initFlowRouter()
+	r.initRouter()
 	return r
 }
 
-func (r *HttpRouter) initFlowRouter() {
+func (r *HttpRouter) initRouter() {
+	// 单个文件
 	r.echo.HEAD("/:repoType/:org/:repo/resolve/:commit/:filePath", r.fileHandler.HeadFileHandler1)
 	r.echo.HEAD("/:orgOrRepoType/:repo/resolve/:commit/:filePath", r.fileHandler.HeadFileHandler2)
 	r.echo.HEAD("/:repo/resolve/:commit/:filePath", r.fileHandler.HeadFileHandler3)
@@ -45,8 +46,10 @@ func (r *HttpRouter) initFlowRouter() {
 	r.echo.GET("/:orgOrRepoType/:repo/resolve/:commit/:filePath", r.fileHandler.GetFileHandler2)
 	r.echo.GET("/:repo/resolve/:commit/:filePath", r.fileHandler.GetFileHandler3)
 
+	// 模型
 	r.echo.HEAD("/api/:repoType/:org/:repo/revision/:commit", r.metaHandler.MetaProxyCommonHandler)
 	r.echo.GET("/api/:repoType/:org/:repo/revision/:commit", r.metaHandler.MetaProxyCommonHandler)
+
 	r.echo.GET("/api/whoami-v2", r.metaHandler.WhoamiV2Handler)
 
 }

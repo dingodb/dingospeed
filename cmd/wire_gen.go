@@ -22,7 +22,7 @@ func wireApp(configConfig *config.Config) (*App, func(), error) {
 	fileDao := dao.NewFileDao()
 	fileService := service.NewFileService(fileDao)
 	fileHandler := handler.NewFileHandler(fileService)
-	metaDao := dao.NewMetaDao()
+	metaDao := dao.NewMetaDao(fileDao)
 	metaService := service.NewMetaService(fileDao, metaDao)
 	metaHandler := handler.NewMetaHandler(metaService)
 	httpRouter := router.NewHttpRouter(echo, fileHandler, metaHandler)

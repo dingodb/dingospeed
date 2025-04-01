@@ -29,6 +29,7 @@ import (
 	"dingo-hfmirror/pkg/common"
 	"dingo-hfmirror/pkg/config"
 	"dingo-hfmirror/pkg/consts"
+	myerr "dingo-hfmirror/pkg/error"
 	"dingo-hfmirror/pkg/util"
 
 	"github.com/bytedance/sonic"
@@ -47,7 +48,7 @@ func NewFileDao() *FileDao {
 	return &FileDao{}
 }
 
-func (d *FileDao) CheckCommitHf(repoType, org, repo, commit, authorization string) bool {
+func (f *FileDao) CheckCommitHf(repoType, org, repo, commit, authorization string) bool {
 	orgRepo := util.GetOrgRepo(org, repo)
 	var reqUrl string
 	if commit == "" {
@@ -59,7 +60,7 @@ func (d *FileDao) CheckCommitHf(repoType, org, repo, commit, authorization strin
 	if authorization != "" {
 		headers["authorization"] = authorization
 	}
-	resp, err := util.Head(reqUrl, headers, consts.ApiTimeOut)
+	resp, err := util.Head(reqUrl, headers, config.SysConfig.GetReqTimeOut())
 	if err != nil {
 		zap.S().Errorf("call %s error.%v", reqUrl, err)
 		return false
@@ -70,9 +71,11 @@ func (d *FileDao) CheckCommitHf(repoType, org, repo, commit, authorization strin
 	return false
 }
 
-func (d *FileDao) GetCommitHf(repoType, org, repo, commit, authorization string) string {
+// 若为离线或在线请求失败，将进行本地仓库查找。
+
+func (f *FileDao) GetCommitHf(repoType, org, repo, commit, authorization string) (string, error) {
 	if !config.SysConfig.Online() {
-		return d.getCommitHfOffline(repoType, org, repo, commit)
+		return f.getCommitHfOffline(repoType, org, repo, commit)
 	}
 	orgRepo := util.GetOrgRepo(org, repo)
 	var reqUrl string
@@ -81,25 +84,38 @@ func (d *FileDao) GetCommitHf(repoType, org, repo, commit, authorization string)
 	if authorization != "" {
 		headers["authorization"] = authorization
 	}
-	resp, err := util.Get(reqUrl, headers, consts.ApiTimeOut)
+	resp, err := util.Get(reqUrl, headers, config.SysConfig.GetReqTimeOut())
 	if err != nil {
 		zap.S().Errorf("call %s error.%v", reqUrl, err)
-		return d.getCommitHfOffline(repoType, org, repo, commit)
+		return f.getCommitHfOffline(repoType, org, repo, commit)
 	}
 	var sha CommitHfSha
 	if err = sonic.Unmarshal(resp.Body, &sha); err != nil {
 		zap.S().Errorf("unmarshal error.%v", err)
-		return d.getCommitHfOffline(repoType, org, repo, commit)
+		return f.getCommitHfOffline(repoType, org, repo, commit)
 	}
-	return sha.Sha
+	return sha.Sha, nil
 }
 
-func (d *FileDao) getCommitHfOffline(repoType, org, repo, commit string) string {
-	// todo
-	return ""
+func (f *FileDao) getCommitHfOffline(repoType, org, repo, commit string) (string, error) {
+	orgRepo := util.GetOrgRepo(org, repo)
+	apiPath := fmt.Sprintf("%s/api/%s/%s/revision/%s/meta_get.json", config.SysConfig.Repos(), repoType, orgRepo, commit)
+	if util.FileExists(apiPath) {
+		cacheContent, err := f.ReadCacheRequest(apiPath)
+		if err != nil {
+			return "", err
+		}
+		var sha CommitHfSha
+		if err = sonic.Unmarshal(cacheContent.OriginContent, &sha); err != nil {
+			zap.S().Errorf("unmarshal error.%v", err)
+			return "", myerr.Wrap("Unmarshal err", err)
+		}
+		return sha.Sha, nil
+	}
+	return "", myerr.New(fmt.Sprintf("apiPath file not exist, %s", apiPath))
 }
 
-func (d *FileDao) FileGetGenerator(c echo.Context, repoType, org, repo, commit, fileName, method string) error {
+func (f *FileDao) FileGetGenerator(c echo.Context, repoType, org, repo, commit, fileName, method string) error {
 	orgRepo := util.GetOrgRepo(org, repo)
 	headsPath := fmt.Sprintf("%s/heads/%s/%s/resolve/%s/%s", config.SysConfig.Repos(), repoType, orgRepo, commit, fileName)
 	filesDir := fmt.Sprintf("%s/files/%s/%s/resolve/%s", config.SysConfig.Repos(), repoType, orgRepo, commit)
@@ -120,19 +136,18 @@ func (d *FileDao) FileGetGenerator(c echo.Context, repoType, org, repo, commit, 
 	} else {
 		hfUrl = fmt.Sprintf("%s/%s/%s/resolve/%s/%s", config.SysConfig.GetHFURLBase(), repoType, orgRepo, commit, fileName)
 	}
-	headers := map[string]string{}
-	request := c.Request()
-	for k, _ := range request.Header {
+	reqHeaders := map[string]string{}
+	for k, _ := range c.Request().Header {
 		if k == "host" {
 			domain, _ := util.GetDomain(hfUrl)
-			headers[k] = domain
+			reqHeaders[strings.ToLower(k)] = domain
 		} else {
-			headers[k] = request.Header.Get(k)
+			reqHeaders[strings.ToLower(k)] = c.Request().Header.Get(k)
 		}
 	}
-	authorization := request.Header.Get("authorization")
+	authorization := reqHeaders["authorization"]
 	// _file_realtime_stream
-	pathsInfos, err := d.pathsInfoGenerator(repoType, org, repo, commit, authorization, false, []string{fileName}, "post")
+	pathsInfos, err := f.pathsInfoGenerator(repoType, org, repo, commit, authorization, []string{fileName}, "post")
 	if err != nil {
 		return err
 	}
@@ -151,7 +166,7 @@ func (d *FileDao) FileGetGenerator(c echo.Context, repoType, org, repo, commit, 
 	if commit != "" {
 		respHeaders[strings.ToLower(consts.HUGGINGFACE_HEADER_X_REPO_COMMIT)] = commit
 	}
-	etag, err := d.getResourceEtag(hfUrl, authorization)
+	etag, err := f.getResourceEtag(hfUrl, authorization)
 	if err != nil {
 		return util.ErrorProxyTimeout(c)
 	}
@@ -160,67 +175,75 @@ func (d *FileDao) FileGetGenerator(c echo.Context, repoType, org, repo, commit, 
 	if method == consts.RequestTypeHead {
 		return util.ResponseHeaders(c, respHeaders)
 	} else if method == consts.RequestTypeGet {
-		return d.FileChunkGet(c, respHeaders, hfUrl, pathInfo.Size, fileName, filesPath)
+		return f.FileChunkGet(c, respHeaders, reqHeaders, hfUrl, pathInfo.Size, fileName, filesPath)
 	} else {
 		return util.ErrorMethodError(c)
 	}
 }
 
-func (d *FileDao) pathsInfoGenerator(repoType, org, repo, commit, authorization string, overrideCache bool, paths []string, method string) ([]common.PathsInfo, error) {
+func (f *FileDao) pathsInfoGenerator(repoType, org, repo, commit, authorization string, paths []string, method string) ([]common.PathsInfo, error) {
 	orgRepo := util.GetOrgRepo(org, repo)
-	filePathMap := make(map[string]string, 0)
-	pathsInfos := make([]common.PathsInfo, 0)
-	for _, path := range paths {
-		apiDir := fmt.Sprintf("%s/api/%s/%s/paths-info/%s/%s", config.SysConfig.Repos(), repoType, orgRepo, commit, path)
-		apiPath := fmt.Sprintf("%s/%s", apiDir, fmt.Sprintf("paths-info_%s.json", method))
-		hitCache := util.FileExists(apiPath)
-		if hitCache && overrideCache {
-			// todo 从缓存中获取pathsInfos
+	remoteReqFilePathMap := make(map[string]string, 0)
+	ret := make([]common.PathsInfo, 0)
+	for _, pathFileName := range paths {
+		apiDir := fmt.Sprintf("%s/api/%s/%s/paths-info/%s/%s", config.SysConfig.Repos(), repoType, orgRepo, commit, pathFileName)
+		apiPathInfoPath := fmt.Sprintf("%s/%s", apiDir, fmt.Sprintf("paths-info_%s.json", method))
+		hitCache := util.FileExists(apiPathInfoPath)
+		if hitCache {
+			cacheContent, err := f.ReadCacheRequest(apiPathInfoPath)
+			if err != nil {
+				zap.S().Errorf("ReadCacheRequest err.%v", err)
+				continue
+			}
+			pathsInfos := make([]common.PathsInfo, 0)
+			err = sonic.Unmarshal(cacheContent.OriginContent, &pathsInfos)
+			if err != nil {
+				zap.S().Errorf("pathsInfo Unmarshal err.%v", err)
+				continue
+			}
+			if cacheContent.StatusCode == http.StatusOK {
+				ret = append(ret, pathsInfos...)
+			}
 		} else {
-			filePathMap[path] = apiPath
+			remoteReqFilePathMap[pathFileName] = apiPathInfoPath
 		}
 	}
-	if len(filePathMap) > 0 {
+	if len(remoteReqFilePathMap) > 0 {
 		filePaths := make([]string, 0)
-		for k := range filePathMap {
+		for k := range remoteReqFilePathMap {
 			filePaths = append(filePaths, k)
 		}
 		pathsInfoUrl := fmt.Sprintf("%s/api/%s/%s/paths-info/%s", config.SysConfig.GetHFURLBase(), repoType, orgRepo, commit)
-		response, err := d.pathsInfoProxy(pathsInfoUrl, authorization, filePaths)
+		response, err := f.pathsInfoProxy(pathsInfoUrl, authorization, filePaths)
 		if err != nil {
 			zap.S().Errorf("req %s err.%v", pathsInfoUrl, err)
 			return nil, err
 		}
-		err = sonic.Unmarshal(response.Body, &pathsInfos)
+		remoteRespPathsInfos := make([]common.PathsInfo, 0)
+		err = sonic.Unmarshal(response.Body, &remoteRespPathsInfos)
 		if err != nil {
 			return nil, err
 		}
-		for _, item := range pathsInfos {
-			if apiPath, ok := filePathMap[item.Path]; ok {
-				b, _ := sonic.Marshal(item)
-				d.writeCacheRequest(apiPath, response.StatusCode, response.Headers, b)
+		for _, item := range remoteRespPathsInfos {
+			// 对单个文件pathsInfo做存储
+			if apiPath, ok := remoteReqFilePathMap[item.Path]; ok {
+				if err = util.MakeDirs(apiPath); err != nil {
+					zap.S().Errorf("create %s dir err.%v", apiPath, err)
+					continue
+				}
+				b, _ := sonic.Marshal([]common.PathsInfo{item}) // 转成单个文件的切片
+				if err = f.WriteCacheRequest(apiPath, response.StatusCode, response.ExtractHeaders(response.Headers), b); err != nil {
+					zap.S().Errorf("WriteCacheRequest err.%s,%v", apiPath, err)
+					continue
+				}
 			}
 		}
+		ret = append(ret, remoteRespPathsInfos...)
 	}
-	return pathsInfos, nil
+	return ret, nil
 }
 
-func (d *FileDao) writeCacheRequest(apiPath string, statusCode int, headers map[string]interface{}, content []byte) error {
-	err := util.MakeDirs(apiPath)
-	if err != nil {
-		zap.S().Errorf("create %s dir err.%v", apiPath, err)
-		return err
-	}
-	lowerCaseHeaders := util.ExtractHeaders(headers)
-	cacheContent := common.CacheContent{
-		StatusCode: statusCode,
-		Headers:    lowerCaseHeaders,
-		Content:    hex.EncodeToString(content),
-	}
-	return util.WriteDataToFile(apiPath, cacheContent)
-}
-
-func (d *FileDao) pathsInfoProxy(targetUrl, authorization string, filePaths []string) (*common.Response, error) {
+func (f *FileDao) pathsInfoProxy(targetUrl, authorization string, filePaths []string) (*common.Response, error) {
 	data := map[string]interface{}{
 		"paths": filePaths,
 	}
@@ -235,7 +258,7 @@ func (d *FileDao) pathsInfoProxy(targetUrl, authorization string, filePaths []st
 	return util.Post(targetUrl, "application/json", jsonData, headers)
 }
 
-func (d *FileDao) getResourceEtag(hfUrl, authorization string) (string, error) {
+func (f *FileDao) getResourceEtag(hfUrl, authorization string) (string, error) {
 	// 计算 hfURL 的 SHA256 哈希值
 	hash := sha256.Sum256([]byte(hfUrl))
 	contentHash := hex.EncodeToString(hash[:])
@@ -247,11 +270,11 @@ func (d *FileDao) getResourceEtag(hfUrl, authorization string) (string, error) {
 		if authorization != "" {
 			etagHeaders["authorization"] = authorization
 		}
-		resp, err := util.Head(hfUrl, etagHeaders, consts.ApiTimeOut)
+		resp, err := util.Head(hfUrl, etagHeaders, config.SysConfig.GetReqTimeOut())
 		if err != nil {
 			return "", err
 		}
-		if etag := resp.Header.Get("etag"); etag != "" {
+		if etag := resp.GetKey("etag"); etag != "" {
 			retEtag = etag
 		} else {
 			retEtag = fmt.Sprintf(`"%s-10"`, contentHash[:32])
@@ -260,7 +283,7 @@ func (d *FileDao) getResourceEtag(hfUrl, authorization string) (string, error) {
 	return retEtag, nil
 }
 
-// func (d *FileDao) FileChunkGet(c echo.Context, headers map[string]string, hfUrl, fileName string, fileSize int64, fileDir string) error {
+// func (f *FileDao) FileChunkGet(c echo.Context, headers map[string]string, hfUrl, fileName string, fileSize int64, fileDir string) error {
 // 	// 1.针对每个文件获取一个下载器
 // 	fInfo := downloader.FileInfo{
 // 		FileName: fileName, FileSize: fileSize,
@@ -288,17 +311,17 @@ func (d *FileDao) getResourceEtag(hfUrl, authorization string) (string, error) {
 // 	return nil
 // }
 
-func (d *FileDao) FileChunkGet(c echo.Context, headers map[string]string, hfUrl string, fileSize int64, fileName, filesPath string) error {
+func (f *FileDao) FileChunkGet(c echo.Context, respHeaders, reqHeaders map[string]string, hfUrl string, fileSize int64, fileName, filesPath string) error {
 	contentChan := make(chan []byte, 100)
-	go downloader.FileDownload(hfUrl, filesPath, fileSize, headers, contentChan)
-	if _, err := util.ResponseStream(c, fileName, headers, contentChan, false); err != nil {
+	go downloader.FileDownload(hfUrl, filesPath, fileSize, reqHeaders, contentChan)
+	if err := util.ResponseStream(c, fileName, respHeaders, contentChan); err != nil {
 		zap.S().Errorf("FileChunkGet stream err.%v", err)
 		return util.ErrorProxyTimeout(c)
 	}
 	return nil
 }
 
-func (d *FileDao) WhoamiV2Generator(c echo.Context) error {
+func (f *FileDao) WhoamiV2Generator(c echo.Context) error {
 	newHeaders := make(http.Header)
 	for k, vv := range c.Request().Header {
 		lowerKey := strings.ToLower(k)
@@ -365,4 +388,30 @@ func (d *FileDao) WhoamiV2Generator(c echo.Context) error {
 	}
 
 	return nil
+}
+
+func (f *FileDao) WriteCacheRequest(apiPath string, statusCode int, headers map[string]string, content []byte) error {
+	cacheContent := common.CacheContent{
+		StatusCode: statusCode,
+		Headers:    headers,
+		Content:    hex.EncodeToString(content),
+	}
+	return util.WriteDataToFile(apiPath, cacheContent)
+}
+
+func (f *FileDao) ReadCacheRequest(apiPath string) (*common.CacheContent, error) {
+	cacheContent := common.CacheContent{}
+	bytes, err := util.ReadFileToBytes(apiPath)
+	if err != nil {
+		return nil, myerr.Wrap("ReadFileToBytes err.", err)
+	}
+	if err = sonic.Unmarshal(bytes, &cacheContent); err != nil {
+		return nil, err
+	}
+	decodeByte, err := hex.DecodeString(cacheContent.Content)
+	if err != nil {
+		return nil, myerr.Wrap("DecodeString err.", err)
+	}
+	cacheContent.OriginContent = decodeByte
+	return &cacheContent, nil
 }

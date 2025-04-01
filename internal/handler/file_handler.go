@@ -19,6 +19,7 @@ import (
 	"dingo-hfmirror/pkg/consts"
 
 	"github.com/labstack/echo/v4"
+	"go.uber.org/zap"
 )
 
 type FileHandler struct {
@@ -78,7 +79,7 @@ func paramProcess(c echo.Context, processMode int) (string, string, string, stri
 		filePath = c.Param("filePath")
 		repoType = "models"
 	} else {
-		panic("param error.")
+		zap.S().Errorf("param process error.")
 	}
 	return repoType, org, repo, commit, filePath
 }

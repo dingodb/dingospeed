@@ -14,8 +14,6 @@
 
 package consts
 
-import "time"
-
 var RepoTypesMapping = map[string]RepoType{
 	"models":   RepoTypeModel,
 	"spaces":   RepoTypeSpace,
@@ -35,12 +33,6 @@ func (a RepoType) Value() string {
 	return string(a)
 }
 
-var ApiTimeOut = 15 * time.Minute
-
-// 定义常量
-const SmallFileSize = 1024 * 1024  // 小文件大小
-const SliceBytes = 1024 * 1024 * 1 // 分片大小
-
 const HUGGINGFACE_HEADER_X_REPO_COMMIT = "X-Repo-Commit"
 
 const (
@@ -48,4 +40,4 @@ const (
 	RequestTypeGet  = "get"
 )
 
-const ChunkSize = 1024 * 2
+const RespChanSize = 50

@@ -47,8 +47,9 @@ func (d *FileService) FileHeadCommon(c echo.Context, repoType, org, repo, commit
 			return util.ErrorRepoNotFound(c)
 		}
 	}
-	commitSha := d.fileDao.GetCommitHf(repoType, org, repo, commit, authorization)
-	if commitSha == "" {
+	commitSha, err := d.fileDao.GetCommitHf(repoType, org, repo, commit, authorization)
+	if err != nil {
+		zap.S().Errorf("GetCommitHf err.%v", err)
 		return util.ErrorRepoNotFound(c)
 	}
 	return d.fileDao.FileGetGenerator(c, repoType, org, repo, commitSha, filePath, consts.RequestTypeHead)
@@ -64,12 +65,13 @@ func (d *FileService) FileGetCommon(c echo.Context, repoType, org, repo, commit,
 	}
 	authorization := c.Request().Header.Get("authorization")
 	if config.SysConfig.Online() {
-		if !d.fileDao.CheckCommitHf(repoType, org, repo, commit, authorization) {
+		if !d.fileDao.CheckCommitHf(repoType, org, repo, commit, authorization) { // 若请求找不到，直接返回仓库不存在。
 			return util.ErrorRepoNotFound(c)
 		}
 	}
-	commitSha := d.fileDao.GetCommitHf(repoType, org, repo, commit, authorization)
-	if commitSha == "" {
+	commitSha, err := d.fileDao.GetCommitHf(repoType, org, repo, commit, authorization)
+	if err != nil {
+		zap.S().Errorf("GetCommitHf err.%v", err)
 		return util.ErrorRepoNotFound(c)
 	}
 	return d.fileDao.FileGetGenerator(c, repoType, org, repo, commitSha, filePath, consts.RequestTypeGet)

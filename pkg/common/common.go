@@ -15,6 +15,7 @@
 package common
 
 import (
+	"strings"
 	"time"
 )
 
@@ -54,6 +55,31 @@ type Response struct {
 	BodyChan   chan []byte
 }
 
+func (r Response) GetKey(key string) string {
+	if v, ok := r.Headers[key]; ok {
+		if strSlice, ok := v.([]string); ok {
+			if len(strSlice) > 0 {
+				return strSlice[0]
+			}
+		}
+	}
+	return ""
+}
+
+func (r Response) ExtractHeaders(headers map[string]interface{}) map[string]string {
+	lowerCaseHeaders := make(map[string]string)
+	for k, v := range headers {
+		if strSlice, ok := v.([]string); ok {
+			if len(strSlice) > 0 {
+				lowerCaseHeaders[strings.ToLower(k)] = strSlice[0]
+			}
+		} else {
+			lowerCaseHeaders[strings.ToLower(k)] = ""
+		}
+	}
+	return lowerCaseHeaders
+}
+
 type PathsInfo struct {
 	Type string `json:"type"`
 	Oid  string `json:"oid"`
@@ -62,7 +88,8 @@ type PathsInfo struct {
 }
 
 type CacheContent struct {
-	StatusCode int               `json:"statusCode"`
-	Headers    map[string]string `json:"headers"`
-	Content    string            `json:"content"`
+	StatusCode    int               `json:"status_code"` // json格式要个之前的版本做兼容
+	Headers       map[string]string `json:"headers"`
+	Content       string            `json:"content"`
+	OriginContent []byte            `json:"-"`
 }

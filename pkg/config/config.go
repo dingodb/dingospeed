@@ -17,6 +17,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -45,7 +46,8 @@ type Download struct {
 	GoroutineMaxNumPerFile int   `json:"goroutineMaxNumPerFile" yaml:"goroutineMaxNumPerFile"`
 	WaitNextBlockTime      int   `json:"waitNextBlockTime" yaml:"waitNextBlockTime"`
 	BlockSize              int64 `json:"blockSize" yaml:"blockSize"`
-	Timeout                int64 `json:"timeout" yaml:"timeout"`
+	ReqTimeout             int64 `json:"reqTimeout" yaml:"reqTimeout"`
+	RespChunkSize          int64 `json:"respChunkSize" yaml:"respChunkSize"`
 }
 
 type LogConfig struct {
@@ -80,6 +82,10 @@ func (c *Config) GetHfScheme() string {
 
 func (c *Config) GetHfLfsNetLoc() string {
 	return c.Server.HfLfsNetLoc
+}
+
+func (c *Config) GetReqTimeOut() time.Duration {
+	return time.Duration(c.Download.ReqTimeout) * time.Second
 }
 
 func Scan(path string) (*Config, error) {

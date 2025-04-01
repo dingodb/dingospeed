@@ -12,8 +12,9 @@ download:
     retryChannelNum: 100
     goroutineMaxNumPerFile: 10
     waitNextBlockTime: 1        #等待获取下一个块的时间，单位（s）
-    blockSize: 2048      #默认文件块大小为8MB（8388608），单位字节
-    timeout: 300                #下载超时时间，单位秒
+    blockSize: 8388608      #默认文件块大小为8MB（8388608），单位字节
+    reqTimeout: 0                #远端请求超时时间，单位秒，默认为0，不超时。
+    respChunkSize: 8192     #默认对响应结果的读取大小8192，单位字节。
 
 
 log:

@@ -29,6 +29,7 @@ import (
 
 	myerr "dingo-hfmirror/pkg/error"
 
+	"github.com/bytedance/sonic"
 	"github.com/google/uuid"
 )
 
@@ -218,4 +219,9 @@ func Md5(str string) string {
 	hash := md5.Sum([]byte(str))
 	hashString := hex.EncodeToString(hash[:])
 	return hashString
+}
+
+func ToJsonString(data interface{}) string {
+	jsonData, _ := sonic.Marshal(data)
+	return string(jsonData)
 }

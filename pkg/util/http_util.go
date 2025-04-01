@@ -19,17 +19,17 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"dingo-hfmirror/pkg/common"
+	"dingo-hfmirror/pkg/consts"
 
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
 )
 
 // Head 方法用于发送带请求头的 HEAD 请求
-func Head(url string, headers map[string]string, timeout time.Duration) (*http.Response, error) {
+func Head(url string, headers map[string]string, timeout time.Duration) (*common.Response, error) {
 	req, err := http.NewRequest("HEAD", url, nil)
 	if err != nil {
 		return nil, err
@@ -43,7 +43,14 @@ func Head(url string, headers map[string]string, timeout time.Duration) (*http.R
 	if err != nil {
 		return nil, err
 	}
-	return resp, nil
+	respHeaders := make(map[string]interface{})
+	for key, value := range resp.Header {
+		respHeaders[key] = value
+	}
+	return &common.Response{
+		StatusCode: resp.StatusCode,
+		Headers:    respHeaders,
+	}, nil
 }
 
 // Get 方法用于发送带请求头的 GET 请求
@@ -95,7 +102,7 @@ func GetStream(url string, headers map[string]string, timeout time.Duration) (*c
 	for key, value := range resp.Header {
 		respHeaders[key] = value
 	}
-	var bodyStreamChan = make(chan []byte, 100)
+	var bodyStreamChan = make(chan []byte, consts.RespChanSize)
 	go func() {
 		defer resp.Body.Close()
 		defer close(bodyStreamChan)
@@ -152,7 +159,7 @@ func Post(url string, contentType string, data []byte, headers map[string]string
 	}, nil
 }
 
-func ResponseStream(c echo.Context, fileName string, headers map[string]string, content <-chan []byte, gather bool) ([]byte, error) {
+func ResponseStream(c echo.Context, fileName string, headers map[string]string, content <-chan []byte) error {
 	c.Response().Header().Set("Content-Type", "text/event-stream")
 	c.Response().Header().Set("Cache-Control", "no-cache")
 	c.Response().Header().Set("Connection", "keep-alive")
@@ -162,20 +169,14 @@ func ResponseStream(c echo.Context, fileName string, headers map[string]string, 
 	c.Response().WriteHeader(http.StatusOK)
 	flusher, ok := c.Response().Writer.(http.Flusher)
 	if !ok {
-		return nil, c.String(http.StatusInternalServerError, "Streaming unsupported!")
+		return c.String(http.StatusInternalServerError, "Streaming unsupported!")
 	}
-	result := make([]byte, 0)
-	var i = 0
 	for {
 		select {
 		case b, ok := <-content:
 			if !ok {
-				zap.S().Debugf("ResponseStream complete-%s.", fileName)
-				zap.S().Debugf("result len:%d", len(result))
-				return result, nil
-			}
-			if gather {
-				result = append(result, b...)
+				zap.S().Debugf("ResponseStream complete, %s.", fileName)
+				return nil
 			}
 			// bytes.Buffer
 			// reader := bytes.NewReader(b)
@@ -195,11 +196,10 @@ func ResponseStream(c echo.Context, fileName string, headers map[string]string, 
 			// 	time.Sleep(10 * time.Minute)
 			// 	return nil, ErrorProxyTimeout(c)
 			// }
-			i++
 			// origin
 			if _, err := c.Response().Write(b); err != nil {
 				zap.S().Errorf("ResponseStream write err,file:%s,%v", fileName, err)
-				return nil, ErrorProxyTimeout(c)
+				return ErrorProxyTimeout(c)
 			}
 			flusher.Flush()
 		}
@@ -212,18 +212,4 @@ func GetDomain(hfURL string) (string, error) {
 		return "", err
 	}
 	return parsedURL.Host, nil
-}
-
-func ExtractHeaders(headers map[string]interface{}) map[string]string {
-	lowerCaseHeaders := make(map[string]string)
-	for k, v := range headers {
-		if strSlice, ok := v.([]string); ok {
-			if len(strSlice) > 0 {
-				lowerCaseHeaders[strings.ToLower(k)] = strSlice[0]
-			}
-		} else {
-			lowerCaseHeaders[strings.ToLower(k)] = ""
-		}
-	}
-	return lowerCaseHeaders
 }

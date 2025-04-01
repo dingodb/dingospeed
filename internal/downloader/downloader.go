@@ -31,7 +31,8 @@ import (
 	"go.uber.org/zap"
 )
 
-func FileDownload(hfUrl, savePath string, fileSize int64, headers map[string]string, ret chan []byte) {
+func FileDownload(hfUrl, savePath string, fileSize int64, reqHeaders map[string]string, ret chan []byte) {
+	defer close(ret) // 所有数据处理完成，需关闭channel
 	var dingFile *DingCache
 	if _, err := os.Stat(savePath); err == nil {
 		if dingFile, err = NewDingCache(savePath, config.SysConfig.Download.BlockSize); err != nil {
@@ -43,36 +44,42 @@ func FileDownload(hfUrl, savePath string, fileSize int64, headers map[string]str
 			zap.S().Errorf("NewDingCache err.%v", err)
 			return
 		}
-		dingFile.Resize(fileSize)
+		if err = dingFile.Resize(fileSize); err != nil {
+			zap.S().Errorf("Resize err.%v", err)
+			return
+		}
 	}
 	defer dingFile.Close()
-	var headRange = headers["range"]
+
+	if len(reqHeaders) > 0 {
+		zap.S().Debugf("reqHeaders data:%v", reqHeaders)
+	}
+
+	var headRange = reqHeaders["range"]
 	if headRange == "" {
 		headRange = fmt.Sprintf("bytes=%d-%d", 0, fileSize-1)
 	}
 	startPos, endPos := parseRangeParams(headRange, fileSize)
 	endPos++
 	rangesAndCacheList := getContiguousRanges(dingFile, startPos, endPos)
-	var result []byte
-
-	contentChan := make(chan []byte, 100)
+	zap.S().Debugf("rangesAndCacheList:%v", util.ToJsonString(rangesAndCacheList))
 	for _, rangeInfo := range rangesAndCacheList {
+		contentChan := make(chan []byte, consts.RespChanSize)
 		rangeStartPos, rangeEndPos := rangeInfo.StartPos, rangeInfo.EndPos
+		zap.S().Debugf("file:%s, startPos:%d, endPos:%d, isRemote:%v", savePath, rangeStartPos, rangeEndPos, rangeInfo.IsRemote)
 		if rangeInfo.IsRemote {
-			go GetFileRangeFromRemote(headers, hfUrl, rangeStartPos, rangeEndPos, contentChan)
+			go GetFileRangeFromRemote(reqHeaders["authorization"], hfUrl, rangeStartPos, rangeEndPos, contentChan)
 		} else {
 			go GetFileRangeFromCache(dingFile, rangeStartPos, rangeEndPos, contentChan)
 		}
-
 		curPos := rangeStartPos
 		streamCache := bytes.Buffer{}
 		lastBlock, lastBlockStartPos, lastBlockEndPos := getBlockInfo(curPos, dingFile.getBlockSize(), dingFile.GetFileSize())
 		var curBlock int64
 		var wg sync.WaitGroup
 		wg.Add(1)
-		go func() {
+		go func(isRemote bool) {
 			defer func() {
-				zap.S().Debugf("range go route exit.")
 				wg.Done()
 			}()
 			for {
@@ -80,17 +87,19 @@ func FileDownload(hfUrl, savePath string, fileSize int64, headers map[string]str
 				case chunk, ok := <-contentChan:
 					{
 						if !ok {
-							zap.S().Infof("contentChan is close.")
-							close(ret)
+							zap.S().Debugf("contentChan is close.")
 							return
 						}
 						ret <- chunk
+						curPos += int64(len(chunk))
+						if !isRemote { // 若为缓存的数据块，则无需下面的数据块比较和写入
+							continue
+						}
 						if len(chunk) != 0 {
-							result = append(result, chunk...)
 							streamCache.Write(chunk)
-							curPos += int64(len(chunk))
 						}
 						curBlock = curPos / dingFile.getBlockSize()
+						// 若是一个新的数据块，则将上一个数据块持久化。
 						if curBlock != lastBlock {
 							splitPos := lastBlockEndPos - max(lastBlockStartPos, rangeStartPos)
 							streamCacheBytes := streamCache.Bytes()
@@ -106,11 +115,13 @@ func FileDownload(hfUrl, savePath string, fileSize int64, headers map[string]str
 							if int64(len(rawBlock)) == dingFile.getBlockSize() {
 								hasBlockBool, err := dingFile.HasBlock(lastBlock)
 								if err != nil {
-									zap.S().Errorf("%v", err)
-									return
+									zap.S().Errorf("HasBlock err.%v", err)
 								}
-								if !hasBlockBool {
-									dingFile.WriteBlock(lastBlock, rawBlock)
+								if err == nil && !hasBlockBool {
+									if err = dingFile.WriteBlock(lastBlock, rawBlock); err != nil {
+										zap.S().Errorf("writeBlock err.%v", err)
+									}
+									zap.S().Debugf("mid block：%d write complete, len：%d.", lastBlock, len(rawBlock))
 								}
 							}
 							lastBlock, lastBlockStartPos, lastBlockEndPos = getBlockInfo(curPos, dingFile.getBlockSize(), dingFile.GetFileSize())
@@ -119,53 +130,58 @@ func FileDownload(hfUrl, savePath string, fileSize int64, headers map[string]str
 
 				}
 			}
-		}()
+		}(rangeInfo.IsRemote)
 		wg.Wait()
-		zap.S().Debugf("range %d-%d complete.", rangeInfo.StartPos, rangeInfo.EndPos)
-		rawBlock := streamCache.Bytes()
-		if curBlock == dingFile.getBlockNumber()-1 {
-			// 对不足一个block的数据做补全
-			if int64(len(rawBlock)) == dingFile.GetFileSize()%dingFile.getBlockSize() {
-				padding := bytes.Repeat([]byte{0}, int(dingFile.getBlockSize())-len(rawBlock))
-				rawBlock = append(rawBlock, padding...)
+		if rangeInfo.IsRemote {
+			rawBlock := streamCache.Bytes()
+			if curBlock == dingFile.getBlockNumber()-1 {
+				// 对不足一个block的数据做补全
+				if int64(len(rawBlock)) == dingFile.GetFileSize()%dingFile.getBlockSize() {
+					padding := bytes.Repeat([]byte{0}, int(dingFile.getBlockSize())-len(rawBlock))
+					rawBlock = append(rawBlock, padding...)
+				}
+				lastBlock = curBlock
 			}
-			lastBlock = curBlock
+			if int64(len(rawBlock)) == dingFile.getBlockSize() {
+				hasBlockBool, err := dingFile.HasBlock(lastBlock)
+				if err != nil {
+					zap.S().Errorf("HasBlock err.%v", err)
+					return
+				}
+				if !hasBlockBool {
+					if err = dingFile.WriteBlock(lastBlock, rawBlock); err != nil {
+						zap.S().Errorf("last writeBlock err.%v", err)
+					}
+					zap.S().Debugf("last block：%d write complete, len：%d.", lastBlock, len(rawBlock))
+				}
+			}
 		}
-		if int64(len(rawBlock)) == dingFile.getBlockSize() {
-			hasBlockBool, err := dingFile.HasBlock(lastBlock)
-			if err != nil {
-				zap.S().Errorf("%v", err)
-				return
-			}
-			if !hasBlockBool {
-				dingFile.WriteBlock(lastBlock, rawBlock)
-			}
-		}
-
 		if curPos != rangeEndPos {
 			if rangeInfo.IsRemote {
 				zap.S().Errorf("The size of remote range (%d) is different from sent size (%d).", rangeEndPos-rangeStartPos, curPos-rangeStartPos)
 			} else {
 				zap.S().Errorf("The size of cached range (%d) is different from sent size (%d).", rangeEndPos-rangeStartPos, curPos-rangeStartPos)
 			}
-			return
 		}
+		zap.S().Debugf("range %d-%d complete.", rangeInfo.StartPos, rangeInfo.EndPos)
 	}
+
 }
 
-func GetFileRangeFromCache(dingFile *DingCache, startPos, endPos int64, contentChan chan<- []byte) {
-	startBlock := startPos / dingFile.getBlockSize()
-	endBlock := (endPos - 1) / dingFile.getBlockSize()
-	curPos := startPos
+func GetFileRangeFromCache(dingFile *DingCache, rangeStartPos, rangeEndPos int64, contentChan chan<- []byte) {
+	startBlock := rangeStartPos / dingFile.getBlockSize()
+	endBlock := (rangeEndPos - 1) / dingFile.getBlockSize()
+	curPos := rangeStartPos
+	defer close(contentChan)
 	for curBlock := startBlock; curBlock <= endBlock; curBlock++ {
 		_, blockStartPos, blockEndPos := getBlockInfo(curPos, dingFile.getBlockSize(), dingFile.GetFileSize())
 		hasBlockBool, err := dingFile.HasBlock(curBlock)
 		if err != nil {
-			zap.S().Errorf("%v", err)
+			zap.S().Errorf("HasBlock err. curBlock:%d,curPos:%d, %v", curBlock, curPos, err)
 			return
 		}
 		if !hasBlockBool {
-			zap.S().Errorf("Unknown exception: read block which has not been cached.")
+			zap.S().Errorf("read block which has not been cached.curBlock:%d, ")
 			return
 		}
 		rawBlock, err := dingFile.ReadBlock(curBlock)
@@ -173,22 +189,21 @@ func GetFileRangeFromCache(dingFile *DingCache, startPos, endPos int64, contentC
 			zap.S().Errorf("dingFile.ReadBlock err.%v", err)
 			return
 		}
-		chunk := rawBlock[max(startPos, blockStartPos)-blockStartPos : min(endPos, blockEndPos)-blockStartPos]
+		chunk := rawBlock[max(rangeStartPos, blockStartPos)-blockStartPos : min(rangeEndPos, blockEndPos)-blockStartPos]
 		contentChan <- chunk
 		curPos += int64(len(chunk))
 	}
-	if curPos != endPos {
-		zap.S().Errorf("The cache range from %d to %d is incomplete.", startPos, endPos)
-		return
+	if curPos != rangeEndPos {
+		zap.S().Errorf("The cache range from %d to %d is incomplete.", rangeStartPos, rangeEndPos)
 	}
 }
 
-func GetFileRangeFromRemote(reqHeaders map[string]string, url string, startPos, endPos int64, contentChan chan<- []byte) {
+func GetFileRangeFromRemote(authorization, url string, startPos, endPos int64, contentChan chan<- []byte) {
 	client := &http.Client{}
-	client.Timeout = consts.ApiTimeOut
+	client.Timeout = config.SysConfig.GetReqTimeOut()
 	headers := make(map[string]string)
-	if auth, ok := reqHeaders["authorization"]; ok {
-		headers["authorization"] = auth
+	if authorization != "" {
+		headers["authorization"] = authorization
 	}
 	headers["range"] = fmt.Sprintf("bytes=%d-%d", startPos, endPos-1)
 	req, err := http.NewRequest("GET", url, nil)
@@ -204,26 +219,26 @@ func GetFileRangeFromRemote(reqHeaders map[string]string, url string, startPos, 
 		zap.S().Errorf("do request err.%v", err)
 		return
 	}
+	var rawData []byte
+	chunkByteLen := 0
+	var contentEncoding = ""
 	defer func() {
-		zap.S().Debugf("GetFileRangeFromRemote exit.")
+		zap.S().Debugf("GetFileRangeFromRemote exit. %s-%d", url, chunkByteLen)
 		defer resp.Body.Close()
 		defer close(contentChan)
 	}()
-	var rawData []byte
-	chunkBytes := 0
-	var contentEncoding = ""
-	chunk := make([]byte, consts.ChunkSize)
+	contentEncoding = resp.Header.Get("content-encoding")
 	for {
+		chunk := make([]byte, config.SysConfig.Download.RespChunkSize)
 		n, err := resp.Body.Read(chunk)
 		if n > 0 {
-			contentEncoding = resp.Header.Get("content-encoding")
 			if contentEncoding != "" { // 数据有编码，先收集，后面解码
 				rawData = append(rawData, chunk[:n]...)
 			} else {
 				contentChan <- chunk[:n] // 没有编码，可以直接返回原始数据
 			}
-			chunkBytes += n // 原始数量
-			zap.S().Debugf("接收字节数量：%d", chunkBytes)
+			chunkByteLen += n // 原始数量
+
 		}
 		if err != nil {
 			if err == io.EOF {
@@ -234,12 +249,14 @@ func GetFileRangeFromRemote(reqHeaders map[string]string, url string, startPos, 
 		}
 	}
 	if contentEncoding != "" {
-		// todo 完成解码操作
 		// 这里需要实现解压缩逻辑
-		// finalData := decompress_data(rawData, resp.Header.Get("content-encoding", None))
-		// chunkBytes = len(finalData)
-		// return finalData, nil
-		contentChan <- rawData
+		finalData, err := util.DecompressData(rawData, contentEncoding)
+		if err != nil {
+			zap.S().Errorf("DecompressData err.%v", err)
+			return
+		}
+		contentChan <- finalData      // 返回解码后的数据流
+		chunkByteLen = len(finalData) // 将解码后的长度复制为原理的chunkBytes
 	}
 	if contentLengthStr := resp.Header.Get("content-length"); contentLengthStr != "" {
 		contentLength, err := strconv.Atoi(contentLengthStr) // 原始数据长度
@@ -248,15 +265,15 @@ func GetFileRangeFromRemote(reqHeaders map[string]string, url string, startPos, 
 			return
 		}
 		if contentEncoding != "" {
-			// contentLength = chunkBytes     //需要返回解码的长度
+			contentLength = chunkByteLen
 		}
 		if endPos-startPos != int64(contentLength) {
 			zap.S().Errorf("The content of the response is incomplete. Expected-%d. Accepted-%d", endPos-startPos, contentLength)
 			return
 		}
 	}
-	if endPos-startPos != int64(chunkBytes) {
-		zap.S().Errorf("The block is incomplete. Expected-%d. Accepted-%d", endPos-startPos, chunkBytes)
+	if endPos-startPos != int64(chunkByteLen) {
+		zap.S().Errorf("The block is incomplete. Expected-%d. Accepted-%d", endPos-startPos, chunkByteLen)
 		return
 	}
 }
@@ -297,23 +314,22 @@ func getBlockInfo(pos, blockSize, fileSize int64) (int64, int64, int64) {
 
 // 获取
 func getContiguousRanges(dingFile *DingCache, startPos, endPos int64) []*RangeInfo {
-	startBlock := startPos / dingFile.GetFileSize()
-	endBlock := (endPos - 1) / dingFile.GetFileSize()
+	startBlock := startPos / dingFile.getBlockSize()
+	endBlock := (endPos - 1) / dingFile.getBlockSize()
 
-	rangeStartPos := startPos
+	rangeStartPos, curPos := startPos, startPos
 	hasBlockBool, err := dingFile.HasBlock(startBlock)
 	if err != nil {
 		zap.S().Errorf("%v", err)
 		return nil
 	}
 	rangeIsRemote := !hasBlockBool // 不存在，从远程获取，为true
-	curPos := startPos
 	var rangesAndCacheList []*RangeInfo
 	for curBlock := startBlock; curBlock <= endBlock; curBlock++ {
 		_, _, blockEndPos := getBlockInfo(curPos, dingFile.getBlockSize(), dingFile.GetFileSize())
 		hasBlockBool, err = dingFile.HasBlock(curBlock)
 		if err != nil {
-			zap.S().Errorf("%v", err)
+			zap.S().Errorf("HasBlock err. curBlock:%d,curPos:%d, %v", curBlock, curPos, err)
 			return nil
 		}
 		curIsRemote := !hasBlockBool // 不存在，从远程获取，为true，存在为false。
@@ -326,7 +342,6 @@ func getContiguousRanges(dingFile *DingCache, startPos, endPos int64) []*RangeIn
 		}
 		curPos = blockEndPos
 	}
-
 	rangesAndCacheList = append(rangesAndCacheList, &RangeInfo{StartPos: rangeStartPos, EndPos: endPos, IsRemote: rangeIsRemote})
 	return rangesAndCacheList
 }
