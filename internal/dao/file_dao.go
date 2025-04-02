@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -414,4 +415,23 @@ func (f *FileDao) ReadCacheRequest(apiPath string) (*common.CacheContent, error)
 	}
 	cacheContent.OriginContent = decodeByte
 	return &cacheContent, nil
+}
+
+func (d *FileDao) ReposGenerator(c echo.Context) error {
+	reposPath := config.SysConfig.Repos()
+
+	datasets, _ := filepath.Glob(filepath.Join(reposPath, "api/datasets/*/*"))
+	datasetsRepos := util.ProcessPaths(datasets)
+
+	models, _ := filepath.Glob(filepath.Join(reposPath, "api/models/*/*"))
+	modelsRepos := util.ProcessPaths(models)
+
+	spaces, _ := filepath.Glob(filepath.Join(reposPath, "api/spaces/*/*"))
+	spacesRepos := util.ProcessPaths(spaces)
+
+	return c.Render(http.StatusOK, "repos.html", map[string]interface{}{
+		"datasets_repos": datasetsRepos,
+		"models_repos":   modelsRepos,
+		"spaces_repos":   spacesRepos,
+	})
 }

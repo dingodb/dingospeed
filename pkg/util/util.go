@@ -22,6 +22,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -224,4 +225,17 @@ func Md5(str string) string {
 func ToJsonString(data interface{}) string {
 	jsonData, _ := sonic.Marshal(data)
 	return string(jsonData)
+}
+
+func ProcessPaths(paths []string) []string {
+	var repos []string
+	for _, p := range paths {
+		parts := strings.Split(p, string(filepath.Separator))
+		if len(parts) >= 2 {
+			org := parts[len(parts)-2]
+			repo := parts[len(parts)-1]
+			repos = append(repos, org+"/"+repo)
+		}
+	}
+	return repos
 }

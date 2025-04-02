@@ -44,3 +44,7 @@ func (handler *MetaHandler) MetaProxyCommonHandler(c echo.Context) error {
 func (handler *MetaHandler) WhoamiV2Handler(c echo.Context) error {
 	return handler.metaService.WhoamiV2(c)
 }
+
+func (handler *MetaHandler) ReposHandler(c echo.Context) error {
+	return handler.metaService.Repos(c)
+}

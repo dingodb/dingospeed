@@ -16,8 +16,11 @@ package server
 
 import (
 	"context"
+	"embed"
 	"fmt"
+	"io"
 	"net/http"
+	"text/template"
 
 	"dingo-hfmirror/internal/router"
 	"dingo-hfmirror/pkg/config"
@@ -32,6 +35,17 @@ var ServerProvider = wire.NewSet(NewServer, NewEngine)
 type Server struct {
 	s    *http.Server
 	http *router.HttpRouter
+}
+
+//go:embed "templates/*.html"
+var templatesFS embed.FS
+
+type Template struct {
+	templates *template.Template
+}
+
+func (t *Template) Render(w io.Writer, name string, data interface{}, c echo.Context) error {
+	return t.templates.ExecuteTemplate(w, name, data)
 }
 
 func NewServer(config *config.Config, echo *echo.Echo, httpr *router.HttpRouter) *Server {
@@ -66,6 +80,9 @@ func NewEngine() *echo.Echo {
 	// r.Use(gin.Recovery())
 	// r.Use(middeware.Cors())
 	// r.Use(middeware.Jwt())
-
+	t := &Template{
+		templates: template.Must(template.ParseFS(templatesFS, "templates/*.html")),
+	}
+	r.Renderer = t
 	return r
 }

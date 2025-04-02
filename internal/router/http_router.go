@@ -51,5 +51,6 @@ func (r *HttpRouter) initRouter() {
 	r.echo.GET("/api/:repoType/:org/:repo/revision/:commit", r.metaHandler.MetaProxyCommonHandler)
 
 	r.echo.GET("/api/whoami-v2", r.metaHandler.WhoamiV2Handler)
+	r.echo.GET("/repos", r.metaHandler.ReposHandler)
 
 }

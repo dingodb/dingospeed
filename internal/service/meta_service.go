@@ -53,3 +53,8 @@ func (d *MetaService) WhoamiV2(c echo.Context) error {
 	err := d.fileDao.WhoamiV2Generator(c)
 	return err
 }
+
+func (d *MetaService) Repos(c echo.Context) error {
+	err := d.fileDao.ReposGenerator(c)
+	return err
+}
