@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"dingo-hfmirror/pkg/common"
-	"dingo-hfmirror/pkg/consts"
 
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
@@ -84,48 +83,27 @@ func Get(url string, headers map[string]string, timeout time.Duration) (*common.
 	}, nil
 }
 
-func GetStream(url string, headers map[string]string, timeout time.Duration) (*common.Response, error) {
+func GetStream(url string, headers map[string]string, timeout time.Duration, f func(r *http.Response)) error {
+	client := &http.Client{}
+	client.Timeout = timeout
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	for key, value := range headers {
 		req.Header.Set(key, value)
 	}
-	client := &http.Client{}
-	client.Timeout = timeout
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return err
 	}
+	defer resp.Body.Close()
 	respHeaders := make(map[string]interface{})
 	for key, value := range resp.Header {
 		respHeaders[key] = value
 	}
-	var bodyStreamChan = make(chan []byte, consts.RespChanSize)
-	go func() {
-		defer resp.Body.Close()
-		defer close(bodyStreamChan)
-		buffer := make([]byte, 1024*1024) // 定义缓冲区大小
-		for {
-			n, err := resp.Body.Read(buffer)
-			if n > 0 {
-				bodyStreamChan <- buffer[:n]
-			}
-			if err != nil {
-				if err == io.EOF {
-					break
-				}
-				zap.S().Errorf("读取响应出错: %v\n", err)
-				break
-			}
-		}
-	}()
-	return &common.Response{
-		StatusCode: resp.StatusCode,
-		Headers:    respHeaders,
-		BodyChan:   bodyStreamChan,
-	}, nil
+	f(resp)
+	return nil
 }
 
 // Post 方法用于发送带请求头的 POST 请求
@@ -171,6 +149,7 @@ func ResponseStream(c echo.Context, fileName string, headers map[string]string, 
 	if !ok {
 		return c.String(http.StatusInternalServerError, "Streaming unsupported!")
 	}
+	zap.S().Debugf("exec ResponseStream ...............")
 	for {
 		select {
 		case b, ok := <-content:
@@ -178,25 +157,6 @@ func ResponseStream(c echo.Context, fileName string, headers map[string]string, 
 				zap.S().Debugf("ResponseStream complete, %s.", fileName)
 				return nil
 			}
-			// bytes.Buffer
-			// reader := bytes.NewReader(b)
-			// if err := c.Stream(http.StatusOK, "text/event-stream", reader); err != nil {
-			// 	zap.S().Errorf("ResponseStream write err,file:%s,%v", fileName, err)
-			// 	return nil, ErrorProxyTimeout(c)
-			// }
-
-			// test byte
-			// data := fmt.Sprintf("Message %d", i)
-			// // data := make([]byte, 2048)
-			// result = append(result, b...)
-			// fmt.Printf("no:%v,result:%d\n", data, len(result))
-
-			// if _, err := c.Response().Write([]byte(data)); err != nil {
-			// 	zap.S().Errorf("ResponseStream write err,file:%s,%v", fileName, err)
-			// 	time.Sleep(10 * time.Minute)
-			// 	return nil, ErrorProxyTimeout(c)
-			// }
-			// origin
 			if _, err := c.Response().Write(b); err != nil {
 				zap.S().Errorf("ResponseStream write err,file:%s,%v", fileName, err)
 				return ErrorProxyTimeout(c)

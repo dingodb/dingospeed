@@ -21,26 +21,6 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// 错误码说明
-// 1-3 位: HTTP 状态码
-// 4 位: 组件
-// 5-6 位: 组件内部错误码
-var (
-	CodeBadRequest     = NewAPICode(400, "请求参数错误")
-	CodeBadTimeRequest = NewAPICode(401, "请求的时间参数格式错误")
-	CodeUnauthorized   = NewAPICode(401, "认证失败")
-	CodeForbidden      = NewAPICode(403, "授权失败")
-	CodeNotFound       = NewAPICode(404, "资源未找到")
-
-	CodeOperateFailed = NewAPICode(500, "操作失败")
-	CodeSaveFailed    = NewAPICode(501, "增加失败")
-	CodeUpdatedFailed = NewAPICode(502, "修改失败")
-	CodeDeletedFailed = NewAPICode(503, "删除失败")
-	CodeFoundFailed   = NewAPICode(504, "查询失败")
-	CodeStartFailed   = NewAPICode(505, "启动失败")
-	CodeStopFailed    = NewAPICode(506, "停止失败")
-)
-
 func ResponseHeaders(ctx echo.Context, headers map[string]string) error {
 	fullHeaders(ctx, headers)
 	return ctx.JSON(http.StatusOK, nil)
@@ -74,6 +54,13 @@ func ErrorEntryNotFoundBranch(ctx echo.Context, branch, path string) error {
 		"x-error-message": fmt.Sprintf("%s does not exist on %s", branch, path),
 	}
 	return Response(ctx, http.StatusUnauthorized, headers, nil)
+}
+
+func ErrorEntryUnknown(ctx echo.Context, statusCode int, msg string) error {
+	content := map[string]string{
+		"error": msg,
+	}
+	return Response(ctx, statusCode, nil, content)
 }
 
 func ErrorEntryNotFound(ctx echo.Context) error {
@@ -131,22 +118,4 @@ func fullHeaders(c echo.Context, headers map[string]string) {
 	for k, v := range headers {
 		c.Response().Header().Set(k, v)
 	}
-}
-
-type APICode struct {
-	Code int         `json:"code"`
-	Data interface{} `json:"data"`
-	Msg  string      `json:"msg"`
-}
-
-func NewAPICode(code int, message string) APICode {
-	return APICode{
-		Code: code,
-		Msg:  message,
-	}
-}
-func (a *APICode) HTTPStatus() int {
-	v := a.Code
-	v /= 1
-	return v
 }

@@ -93,3 +93,7 @@ type CacheContent struct {
 	Content       string            `json:"content"`
 	OriginContent []byte            `json:"-"`
 }
+
+type ErrorResp struct {
+	Error string `json:"error"`
+}

@@ -9,13 +9,13 @@ server:
     hfLfsNetLoc : cdn-lfs.huggingface.co
 
 download:
-    retryChannelNum: 100
-    goroutineMaxNumPerFile: 10
-    waitNextBlockTime: 1        #等待获取下一个块的时间，单位（s）
-    blockSize: 8388608      #默认文件块大小为8MB（8388608），单位字节
+    goroutineMaxNumPerFile: 8
+    goroutineMinNumPerFile: 1
+    blockSize: 8388608           #默认文件块大小为8MB（8388608），单位字节
     reqTimeout: 0                #远端请求超时时间，单位秒，默认为0，不超时。
-    respChunkSize: 8192     #默认对响应结果的读取大小8192，单位字节。
-
+    respChunkSize: 8192          #默认对响应结果的读取大小8192，单位字节。
+    remoteFileRangeSize: 8388608    #按照这个长度分块下载，默认为8M,测试选项：8388608（8M），67108864（64M），134217728（128M）,536870912(512M),1GB（1073741824）
+    prefetchBlocks: 16           #预先读取块的数量
 
 log:
     MaxSize: 1      # 日志文件最大的尺寸（MB）
