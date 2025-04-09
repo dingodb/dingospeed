@@ -10,7 +10,7 @@ ENV GOPROXY=https://goproxy.cn,direct
 # 所有后续操作都会在这个目录下进行
 WORKDIR /app
 
-COPY . .
+COPY .. .
 
 # 安装依赖包和环境准备
 RUN go install github.com/google/wire/cmd/wire@latest
