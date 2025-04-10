@@ -40,4 +40,4 @@ const (
 	RequestTypeGet  = "get"
 )
 
-const RespChanSize = 50
+const RespChanSize = 100

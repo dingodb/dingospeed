@@ -15,8 +15,11 @@
 package handler
 
 import (
+	"net/url"
+
 	"dingo-hfmirror/internal/service"
 	"dingo-hfmirror/pkg/consts"
+	"dingo-hfmirror/pkg/util"
 
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
@@ -33,21 +36,33 @@ func NewFileHandler(fileService *service.FileService) *FileHandler {
 }
 
 func (handler *FileHandler) HeadFileHandler1(c echo.Context) error {
-	repoType, org, repo, commit, filePath := paramProcess(c, 1)
+	repoType, org, repo, commit, filePath, err := paramProcess(c, 1)
+	if err != nil {
+		zap.S().Error("解码出错:%v", err)
+		return util.ErrorRequestParam(c)
+	}
 	return handler.fileService.FileHeadCommon(c, repoType, org, repo, commit, filePath)
 }
 
 func (handler *FileHandler) HeadFileHandler2(c echo.Context) error {
-	repoType, org, repo, commit, filePath := paramProcess(c, 2)
+	repoType, org, repo, commit, filePath, err := paramProcess(c, 2)
+	if err != nil {
+		zap.S().Error("解码出错:%v", err)
+		return util.ErrorRequestParam(c)
+	}
 	return handler.fileService.FileHeadCommon(c, repoType, org, repo, commit, filePath)
 }
 
 func (handler *FileHandler) HeadFileHandler3(c echo.Context) error {
-	repoType, org, repo, commit, filePath := paramProcess(c, 3)
+	repoType, org, repo, commit, filePath, err := paramProcess(c, 3)
+	if err != nil {
+		zap.S().Error("解码出错:%v", err)
+		return util.ErrorRequestParam(c)
+	}
 	return handler.fileService.FileHeadCommon(c, repoType, org, repo, commit, filePath)
 }
 
-func paramProcess(c echo.Context, processMode int) (string, string, string, string, string) {
+func paramProcess(c echo.Context, processMode int) (string, string, string, string, string, error) {
 	var (
 		repoType string
 		org      string
@@ -79,22 +94,35 @@ func paramProcess(c echo.Context, processMode int) (string, string, string, stri
 		filePath = c.Param("filePath")
 		repoType = "models"
 	} else {
-		zap.S().Errorf("param process error.")
+		panic("param process error.")
 	}
-	return repoType, org, repo, commit, filePath
+	filePath, err := url.QueryUnescape(filePath)
+	return repoType, org, repo, commit, filePath, err
 }
 
 func (handler *FileHandler) GetFileHandler1(c echo.Context) error {
-	repoType, org, repo, commit, filePath := paramProcess(c, 1)
+	repoType, org, repo, commit, filePath, err := paramProcess(c, 1)
+	if err != nil {
+		zap.S().Error("解码出错:%v", err)
+		return util.ErrorRequestParam(c)
+	}
 	return handler.fileService.FileGetCommon(c, repoType, org, repo, commit, filePath)
 }
 
 func (handler *FileHandler) GetFileHandler2(c echo.Context) error {
-	repoType, org, repo, commit, filePath := paramProcess(c, 2)
+	repoType, org, repo, commit, filePath, err := paramProcess(c, 2)
+	if err != nil {
+		zap.S().Error("解码出错:%v", err)
+		return util.ErrorRequestParam(c)
+	}
 	return handler.fileService.FileGetCommon(c, repoType, org, repo, commit, filePath)
 }
 
 func (handler *FileHandler) GetFileHandler3(c echo.Context) error {
-	repoType, org, repo, commit, filePath := paramProcess(c, 3)
+	repoType, org, repo, commit, filePath, err := paramProcess(c, 3)
+	if err != nil {
+		zap.S().Error("解码出错:%v", err)
+		return util.ErrorRequestParam(c)
+	}
 	return handler.fileService.FileGetCommon(c, repoType, org, repo, commit, filePath)
 }

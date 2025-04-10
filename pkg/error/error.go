@@ -15,14 +15,18 @@
 package myerr
 
 type Error struct {
-	msg string
-	err error
+	statusCode int
+	msg        string
+	err        error
 }
 
 func (e Error) Error() string {
 	return e.msg
 }
 
+func (e Error) StatusCode() int {
+	return e.statusCode
+}
 func (e Error) Cause(err error) {
 	e.err = err
 }
@@ -33,6 +37,10 @@ func (e Error) Unwrap() error {
 
 func New(msg string) Error {
 	return Error{msg: msg}
+}
+
+func NewAppendCode(code int, msg string) Error {
+	return Error{msg: msg, statusCode: code}
 }
 
 func Wrap(msg string, err error) Error {

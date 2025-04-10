@@ -2,6 +2,7 @@ GOHOSTOS:=$(shell go env GOHOSTOS)
 GOPATH:=$(shell go env GOPATH)
 VERSION=$(shell git describe --tags --always)
 PACKAGES=$(shell go list ./... | grep -v /vendor/)
+REMOTE_DIR=/root/hub-download/dingo-hfmirror
 
 ifeq ($(GOHOSTOS), windows)
 	#the `find.exe` is different from `find` in bash/shell.
@@ -62,15 +63,13 @@ build:
 macbuild:
 	mkdir -p bin/ && CGO_ENABLED=0 GOOS=linux GOARCH=amd64  go build -ldflags "-s -w -X main.Version=$(VERSION)" -o ./bin/dingo-hfmirror dingo-hfmirror/cmd
 
-.PHONY: macscp
-macscp:
-    scp bin/dingo-hfmirror root@172.30.14.123:/root/hub-download/dingo-hfmirror
+.PHONY: scpDev
+scpDev:
+	scp bin/dingo-hfmirror root@172.30.14.123:/root/hub-download/dingo-hfmirror
 
-.PHONY: deploy
-# generate all
-deploy:
-	make macbuild;
-	make macscp
+.PHONY: scpTest
+scpTest:
+	scp bin/dingo-hfmirror root@10.220.70.124:/root/hub-download/dingo-hfmirror
 
 # go install github.com/superproj/addlicense@latest
 .PHONY: license

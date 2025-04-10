@@ -12,37 +12,42 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
-package downloader
+package common
 
-import (
-	"fmt"
-	"testing"
+import "sync"
 
-	"go.uber.org/zap"
-)
+type SafeMap[K comparable, V any] struct {
+	m  map[K]V
+	mu sync.RWMutex
+}
 
-func TestFileWrite(t *testing.T) {
-	var dingFile *DingCache
-	var err error
-	savePath := "cachefile"
-	fileSize := int64(8388608)
-	blockSize := int64(8388608)
-	if dingFile, err = NewDingCache(savePath, blockSize); err != nil {
-		zap.S().Errorf("NewDingCache err.%v", err)
-		return
-	}
-	if err = dingFile.Resize(fileSize); err != nil {
-		zap.S().Errorf("Resize err.%v", err)
-		return
+func NewSafeMap[K comparable, V any]() *SafeMap[K, V] {
+	return &SafeMap[K, V]{
+		m: make(map[K]V),
 	}
 }
 
-func TestFileWrite2(t *testing.T) {
+func (sm *SafeMap[K, V]) Set(key K, value V) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.m[key] = value
+}
 
-	h := NewDingCacheHeader(1, 1, 1)
-	fmt.Println(string(h.MagicNumber[:]))
-	fmt.Println(string(h.MagicNumber[:]))
+func (sm *SafeMap[K, V]) Get(key K) (V, bool) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	value, exists := sm.m[key]
+	return value, exists
+}
 
-	fmt.Println(string(h.MagicNumber[:]))
+func (sm *SafeMap[K, V]) Delete(key K) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	delete(sm.m, key)
+}
 
+func (sm *SafeMap[K, V]) Len() int {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return len(sm.m)
 }

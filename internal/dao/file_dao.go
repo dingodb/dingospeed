@@ -15,6 +15,7 @@
 package dao
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -26,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	cache "dingo-hfmirror/internal/data"
 	"dingo-hfmirror/internal/downloader"
 	"dingo-hfmirror/pkg/common"
 	"dingo-hfmirror/pkg/config"
@@ -46,6 +48,7 @@ type FileDao struct {
 }
 
 func NewFileDao() *FileDao {
+	cache.InitCache() // 初始化缓存
 	return &FileDao{}
 }
 
@@ -150,6 +153,10 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, org, repo, commit, 
 	// _file_realtime_stream
 	pathsInfos, err := f.pathsInfoGenerator(repoType, org, repo, commit, authorization, []string{fileName}, "post")
 	if err != nil {
+		if e, ok := err.(myerr.Error); ok {
+			return util.ErrorEntryUnknown(c, e.StatusCode(), e.Error())
+		}
+		zap.S().Errorf("pathsInfoGenerator err.%v", err)
 		return err
 	}
 	if len(pathsInfos) == 0 {
@@ -163,7 +170,15 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, org, repo, commit, 
 	if pathInfo.Size == 0 {
 		return util.ErrorProxyTimeout(c)
 	}
-	respHeaders["content-length"] = util.Itoa(pathInfo.Size)
+
+	var headRange = reqHeaders["range"]
+	if headRange == "" {
+		headRange = fmt.Sprintf("bytes=%d-%d", 0, pathInfo.Size-1)
+	}
+	startPos, endPos := parseRangeParams(headRange, pathInfo.Size)
+	endPos = endPos + 1
+
+	respHeaders["content-length"] = util.Itoa(endPos - startPos)
 	if commit != "" {
 		respHeaders[strings.ToLower(consts.HUGGINGFACE_HEADER_X_REPO_COMMIT)] = commit
 	}
@@ -172,11 +187,10 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, org, repo, commit, 
 		return util.ErrorProxyTimeout(c)
 	}
 	respHeaders["etag"] = etag
-	zap.S().Debugf("FileGetGenerator-fileName:%s,commit:%s,etag:%s", fileName, commit, etag)
 	if method == consts.RequestTypeHead {
 		return util.ResponseHeaders(c, respHeaders)
 	} else if method == consts.RequestTypeGet {
-		return f.FileChunkGet(c, respHeaders, reqHeaders, hfUrl, pathInfo.Size, fileName, filesPath)
+		return f.FileChunkGet(c, hfUrl, filesPath, fileName, authorization, pathInfo.Size, startPos, endPos, respHeaders)
 	} else {
 		return util.ErrorMethodError(c)
 	}
@@ -219,6 +233,14 @@ func (f *FileDao) pathsInfoGenerator(repoType, org, repo, commit, authorization 
 		if err != nil {
 			zap.S().Errorf("req %s err.%v", pathsInfoUrl, err)
 			return nil, err
+		}
+		if response.StatusCode != http.StatusOK {
+			var errorResp common.ErrorResp
+			err = sonic.Unmarshal(response.Body, &errorResp)
+			if err != nil {
+				return nil, err
+			}
+			return nil, myerr.NewAppendCode(response.StatusCode, errorResp.Error)
 		}
 		remoteRespPathsInfos := make([]common.PathsInfo, 0)
 		err = sonic.Unmarshal(response.Body, &remoteRespPathsInfos)
@@ -284,39 +306,13 @@ func (f *FileDao) getResourceEtag(hfUrl, authorization string) (string, error) {
 	return retEtag, nil
 }
 
-// func (f *FileDao) FileChunkGet(c echo.Context, headers map[string]string, hfUrl, fileName string, fileSize int64, fileDir string) error {
-// 	// 1.针对每个文件获取一个下载器
-// 	fInfo := downloader.FileInfo{
-// 		FileName: fileName, FileSize: fileSize,
-// 	}
-// 	var startPos, endPos int64 = 0, fileSize - 1
-// 	if v, ok := headers["range"]; ok {
-// 		startPos, endPos = parseRangeParams(v, fileSize)
-// 	}
-// 	fInfo.StartPos = startPos
-// 	fInfo.EndPos = endPos
-// 	loader, err := downloader.GetDownLoader(fInfo, fileDir)
-// 	if err != nil {
-// 		return util.ErrorProxyError(c)
-// 	}
-// 	loader.DownloadUrl = hfUrl
-// 	if err = loader.DownloadFileBySlice(); err != nil {
-// 		return util.ErrorProxyError(c)
-// 	}
-// 	if err = loader.MergeDownloadFiles(); err != nil {
-// 		return util.ErrorProxyTimeout(c)
-// 	}
-// 	if _, err = util.ResponseStream(c, fileName, headers, loader.BlockData, false); err != nil {
-// 		return util.ErrorProxyTimeout(c)
-// 	}
-// 	return nil
-// }
-
-func (f *FileDao) FileChunkGet(c echo.Context, respHeaders, reqHeaders map[string]string, hfUrl string, fileSize int64, fileName, filesPath string) error {
-	contentChan := make(chan []byte, 100)
-	go downloader.FileDownload(hfUrl, filesPath, fileSize, reqHeaders, contentChan)
-	if err := util.ResponseStream(c, fileName, respHeaders, contentChan); err != nil {
-		zap.S().Errorf("FileChunkGet stream err.%v", err)
+func (f *FileDao) FileChunkGet(c echo.Context, hfUrl, filesPath, fileName, authorization string, fileSize, startPos, endPos int64, respHeaders map[string]string) error {
+	responseChan := make(chan []byte, 100)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go downloader.FileDownload(ctx, hfUrl, filesPath, fileName, authorization, fileSize, startPos, endPos, responseChan)
+	if err := util.ResponseStream(c, fileName, respHeaders, responseChan); err != nil {
+		zap.S().Warnf("FileChunkGet stream err.%v", err)
 		return util.ErrorProxyTimeout(c)
 	}
 	return nil
@@ -417,7 +413,7 @@ func (f *FileDao) ReadCacheRequest(apiPath string) (*common.CacheContent, error)
 	return &cacheContent, nil
 }
 
-func (d *FileDao) ReposGenerator(c echo.Context) error {
+func (f *FileDao) ReposGenerator(c echo.Context) error {
 	reposPath := config.SysConfig.Repos()
 
 	datasets, _ := filepath.Glob(filepath.Join(reposPath, "api/datasets/*/*"))
@@ -434,4 +430,30 @@ func (d *FileDao) ReposGenerator(c echo.Context) error {
 		"models_repos":   modelsRepos,
 		"spaces_repos":   spacesRepos,
 	})
+}
+
+func parseRangeParams(fileRange string, fileSize int64) (int64, int64) {
+	if strings.Contains(fileRange, "/") {
+		split := strings.SplitN(fileRange, "/", 2)
+		fileRange = split[0]
+	}
+	if strings.HasPrefix(fileRange, "bytes=") {
+		fileRange = fileRange[6:]
+	}
+	parts := strings.Split(fileRange, "-")
+	if len(parts) != 2 {
+		panic("file range err.")
+	}
+	var startPos, endPos int64
+	if len(parts[0]) != 0 {
+		startPos = util.Atoi64(parts[0])
+	} else {
+		startPos = 0
+	}
+	if len(parts[1]) != 0 {
+		endPos = util.Atoi64(parts[1])
+	} else {
+		endPos = fileSize - 1
+	}
+	return startPos, endPos
 }
