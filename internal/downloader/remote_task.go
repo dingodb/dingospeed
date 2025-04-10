@@ -1,3 +1,17 @@
+//  Copyright (c) 2025 dingodb.com, Inc. All Rights Reserved
+//
+//  Licensed under the Apache License, Version 2.0 (the "License");
+//  you may not use this file except in compliance with the License.
+//  You may obtain a copy of the License at
+//
+//      http:www.apache.org/licenses/LICENSE-2.0
+//
+//  Unless required by applicable law or agreed to in writing, software
+//  distributed under the License is distributed on an "AS IS" BASIS,
+//  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//  See the License for the specific language governing permissions and
+//  limitations under the License.
+
 package downloader
 
 import (
@@ -36,8 +50,8 @@ func NewRemoteFileTask(taskNo int, rangeStartPos int64, rangeEndPos int64) *Remo
 func (r RemoteFileTask) DoTask() {
 	contentChan := make(chan []byte, consts.RespChanSize)
 	rangeStartPos, rangeEndPos := r.RangeStartPos, r.RangeEndPos
-	zap.S().Debugf("remote file download:%s, taskNo:%d, startPos:%d, endPos:%d", r.hfUrl, r.TaskNo, rangeStartPos, rangeEndPos)
-	go getFileRangeFromRemote(r.Context, r.authorization, r.hfUrl, rangeStartPos, rangeEndPos, contentChan)
+	zap.S().Infof("remote file download:%s, taskNo:%d, size:%d, startPos:%d, endPos:%d", r.FileName, r.TaskNo, r.TaskSize, rangeStartPos, rangeEndPos)
+	go r.getFileRangeFromRemote(rangeStartPos, rangeEndPos, contentChan)
 	curPos := rangeStartPos
 	streamCache := bytes.Buffer{}
 	lastBlock, lastBlockStartPos, lastBlockEndPos := getBlockInfo(curPos, r.DingFile.getBlockSize(), r.DingFile.GetFileSize()) // 块编号，开始位置，结束位置
@@ -57,6 +71,7 @@ func (r RemoteFileTask) DoTask() {
 					if !ok {
 						return
 					}
+					// zap.S().Infof("task:%d, len:%d", r.TaskNo, len(chunk))
 					r.Queue <- chunk // 先写到缓存
 					curPos += int64(len(chunk))
 					if len(chunk) != 0 {
@@ -66,16 +81,14 @@ func (r RemoteFileTask) DoTask() {
 					// 若是一个新的数据块，则将上一个数据块持久化。
 					if curBlock != lastBlock {
 						splitPos := lastBlockEndPos - max(lastBlockStartPos, rangeStartPos)
-						streamCacheBytes := streamCache.Bytes()
-						if splitPos > int64(len(streamCacheBytes)) {
+						cacheLen := int64(streamCache.Len())
+						if splitPos > cacheLen {
 							// 正常不会出现splitPos>len(streamCacheBytes),若出现只能降级处理。
-							zap.S().Errorf("splitPos err.%d-%d", splitPos, len(streamCacheBytes))
-							splitPos = int64(len(streamCacheBytes))
+							zap.S().Errorf("splitPos err.%d-%d", splitPos, cacheLen)
+							splitPos = cacheLen
 						}
-						rawBlock := streamCacheBytes[:splitPos]  // 当前块的数据
-						nextBlock := streamCacheBytes[splitPos:] // 下一个块的数据
-						streamCache.Truncate(0)
-						streamCache.Write(nextBlock)
+						streamCacheBytes := streamCache.Bytes()
+						rawBlock := streamCacheBytes[:splitPos] // 当前块的数据
 						if int64(len(rawBlock)) == r.DingFile.getBlockSize() {
 							hasBlockBool, err := r.DingFile.HasBlock(lastBlock)
 							if err != nil {
@@ -85,13 +98,17 @@ func (r RemoteFileTask) DoTask() {
 								if err = r.DingFile.WriteBlock(lastBlock, rawBlock); err != nil {
 									zap.S().Errorf("writeBlock err.%v", err)
 								}
-								zap.S().Debugf("taskNo:%d, block：%d write done, range：%d-%d.", r.TaskNo, lastBlock, lastBlockStartPos, lastBlockEndPos)
+								zap.S().Debugf("file:%s, taskNo:%d, block：%d write done, range：%d-%d.", r.FileName, r.TaskNo, lastBlock, lastBlockStartPos, lastBlockEndPos)
 							}
 						}
+						nextBlock := streamCacheBytes[splitPos:] // 下一个块的数据
+						streamCache.Truncate(0)
+						streamCache.Write(nextBlock)
 						lastBlock, lastBlockStartPos, lastBlockEndPos = getBlockInfo(curPos, r.DingFile.getBlockSize(), r.DingFile.GetFileSize())
 					}
 				}
 			case <-r.Context.Done():
+				zap.S().Warnf("file:%s, task %d, ctx done, DoTask exit.", r.FileName, r.TaskNo)
 				return
 			}
 		}
@@ -116,11 +133,11 @@ func (r RemoteFileTask) DoTask() {
 			if err = r.DingFile.WriteBlock(lastBlock, rawBlock); err != nil {
 				zap.S().Errorf("last writeBlock err.%v", err)
 			}
-			zap.S().Debugf("taskNo:%d, last block：%d write done, range：%d-%d.", r.TaskNo, lastBlock, lastBlockStartPos, lastBlockEndPos)
+			zap.S().Debugf("file:%s, taskNo:%d, last block：%d write done, range：%d-%d.", r.FileName, r.TaskNo, lastBlock, lastBlockStartPos, lastBlockEndPos)
 		}
 	}
 	if curPos != rangeEndPos {
-		zap.S().Errorf("taskNo:%d, remote range (%d) is different from sent size (%d).", r.TaskNo, rangeEndPos-rangeStartPos, curPos-rangeStartPos)
+		zap.S().Warnf("file:%s, taskNo:%d, remote range (%d) is different from sent size (%d).", r.FileName, r.TaskNo, rangeEndPos-rangeStartPos, curPos-rangeStartPos)
 	}
 }
 
@@ -130,10 +147,10 @@ func (r RemoteFileTask) OutResult() {
 	}
 }
 
-func getFileRangeFromRemote(ctx context.Context, authorization, url string, startPos, endPos int64, contentChan chan<- []byte) {
+func (r RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentChan chan<- []byte) {
 	headers := make(map[string]string)
-	if authorization != "" {
-		headers["authorization"] = authorization
+	if r.authorization != "" {
+		headers["authorization"] = r.authorization
 	}
 	headers["range"] = fmt.Sprintf("bytes=%d-%d", startPos, endPos-1)
 
@@ -144,13 +161,12 @@ func getFileRangeFromRemote(ctx context.Context, authorization, url string, star
 		defer close(contentChan)
 	}()
 
-	if err := util.GetStream(url, headers, config.SysConfig.GetReqTimeOut(), func(resp *http.Response) {
+	if err := util.GetStream(r.hfUrl, headers, config.SysConfig.GetReqTimeOut(), func(resp *http.Response) {
 		contentEncoding = resp.Header.Get("content-encoding")
 		contentLengthStr = resp.Header.Get("content-length")
 		for {
 			select {
-			case <-ctx.Done():
-				zap.S().Infof("ctx done, getFileRangeFromRemote exit.")
+			case <-r.Context.Done():
 				return
 			default:
 				chunk := make([]byte, config.SysConfig.Download.RespChunkSize)
@@ -167,7 +183,7 @@ func getFileRangeFromRemote(ctx context.Context, authorization, url string, star
 					if err == io.EOF {
 						return
 					}
-					zap.S().Errorf("req remote err.%v", err)
+					zap.S().Errorf("file:%s, task %d, req remote err.%v", r.FileName, r.TaskNo, err)
 					return
 				}
 			}
@@ -196,12 +212,12 @@ func getFileRangeFromRemote(ctx context.Context, authorization, url string, star
 			contentLength = chunkByteLen
 		}
 		if endPos-startPos != int64(contentLength) {
-			zap.S().Errorf("The content of the response is incomplete. Expected-%d. Accepted-%d", endPos-startPos, contentLength)
+			zap.S().Errorf("file:%s, taskNo:%d,The content of the response is incomplete. Expected-%d. Accepted-%d", r.FileName, r.TaskNo, endPos-startPos, contentLength)
 			return
 		}
 	}
 	if endPos-startPos != int64(chunkByteLen) {
-		zap.S().Errorf("The block is incomplete. Expected-%d. Accepted-%d", endPos-startPos, chunkByteLen)
+		zap.S().Warnf("file:%s, taskNo:%d,The block is incomplete. Expected-%d. Accepted-%d", r.FileName, r.TaskNo, endPos-startPos, chunkByteLen)
 		return
 	}
 }

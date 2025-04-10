@@ -56,7 +56,7 @@ func (d *FileService) FileHeadCommon(c echo.Context, repoType, org, repo, commit
 }
 
 func (d *FileService) FileGetCommon(c echo.Context, repoType, org, repo, commit, filePath string) error {
-	zap.S().Debugf("exec file get:%s/%s/%s/%s/%s", repoType, org, repo, commit, filePath)
+	zap.S().Infof("exec file get:%s/%s/%s/%s/%s", repoType, org, repo, commit, filePath)
 	if _, ok := consts.RepoTypesMapping[repoType]; !ok {
 		return util.ErrorPageNotFound(c)
 	}

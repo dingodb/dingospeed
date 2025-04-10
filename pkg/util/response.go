@@ -21,11 +21,6 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-func ResponseHeaders(ctx echo.Context, headers map[string]string) error {
-	fullHeaders(ctx, headers)
-	return ctx.JSON(http.StatusOK, nil)
-}
-
 func ErrorRepoNotFound(ctx echo.Context) error {
 	content := map[string]string{
 		"error": "Repository not found",
@@ -34,7 +29,18 @@ func ErrorRepoNotFound(ctx echo.Context) error {
 		"x-error-code":    "RepoNotFound",
 		"x-error-message": "Repository not found",
 	}
-	return Response(ctx, http.StatusUnauthorized, headers, content)
+	return Response(ctx, http.StatusNotFound, headers, content)
+}
+
+func ErrorRequestParam(ctx echo.Context) error {
+	content := map[string]string{
+		"error": "Request param error",
+	}
+	headers := map[string]string{
+		"x-error-code":    "Request param error",
+		"x-error-message": "Request param error",
+	}
+	return Response(ctx, http.StatusBadRequest, headers, content)
 }
 
 func ErrorPageNotFound(ctx echo.Context) error {
@@ -107,6 +113,11 @@ func ErrorMethodError(ctx echo.Context) error {
 		"x-error-message": "request method error",
 	}
 	return Response(ctx, http.StatusInternalServerError, headers, content)
+}
+
+func ResponseHeaders(ctx echo.Context, headers map[string]string) error {
+	fullHeaders(ctx, headers)
+	return ctx.JSON(http.StatusOK, nil)
 }
 
 func Response(ctx echo.Context, httpStatus int, headers map[string]string, data interface{}) error {

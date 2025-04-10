@@ -47,14 +47,16 @@ type ServerConfig struct {
 }
 
 type Download struct {
-	RetryChannelNum        int   `json:"retryChannelNum" yaml:"retryChannelNum"`
-	GoroutineMaxNumPerFile int   `json:"goroutineMaxNumPerFile" yaml:"goroutineMaxNumPerFile" validate:"min=1,max=8"`
-	GoroutineMinNumPerFile int   `json:"goroutineMinNumPerFile" yaml:"goroutineMinNumPerFile" validate:"min=1,max=4"`
-	BlockSize              int64 `json:"blockSize" yaml:"blockSize" validate:"min=8388608" validate:"min=8388608,max=134217728"`
-	ReqTimeout             int64 `json:"reqTimeout" yaml:"reqTimeout"`
-	RespChunkSize          int64 `json:"respChunkSize" yaml:"respChunkSize" validate:"min=4096,max=8388608"`
-	RemoteFileRangeSize    int64 `json:"remoteFileRangeSize" yaml:"remoteFileRangeSize" validate:"min=8388608,max=1073741824"`
-	PrefetchBlocks         int64 `json:"prefetchBlocks" yaml:"prefetchBlocks" validate:"min=8,max=32"` // 读取块数据，预先缓存的块数据数量
+	RetryChannelNum         int   `json:"retryChannelNum" yaml:"retryChannelNum"`
+	GoroutineMaxNumPerFile  int   `json:"goroutineMaxNumPerFile" yaml:"goroutineMaxNumPerFile" validate:"min=1,max=8"`
+	BlockSize               int64 `json:"blockSize" yaml:"blockSize" validate:"min=1048576,max=134217728"`
+	ReqTimeout              int64 `json:"reqTimeout" yaml:"reqTimeout"`
+	RespChunkSize           int64 `json:"respChunkSize" yaml:"respChunkSize" validate:"min=4096,max=8388608"`
+	RemoteFileRangeSize     int64 `json:"remoteFileRangeSize" yaml:"remoteFileRangeSize" validate:"min=0,max=1073741824"`
+	RemoteFileRangeWaitTime int64 `json:"remoteFileRangeWaitTime" yaml:"remoteFileRangeWaitTime" validate:"min=1,max=10"`
+	RemoteFileBufferSize    int64 `json:"remoteFileBufferSize" yaml:"remoteFileBufferSize" validate:"min=0,max=134217728"`
+	PrefetchBlocks          int64 `json:"prefetchBlocks" yaml:"prefetchBlocks" validate:"min=8,max=32"` // 读取块数据，预先缓存的块数据数量
+
 }
 
 type LogConfig struct {
@@ -95,6 +97,10 @@ func (c *Config) GetReqTimeOut() time.Duration {
 	return time.Duration(c.Download.ReqTimeout) * time.Second
 }
 
+func (c *Config) GetRemoteFileRangeWaitTime() time.Duration {
+	return time.Duration(c.Download.RemoteFileRangeWaitTime) * time.Second
+}
+
 func (c *Config) SetDefaults() {
 	if c.Server.Port == 0 {
 		c.Server.Port = 8090
@@ -105,17 +111,14 @@ func (c *Config) SetDefaults() {
 	if c.Download.GoroutineMaxNumPerFile == 0 {
 		c.Download.GoroutineMaxNumPerFile = 8
 	}
-	if c.Download.GoroutineMinNumPerFile == 0 {
-		c.Download.GoroutineMinNumPerFile = 1
-	}
 	if c.Download.BlockSize == 0 {
 		c.Download.BlockSize = 8388608
 	}
 	if c.Download.RespChunkSize == 0 {
 		c.Download.RespChunkSize = 8192
 	}
-	if c.Download.RemoteFileRangeSize == 0 {
-		c.Download.RemoteFileRangeSize = 8388608
+	if c.Download.RemoteFileRangeWaitTime == 0 {
+		c.Download.RemoteFileRangeWaitTime = 1
 	}
 	if c.Download.PrefetchBlocks == 0 {
 		c.Download.PrefetchBlocks = 16

@@ -170,7 +170,15 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, org, repo, commit, 
 	if pathInfo.Size == 0 {
 		return util.ErrorProxyTimeout(c)
 	}
-	respHeaders["content-length"] = util.Itoa(pathInfo.Size)
+
+	var headRange = reqHeaders["range"]
+	if headRange == "" {
+		headRange = fmt.Sprintf("bytes=%d-%d", 0, pathInfo.Size-1)
+	}
+	startPos, endPos := parseRangeParams(headRange, pathInfo.Size)
+	endPos = endPos + 1
+
+	respHeaders["content-length"] = util.Itoa(endPos - startPos)
 	if commit != "" {
 		respHeaders[strings.ToLower(consts.HUGGINGFACE_HEADER_X_REPO_COMMIT)] = commit
 	}
@@ -182,7 +190,7 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, org, repo, commit, 
 	if method == consts.RequestTypeHead {
 		return util.ResponseHeaders(c, respHeaders)
 	} else if method == consts.RequestTypeGet {
-		return f.FileChunkGet(c, respHeaders, reqHeaders, hfUrl, pathInfo.Size, fileName, filesPath)
+		return f.FileChunkGet(c, hfUrl, filesPath, fileName, authorization, pathInfo.Size, startPos, endPos, respHeaders)
 	} else {
 		return util.ErrorMethodError(c)
 	}
@@ -298,13 +306,13 @@ func (f *FileDao) getResourceEtag(hfUrl, authorization string) (string, error) {
 	return retEtag, nil
 }
 
-func (f *FileDao) FileChunkGet(c echo.Context, respHeaders, reqHeaders map[string]string, hfUrl string, fileSize int64, fileName, filesPath string) error {
+func (f *FileDao) FileChunkGet(c echo.Context, hfUrl, filesPath, fileName, authorization string, fileSize, startPos, endPos int64, respHeaders map[string]string) error {
 	responseChan := make(chan []byte, 100)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go downloader.FileDownload(ctx, hfUrl, filesPath, fileSize, reqHeaders, responseChan)
+	go downloader.FileDownload(ctx, hfUrl, filesPath, fileName, authorization, fileSize, startPos, endPos, responseChan)
 	if err := util.ResponseStream(c, fileName, respHeaders, responseChan); err != nil {
-		zap.S().Errorf("FileChunkGet stream err.%v", err)
+		zap.S().Warnf("FileChunkGet stream err.%v", err)
 		return util.ErrorProxyTimeout(c)
 	}
 	return nil
@@ -405,7 +413,7 @@ func (f *FileDao) ReadCacheRequest(apiPath string) (*common.CacheContent, error)
 	return &cacheContent, nil
 }
 
-func (d *FileDao) ReposGenerator(c echo.Context) error {
+func (f *FileDao) ReposGenerator(c echo.Context) error {
 	reposPath := config.SysConfig.Repos()
 
 	datasets, _ := filepath.Glob(filepath.Join(reposPath, "api/datasets/*/*"))
@@ -422,4 +430,30 @@ func (d *FileDao) ReposGenerator(c echo.Context) error {
 		"models_repos":   modelsRepos,
 		"spaces_repos":   spacesRepos,
 	})
+}
+
+func parseRangeParams(fileRange string, fileSize int64) (int64, int64) {
+	if strings.Contains(fileRange, "/") {
+		split := strings.SplitN(fileRange, "/", 2)
+		fileRange = split[0]
+	}
+	if strings.HasPrefix(fileRange, "bytes=") {
+		fileRange = fileRange[6:]
+	}
+	parts := strings.Split(fileRange, "-")
+	if len(parts) != 2 {
+		panic("file range err.")
+	}
+	var startPos, endPos int64
+	if len(parts[0]) != 0 {
+		startPos = util.Atoi64(parts[0])
+	} else {
+		startPos = 0
+	}
+	if len(parts[1]) != 0 {
+		endPos = util.Atoi64(parts[1])
+	} else {
+		endPos = fileSize - 1
+	}
+	return startPos, endPos
 }

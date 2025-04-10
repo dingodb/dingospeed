@@ -149,17 +149,18 @@ func ResponseStream(c echo.Context, fileName string, headers map[string]string, 
 	if !ok {
 		return c.String(http.StatusInternalServerError, "Streaming unsupported!")
 	}
-	zap.S().Debugf("exec ResponseStream ...............")
 	for {
 		select {
 		case b, ok := <-content:
 			if !ok {
-				zap.S().Debugf("ResponseStream complete, %s.", fileName)
+				zap.S().Infof("ResponseStream complete, %s.", fileName)
 				return nil
 			}
-			if _, err := c.Response().Write(b); err != nil {
-				zap.S().Errorf("ResponseStream write err,file:%s,%v", fileName, err)
-				return ErrorProxyTimeout(c)
+			if len(b) > 0 {
+				if _, err := c.Response().Write(b); err != nil {
+					zap.S().Warnf("ResponseStream write err,file:%s,%v", fileName, err)
+					return ErrorProxyTimeout(c)
+				}
 			}
 			flusher.Flush()
 		}
