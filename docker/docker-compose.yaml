@@ -1,0 +1,37 @@
+version: '1.0'
+
+services:
+    dingo-hfmirror:
+        image: harbor.dev01.zetyun.cn/dingofs/dingo-hfmirror:v4
+        container_name: dingo-hfmirror
+          #environment:
+          #- http_proxy=http://100.64.1.68:1080
+          #- https_proxy=http://100.64.1.68:1080
+          #- http_proxy=http://100.64.1.72:3128
+        #- https_proxy=http://100.64.1.72:3128
+        ports:
+            - "8090:8090"
+        volumes:
+            - ./repos:/app/repos
+            - ./log:/app/log
+        restart: always
+        cpus: '1'  # 限制 CPU 为 20 核
+        mem_limit: '20g'  # 限制内存为 50G
+#        cpus: '25'  # 限制 CPU 为 20 核
+#        mem_limit: '50g'  # 限制内存为 50G
+    dingo-hfmirror-online:
+        image: harbor.dev01.zetyun.cn/dingofs/dingo-hfmirror-online:v4
+        container_name: dingo-hfmirror-online
+        environment:
+            - http_proxy=http://10.201.44.68:1080
+            - https_proxy=http://10.201.44.68:1080
+        ports:
+            - "8091:8091"
+        volumes:
+            - ./repos:/app/repos
+            - ./log:/app/log
+        restart: always
+        cpus: '1'  # 限制 CPU 为 20 核
+        mem_limit: '20g'  # 限制内存为 50G
+#        cpus: '25'  # 限制 CPU 为 20 核
+#        mem_limit: '50g'  # 限制内存为 50G
