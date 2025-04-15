@@ -1,8 +1,8 @@
 server:
     host: localhost
     mode: debug
-    port: 8090
-    online: true
+    port: 8091
+    online: false
     repos: ./repos
     hfNetLoc: hf-mirror.com   # huggingface.co     hf-mirror.com
     hfScheme: https
@@ -17,10 +17,6 @@ download:
     remoteFileRangeWaitTime: 1   #每个分区文件下载任务提交时间间隔，默认1s，单位（s）。
     remoteFileBufferSize: 67108864  #每个分区文件的结果缓存大小
     prefetchBlocks: 16           #预先读取块的数量
-
-retry:
-    delay: 1       #重试间隔时间，单位秒，默认为1
-    attempts: 3    #重试次数，默认为3
 
 log:
     maxSize: 1      # 日志文件最大的尺寸（MB）

@@ -17,6 +17,7 @@ package dao
 import (
 	"fmt"
 
+	"dingo-hfmirror/pkg/common"
 	"dingo-hfmirror/pkg/config"
 	"dingo-hfmirror/pkg/consts"
 	"dingo-hfmirror/pkg/util"
@@ -35,7 +36,7 @@ func NewMetaDao(fileDao *FileDao) *MetaDao {
 	}
 }
 
-func (m *MetaDao) MetaGetGenerator(c echo.Context, repoType, org, repo, commit, method string) error {
+func (m *MetaDao) MetaGetGenerator(c echo.Context, repoType, org, repo, commit, method string, writeResp bool) error {
 	orgRepo := util.GetOrgRepo(org, repo)
 	apiDir := fmt.Sprintf("%s/api/%s/%s/revision/%s", config.SysConfig.Repos(), repoType, orgRepo, commit)
 	apiMetaPath := fmt.Sprintf("%s/%s", apiDir, fmt.Sprintf("meta_%s.json", method))
@@ -50,7 +51,7 @@ func (m *MetaDao) MetaGetGenerator(c echo.Context, repoType, org, repo, commit, 
 	if util.FileExists(apiMetaPath) && !config.SysConfig.Online() {
 		return m.MetaCacheGenerator(c, repo, apiMetaPath)
 	} else {
-		return m.MetaProxyGenerator(c, repoType, org, repo, commit, method, authorization, apiMetaPath)
+		return m.MetaProxyGenerator(c, repoType, org, repo, commit, method, authorization, apiMetaPath, writeResp)
 	}
 }
 
@@ -71,7 +72,7 @@ func (m *MetaDao) MetaCacheGenerator(c echo.Context, repo, apiMetaPath string) e
 
 // 请求api文件
 
-func (m *MetaDao) MetaProxyGenerator(c echo.Context, repoType, org, repo, commit, method, authorization, apiMetaPath string) error {
+func (m *MetaDao) MetaProxyGenerator(c echo.Context, repoType, org, repo, commit, method, authorization, apiMetaPath string, writeResp bool) error {
 	orgRepo := util.GetOrgRepo(org, repo)
 	metaUrl := fmt.Sprintf("%s/api/%s/%s/revision/%s", config.SysConfig.GetHFURLBase(), repoType, orgRepo, commit)
 	headers := map[string]string{}
@@ -79,7 +80,9 @@ func (m *MetaDao) MetaProxyGenerator(c echo.Context, repoType, org, repo, commit
 		headers["authorization"] = authorization
 	}
 	if method == consts.RequestTypeHead {
-		resp, err := util.Head(metaUrl, headers, config.SysConfig.GetReqTimeOut())
+		resp, err := util.RetryRequest(func() (*common.Response, error) {
+			return util.Head(metaUrl, headers, config.SysConfig.GetReqTimeOut())
+		})
 		if err != nil {
 			zap.S().Errorf("head %s err.%v", metaUrl, err)
 			return util.ErrorEntryNotFound(c)
@@ -87,18 +90,21 @@ func (m *MetaDao) MetaProxyGenerator(c echo.Context, repoType, org, repo, commit
 		extractHeaders := resp.ExtractHeaders(resp.Headers)
 		return util.ResponseHeaders(c, extractHeaders)
 	} else if method == consts.RequestTypeGet {
-		resp, err := util.Get(metaUrl, headers, config.SysConfig.GetReqTimeOut())
+		resp, err := util.RetryRequest(func() (*common.Response, error) {
+			return util.Get(metaUrl, headers, config.SysConfig.GetReqTimeOut())
+		})
 		if err != nil {
 			zap.S().Errorf("get %s err.%v", metaUrl, err)
 			return util.ErrorEntryNotFound(c)
 		}
 		extractHeaders := resp.ExtractHeaders(resp.Headers)
-		var bodyStreamChan = make(chan []byte, consts.RespChanSize)
-		bodyStreamChan <- resp.Body
-		close(bodyStreamChan)
-		err = util.ResponseStream(c, repo, extractHeaders, bodyStreamChan)
-		if err != nil {
-			return err
+		if writeResp {
+			var bodyStreamChan = make(chan []byte, consts.RespChanSize)
+			bodyStreamChan <- resp.Body
+			close(bodyStreamChan)
+			if err = util.ResponseStream(c, repo, extractHeaders, bodyStreamChan); err != nil {
+				return err
+			}
 		}
 		if err = m.fileDao.WriteCacheRequest(apiMetaPath, resp.StatusCode, extractHeaders, resp.Body); err != nil {
 			zap.S().Errorf("writeCacheRequest err.%v", err)

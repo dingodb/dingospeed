@@ -64,7 +64,9 @@ func (f *FileDao) CheckCommitHf(repoType, org, repo, commit, authorization strin
 	if authorization != "" {
 		headers["authorization"] = authorization
 	}
-	resp, err := util.Head(reqUrl, headers, config.SysConfig.GetReqTimeOut())
+	resp, err := util.RetryRequest(func() (*common.Response, error) {
+		return util.Head(reqUrl, headers, config.SysConfig.GetReqTimeOut())
+	})
 	if err != nil {
 		zap.S().Errorf("call %s error.%v", reqUrl, err)
 		return false
@@ -88,7 +90,9 @@ func (f *FileDao) GetCommitHf(repoType, org, repo, commit, authorization string)
 	if authorization != "" {
 		headers["authorization"] = authorization
 	}
-	resp, err := util.Get(reqUrl, headers, config.SysConfig.GetReqTimeOut())
+	resp, err := util.RetryRequest(func() (*common.Response, error) {
+		return util.Get(reqUrl, headers, config.SysConfig.GetReqTimeOut())
+	})
 	if err != nil {
 		zap.S().Errorf("call %s error.%v", reqUrl, err)
 		return f.getCommitHfOffline(repoType, org, repo, commit)
@@ -167,17 +171,15 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, org, repo, commit, 
 	}
 	respHeaders := map[string]string{}
 	pathInfo := pathsInfos[0]
-	if pathInfo.Size == 0 {
-		return util.ErrorProxyTimeout(c)
+	var startPos, endPos int64
+	if pathInfo.Size > 0 { // There exists a file of size 0
+		var headRange = reqHeaders["range"]
+		if headRange == "" {
+			headRange = fmt.Sprintf("bytes=%d-%d", 0, pathInfo.Size-1)
+		}
+		startPos, endPos = parseRangeParams(headRange, pathInfo.Size)
+		endPos = endPos + 1
 	}
-
-	var headRange = reqHeaders["range"]
-	if headRange == "" {
-		headRange = fmt.Sprintf("bytes=%d-%d", 0, pathInfo.Size-1)
-	}
-	startPos, endPos := parseRangeParams(headRange, pathInfo.Size)
-	endPos = endPos + 1
-
 	respHeaders["content-length"] = util.Itoa(endPos - startPos)
 	if commit != "" {
 		respHeaders[strings.ToLower(consts.HUGGINGFACE_HEADER_X_REPO_COMMIT)] = commit
@@ -278,7 +280,9 @@ func (f *FileDao) pathsInfoProxy(targetUrl, authorization string, filePaths []st
 	if authorization != "" {
 		headers["authorization"] = authorization
 	}
-	return util.Post(targetUrl, "application/json", jsonData, headers)
+	return util.RetryRequest(func() (*common.Response, error) {
+		return util.Post(targetUrl, "application/json", jsonData, headers)
+	})
 }
 
 func (f *FileDao) getResourceEtag(hfUrl, authorization string) (string, error) {
@@ -293,7 +297,9 @@ func (f *FileDao) getResourceEtag(hfUrl, authorization string) (string, error) {
 		if authorization != "" {
 			etagHeaders["authorization"] = authorization
 		}
-		resp, err := util.Head(hfUrl, etagHeaders, config.SysConfig.GetReqTimeOut())
+		resp, err := util.RetryRequest(func() (*common.Response, error) {
+			return util.Head(hfUrl, etagHeaders, config.SysConfig.GetReqTimeOut())
+		})
 		if err != nil {
 			return "", err
 		}

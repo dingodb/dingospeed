@@ -33,6 +33,7 @@ type Config struct {
 	Server   ServerConfig `json:"server" yaml:"server"`
 	Download Download     `json:"download" yaml:"download"`
 	Log      LogConfig    `json:"log" yaml:"log"`
+	Retry    Retry        `json:"retry" yaml:"retry"`
 }
 
 type ServerConfig struct {
@@ -56,9 +57,12 @@ type Download struct {
 	RemoteFileRangeWaitTime int64 `json:"remoteFileRangeWaitTime" yaml:"remoteFileRangeWaitTime" validate:"min=1,max=10"`
 	RemoteFileBufferSize    int64 `json:"remoteFileBufferSize" yaml:"remoteFileBufferSize" validate:"min=0,max=134217728"`
 	PrefetchBlocks          int64 `json:"prefetchBlocks" yaml:"prefetchBlocks" validate:"min=8,max=32"` // 读取块数据，预先缓存的块数据数量
-
 }
 
+type Retry struct {
+	Delay    int  `json:"delay" yaml:"delay" validate:"min=0,max=60"`
+	Attempts uint `json:"attempts" yaml:"attempts" validate:"min=1,max=5"`
+}
 type LogConfig struct {
 	MaxSize    int `json:"maxSize" yaml:"maxSize"`
 	MaxBackups int `json:"maxBackups" yaml:"maxBackups"`

@@ -35,7 +35,7 @@ const (
 	DEFAULT_BLOCK_MASK_MAX = 1024 * 1024
 
 	cost = 1
-	ttl  = 10 * time.Second
+	ttl  = 60 * time.Second
 )
 
 var magicNumber = [4]byte{'O', 'L', 'A', 'H'}

@@ -22,10 +22,27 @@ import (
 	"time"
 
 	"dingo-hfmirror/pkg/common"
+	"dingo-hfmirror/pkg/config"
 
+	"github.com/avast/retry-go"
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
 )
+
+func RetryRequest(f func() (*common.Response, error)) (*common.Response, error) {
+	var resp *common.Response
+	err := retry.Do(
+		func() error {
+			var err error
+			resp, err = f()
+			return err
+		},
+		retry.Delay(time.Duration(config.SysConfig.Retry.Delay)*time.Second),
+		retry.Attempts(config.SysConfig.Retry.Attempts),
+		retry.DelayType(retry.FixedDelay),
+	)
+	return resp, err
+}
 
 // Head 方法用于发送带请求头的 HEAD 请求
 func Head(url string, headers map[string]string, timeout time.Duration) (*common.Response, error) {

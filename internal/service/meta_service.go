@@ -60,7 +60,12 @@ func (d *MetaService) MetaProxyCommon(c echo.Context, repoType, org, repo, commi
 		zap.S().Errorf("GetCommitHf err.%v", err)
 		return util.ErrorRepoNotFound(c)
 	}
-	return d.metaDao.MetaGetGenerator(c, repoType, org, repo, commitSha, method)
+	if config.SysConfig.Online() && commitSha != commit {
+		_ = d.metaDao.MetaGetGenerator(c, repoType, org, repo, commit, method, false)
+		return d.metaDao.MetaGetGenerator(c, repoType, org, repo, commitSha, method, true)
+	} else {
+		return d.metaDao.MetaGetGenerator(c, repoType, org, repo, commitSha, method, true)
+	}
 }
 
 func (d *MetaService) WhoamiV2(c echo.Context) error {

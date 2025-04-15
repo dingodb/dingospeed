@@ -106,6 +106,9 @@ func startRemoteDownload(ctx context.Context, remoteFileTasks []*RemoteFileTask)
 // 将文件的偏移量分为cache和remote，对针对remote按照指定的RangeSize做切分
 
 func getContiguousRanges(dingFile *DingCache, startPos, endPos int64) (tasks []common.Task) {
+	if startPos == 0 && endPos == 0 {
+		return
+	}
 	if startPos < 0 || endPos <= startPos || endPos > dingFile.GetFileSize() {
 		zap.S().Errorf("Invalid startPos or endPos: startPos=%d, endPos=%d", startPos, endPos)
 		return
