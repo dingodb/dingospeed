@@ -28,18 +28,35 @@ import (
 )
 
 var SysConfig *Config
+var SysInfo *SystemInfo
+
+func init() {
+	SysInfo = &SystemInfo{}
+}
+
+type SystemInfo struct {
+	CollectTime       int64
+	MemoryUsedPercent float64
+}
+
+func (s *SystemInfo) SetMemoryUsed(collectTime int64, usedPercent float64) {
+	s.CollectTime = collectTime
+	s.MemoryUsedPercent = usedPercent
+}
 
 type Config struct {
 	Server   ServerConfig `json:"server" yaml:"server"`
 	Download Download     `json:"download" yaml:"download"`
+	Cache    Cache        `json:"cache" yaml:"cache"`
 	Log      LogConfig    `json:"log" yaml:"log"`
 	Retry    Retry        `json:"retry" yaml:"retry"`
 }
 
 type ServerConfig struct {
-	Host        string `json:"host" yaml:"host"`
 	Mode        string `json:"mode" yaml:"mode"`
+	Host        string `json:"host" yaml:"host"`
 	Port        int    `json:"port" yaml:"port"`
+	PProf       bool   `json:"pprof" yaml:"pprof"`
 	Online      bool   `json:"online" yaml:"online"`
 	Repos       string `json:"repos" yaml:"repos"`
 	HfNetLoc    string `json:"hfNetLoc" yaml:"hfNetLoc"`
@@ -56,13 +73,20 @@ type Download struct {
 	RemoteFileRangeSize     int64 `json:"remoteFileRangeSize" yaml:"remoteFileRangeSize" validate:"min=0,max=1073741824"`
 	RemoteFileRangeWaitTime int64 `json:"remoteFileRangeWaitTime" yaml:"remoteFileRangeWaitTime" validate:"min=1,max=10"`
 	RemoteFileBufferSize    int64 `json:"remoteFileBufferSize" yaml:"remoteFileBufferSize" validate:"min=0,max=134217728"`
-	PrefetchBlocks          int64 `json:"prefetchBlocks" yaml:"prefetchBlocks" validate:"min=8,max=32"` // 读取块数据，预先缓存的块数据数量
+}
+
+type Cache struct {
+	CollectTimePeriod           int     `json:"collectTimePeriod" yaml:"collectTimePeriod" validate:"min=1,max=600"` // 周期采集内存使用量，单位秒
+	PrefetchMemoryUsedThreshold float64 `json:"prefetchMemoryUsedThreshold" yaml:"prefetchMemoryUsedThreshold" validate:"min=50,max=99"`
+	PrefetchBlocks              int64   `json:"prefetchBlocks" yaml:"prefetchBlocks" validate:"min=1,max=32"`      // 读取块数据，预先缓存的块数据数量
+	PrefetchBlockTTL            int64   `json:"prefetchBlockTTL" yaml:"prefetchBlockTTL" validate:"min=1,max=120"` // 读取块数据，预先缓存的块数据数量
 }
 
 type Retry struct {
 	Delay    int  `json:"delay" yaml:"delay" validate:"min=0,max=60"`
 	Attempts uint `json:"attempts" yaml:"attempts" validate:"min=1,max=5"`
 }
+
 type LogConfig struct {
 	MaxSize    int `json:"maxSize" yaml:"maxSize"`
 	MaxBackups int `json:"maxBackups" yaml:"maxBackups"`
@@ -101,8 +125,24 @@ func (c *Config) GetReqTimeOut() time.Duration {
 	return time.Duration(c.Download.ReqTimeout) * time.Second
 }
 
+func (c *Config) GetCollectTimePeriod() time.Duration {
+	return time.Duration(c.Cache.CollectTimePeriod) * time.Second
+}
+
+func (c *Config) GetPrefetchMemoryUsedThreshold() float64 {
+	return c.Cache.PrefetchMemoryUsedThreshold
+}
+
 func (c *Config) GetRemoteFileRangeWaitTime() time.Duration {
 	return time.Duration(c.Download.RemoteFileRangeWaitTime) * time.Second
+}
+
+func (c *Config) GetPrefetchBlocks() int64 {
+	return c.Cache.PrefetchBlocks
+}
+
+func (c *Config) GetPrefetchBlockTTL() time.Duration {
+	return time.Duration(c.Cache.PrefetchBlockTTL) * time.Second
 }
 
 func (c *Config) SetDefaults() {
@@ -124,8 +164,17 @@ func (c *Config) SetDefaults() {
 	if c.Download.RemoteFileRangeWaitTime == 0 {
 		c.Download.RemoteFileRangeWaitTime = 1
 	}
-	if c.Download.PrefetchBlocks == 0 {
-		c.Download.PrefetchBlocks = 16
+	if c.Cache.PrefetchBlocks == 0 {
+		c.Cache.PrefetchBlocks = 16
+	}
+	if c.Cache.PrefetchBlockTTL == 0 {
+		c.Cache.PrefetchBlockTTL = 30
+	}
+	if c.Cache.CollectTimePeriod == 0 {
+		c.Cache.CollectTimePeriod = 5
+	}
+	if c.Cache.PrefetchMemoryUsedThreshold == 0 {
+		c.Cache.PrefetchMemoryUsedThreshold = 90
 	}
 }
 

@@ -131,12 +131,12 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, org, repo, commit, 
 	err := util.MakeDirs(headsPath)
 	if err != nil {
 		zap.S().Errorf("create %s dir err.%v", headsPath, err)
-		return err
+		return util.ErrorProxyError(c)
 	}
 	err = util.MakeDirs(filesPath)
 	if err != nil {
 		zap.S().Errorf("create %s dir err.%v", filesPath, err)
-		return err
+		return util.ErrorProxyError(c)
 	}
 	var hfUrl string
 	if repoType == "models" {
@@ -158,10 +158,11 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, org, repo, commit, 
 	pathsInfos, err := f.pathsInfoGenerator(repoType, org, repo, commit, authorization, []string{fileName}, "post")
 	if err != nil {
 		if e, ok := err.(myerr.Error); ok {
+			zap.S().Errorf("pathsInfoGenerator code:%d, err:%v", e.StatusCode(), err)
 			return util.ErrorEntryUnknown(c, e.StatusCode(), e.Error())
 		}
-		zap.S().Errorf("pathsInfoGenerator err.%v", err)
-		return err
+		zap.S().Errorf("pathsInfoGenerator err:%v", err)
+		return util.ErrorProxyError(c)
 	}
 	if len(pathsInfos) == 0 {
 		return util.ErrorEntryNotFound(c)
@@ -179,6 +180,8 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, org, repo, commit, 
 		}
 		startPos, endPos = parseRangeParams(headRange, pathInfo.Size)
 		endPos = endPos + 1
+	} else if pathInfo.Size == 0 {
+		zap.S().Warnf("file %s size: %d", fileName, pathInfo.Size)
 	}
 	respHeaders["content-length"] = util.Itoa(endPos - startPos)
 	if commit != "" {
@@ -234,20 +237,23 @@ func (f *FileDao) pathsInfoGenerator(repoType, org, repo, commit, authorization 
 		response, err := f.pathsInfoProxy(pathsInfoUrl, authorization, filePaths)
 		if err != nil {
 			zap.S().Errorf("req %s err.%v", pathsInfoUrl, err)
-			return nil, err
+			return nil, myerr.NewAppendCode(http.StatusInternalServerError, fmt.Sprintf("%v", err))
 		}
 		if response.StatusCode != http.StatusOK {
 			var errorResp common.ErrorResp
-			err = sonic.Unmarshal(response.Body, &errorResp)
-			if err != nil {
-				return nil, err
+			if len(response.Body) > 0 {
+				err = sonic.Unmarshal(response.Body, &errorResp)
+				if err != nil {
+					return nil, myerr.NewAppendCode(response.StatusCode, fmt.Sprintf("response code %d, %v", response.StatusCode, err))
+				}
 			}
 			return nil, myerr.NewAppendCode(response.StatusCode, errorResp.Error)
 		}
 		remoteRespPathsInfos := make([]common.PathsInfo, 0)
 		err = sonic.Unmarshal(response.Body, &remoteRespPathsInfos)
 		if err != nil {
-			return nil, err
+			zap.S().Errorf("req %s remoteRespPathsInfos Unmarshal err.%v", pathsInfoUrl, err)
+			return nil, myerr.NewAppendCode(http.StatusInternalServerError, fmt.Sprintf("%v", err))
 		}
 		for _, item := range remoteRespPathsInfos {
 			// 对单个文件pathsInfo做存储

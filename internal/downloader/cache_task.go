@@ -55,7 +55,7 @@ func (c CacheFileTask) OutResult() {
 			continue
 		}
 		if !hasBlockBool {
-			zap.S().Debugf("block not exist. file:%s, curBlock:%d,curPos:%d", c.FileName, curBlock, curPos)
+			zap.S().Errorf("block not exist. file:%s, curBlock:%d,curPos:%d", c.FileName, curBlock, curPos)
 			break
 		}
 		rawBlock, err := c.DingFile.ReadBlock(curBlock)

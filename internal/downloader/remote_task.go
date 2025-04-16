@@ -39,11 +39,11 @@ type RemoteFileTask struct {
 }
 
 func NewRemoteFileTask(taskNo int, rangeStartPos int64, rangeEndPos int64) *RemoteFileTask {
-	c := &RemoteFileTask{}
-	c.TaskNo = taskNo
-	c.RangeStartPos = rangeStartPos
-	c.RangeEndPos = rangeEndPos
-	return c
+	r := &RemoteFileTask{}
+	r.TaskNo = taskNo
+	r.RangeStartPos = rangeStartPos
+	r.RangeEndPos = rangeEndPos
+	return r
 }
 
 // 分段下载
@@ -157,9 +157,7 @@ func (r RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentCh
 	var rawData []byte
 	chunkByteLen := 0
 	var contentEncoding, contentLengthStr = "", ""
-	defer func() {
-		defer close(contentChan)
-	}()
+	defer close(contentChan)
 
 	if err := util.GetStream(r.hfUrl, headers, config.SysConfig.GetReqTimeOut(), func(resp *http.Response) {
 		contentEncoding = resp.Header.Get("content-encoding")

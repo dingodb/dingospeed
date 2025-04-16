@@ -27,11 +27,13 @@ import (
 
 type FileHandler struct {
 	fileService *service.FileService
+	sysService  *service.SysService
 }
 
-func NewFileHandler(fileService *service.FileService) *FileHandler {
+func NewFileHandler(fileService *service.FileService, sysService *service.SysService) *FileHandler {
 	return &FileHandler{
 		fileService: fileService,
+		sysService:  sysService,
 	}
 }
 

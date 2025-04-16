@@ -16,7 +16,7 @@ package downloader
 
 import (
 	"context"
-	"os"
+	"sync"
 	"time"
 
 	"dingo-hfmirror/pkg/common"
@@ -27,28 +27,22 @@ import (
 
 // 整个文件
 func FileDownload(ctx context.Context, hfUrl, savePath, fileName, authorization string, fileSize, startPos, endPos int64, responseChan chan []byte) {
-	var dingFile *DingCache
-	if _, err := os.Stat(savePath); err == nil {
-		if dingFile, err = NewDingCache(savePath, config.SysConfig.Download.BlockSize); err != nil {
-			zap.S().Errorf("NewDingCache err.%v", err)
-			return
-		}
-	} else {
-		if dingFile, err = NewDingCache(savePath, config.SysConfig.Download.BlockSize); err != nil {
-			zap.S().Errorf("NewDingCache err.%v", err)
-			return
-		}
-		if err = dingFile.Resize(fileSize); err != nil {
-			zap.S().Errorf("Resize err.%v", err)
-			return
-		}
-	}
-	defer dingFile.Close()
 	defer close(responseChan)
+	dingCacheManager := GetInstance()
+	dingFile, err := dingCacheManager.GetDingFile(savePath, fileSize)
+	if err != nil {
+		zap.S().Errorf("GetDingFile err.%v", err)
+		return
+	}
+	defer dingCacheManager.ReleasedDingFile(savePath)
 	tasks := getContiguousRanges(dingFile, startPos, endPos)
 	var remoteTasks []*RemoteFileTask
 	taskSize := len(tasks)
 	for i := 0; i < taskSize; i++ {
+		if ctx.Err() != nil {
+			zap.S().Errorf("FileDownload cancelled: %v", ctx.Err())
+			return
+		}
 		task := tasks[i]
 		if remote, ok := task.(*RemoteFileTask); ok {
 			remote.Context = ctx
@@ -67,13 +61,23 @@ func FileDownload(ctx context.Context, hfUrl, savePath, fileName, authorization 
 			cache.ResponseChan = responseChan
 		}
 	}
+	var wg sync.WaitGroup
 	if len(remoteTasks) > 0 {
-		go startRemoteDownload(ctx, remoteTasks)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			startRemoteDownload(ctx, remoteTasks)
+		}()
 	}
 	for i := 0; i < len(tasks); i++ {
+		if ctx.Err() != nil {
+			zap.S().Errorf("FileDownload cancelled: %v", ctx.Err())
+			return
+		}
 		task := tasks[i]
 		task.OutResult()
 	}
+	wg.Wait()
 }
 
 func getQueueSize(rangeStartPos, rangeEndPos int64) int64 {

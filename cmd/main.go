@@ -19,8 +19,10 @@ import (
 	"errors"
 	"flag"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -89,6 +91,16 @@ func main() {
 	app, f, err := wireApp(conf)
 	if err != nil {
 		panic(err)
+	}
+
+	if config.SysConfig.Server.PProf {
+		runtime.SetBlockProfileRate(1)
+		runtime.SetMutexProfileFraction(1)
+
+		go func() {
+			// pprof性能分析 https://blog.csdn.net/water1209/article/details/126778930
+			panic(http.ListenAndServe(":6060", nil))
+		}()
 	}
 
 	defer f()
