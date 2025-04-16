@@ -3,7 +3,7 @@ dingo-hfmirror is a self-hosted lightweight huggingface mirror service
 
 # install
 
-## 4. 快速开始
+## 快速开始
 ### 安装依赖
 项目会使用wire命令生成所需的依赖代码，安装wire命令如下：
 ```bash

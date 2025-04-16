@@ -45,11 +45,12 @@ func (s *SystemInfo) SetMemoryUsed(collectTime int64, usedPercent float64) {
 }
 
 type Config struct {
-	Server   ServerConfig `json:"server" yaml:"server"`
-	Download Download     `json:"download" yaml:"download"`
-	Cache    Cache        `json:"cache" yaml:"cache"`
-	Log      LogConfig    `json:"log" yaml:"log"`
-	Retry    Retry        `json:"retry" yaml:"retry"`
+	Server           ServerConfig     `json:"server" yaml:"server"`
+	Download         Download         `json:"download" yaml:"download"`
+	Cache            Cache            `json:"cache" yaml:"cache"`
+	Log              LogConfig        `json:"log" yaml:"log"`
+	Retry            Retry            `json:"retry" yaml:"retry"`
+	TokenBucketLimit TokenBucketLimit `json:"tokenBucketLimit" yaml:"tokenBucketLimit"`
 }
 
 type ServerConfig struct {
@@ -93,6 +94,11 @@ type LogConfig struct {
 	MaxAge     int `json:"maxAge" yaml:"maxAge"`
 }
 
+type TokenBucketLimit struct {
+	Capacity int `json:"capacity" yaml:"capacity"`
+	Rate     int `json:"rate" yaml:"rate"`
+}
+
 func (c *Config) GetHFURLBase() string {
 	return fmt.Sprintf("%s://%s", c.GetHfScheme(), c.GetHfNetLoc())
 }
@@ -111,6 +117,14 @@ func (c *Config) GetHost() string {
 
 func (c *Config) GetHfNetLoc() string {
 	return c.Server.HfNetLoc
+}
+
+func (c *Config) GetCapacity() int {
+	return c.TokenBucketLimit.Capacity
+}
+
+func (c *Config) GetRate() int {
+	return c.TokenBucketLimit.Rate
 }
 
 func (c *Config) GetHfScheme() string {

@@ -1,4 +1,4 @@
-version: '1.0'
+version: '3.8'
 
 services:
     dingo-hfmirror:
@@ -15,10 +15,8 @@ services:
             - ./repos:/app/repos
             - ./log:/app/log
         restart: always
-        cpus: '1'  # 限制 CPU 为 20 核
-        mem_limit: '20g'  # 限制内存为 50G
-#        cpus: '25'  # 限制 CPU 为 20 核
-#        mem_limit: '50g'  # 限制内存为 50G
+        cpus: '25'  # 限制 CPU 为 20 核
+        mem_limit: '50g'  # 限制内存为 50G
     dingo-hfmirror-online:
         image: harbor.dev01.zetyun.cn/dingofs/dingo-hfmirror-online:v4
         container_name: dingo-hfmirror-online
@@ -31,7 +29,5 @@ services:
             - ./repos:/app/repos
             - ./log:/app/log
         restart: always
-        cpus: '1'  # 限制 CPU 为 20 核
-        mem_limit: '20g'  # 限制内存为 50G
-#        cpus: '25'  # 限制 CPU 为 20 核
-#        mem_limit: '50g'  # 限制内存为 50G
+        cpus: '25'  # 限制 CPU 为 20 核
+        mem_limit: '50g'  # 限制内存为 50G

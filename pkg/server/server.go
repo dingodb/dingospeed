@@ -25,9 +25,12 @@ import (
 	"dingo-hfmirror/internal/router"
 	"dingo-hfmirror/pkg/config"
 
+	"dingo-hfmirror/middleware"
+
 	"github.com/google/wire"
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
+	"golang.org/x/time/rate"
 )
 
 var ServerProvider = wire.NewSet(NewServer, NewEngine)
@@ -76,6 +79,11 @@ func (s *Server) Stop(ctx context.Context) error {
 
 func NewEngine() *echo.Echo {
 	r := echo.New()
+
+	// 令牌桶限流
+	limiter := rate.NewLimiter(rate.Limit(config.SysConfig.TokenBucketLimit.Rate), config.SysConfig.TokenBucketLimit.Capacity)
+	r.Use(middleware.RateLimitMiddleware(limiter))
+
 	// r.Use(gin.Logger())
 	// r.Use(gin.Recovery())
 	// r.Use(middeware.Cors())

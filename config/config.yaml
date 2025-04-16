@@ -32,3 +32,7 @@ log:
     maxSize: 1      # 日志文件最大的尺寸（MB）
     maxBackups: 10  #保留旧文件的最大个数
     maxAge: 90      #保留旧文件的最大天数
+
+tokenBucketLimit:
+    capacity: 400   #限流令牌桶容量
+    rate: 200       #令牌产生速率（每秒）
