@@ -115,6 +115,13 @@ func ErrorMethodError(ctx echo.Context) error {
 	return Response(ctx, http.StatusInternalServerError, headers, content)
 }
 
+func ErrorTooManyRequest(ctx echo.Context) error {
+	content := map[string]string{
+		"error": "Too many requests",
+	}
+	return Response(ctx, http.StatusTooManyRequests, nil, content)
+}
+
 func ResponseHeaders(ctx echo.Context, headers map[string]string) error {
 	fullHeaders(ctx, headers)
 	return ctx.JSON(http.StatusOK, nil)

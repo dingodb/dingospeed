@@ -108,7 +108,7 @@ func (handler *FileHandler) GetFileHandler1(c echo.Context) error {
 		zap.S().Error("解码出错:%v", err)
 		return util.ErrorRequestParam(c)
 	}
-	return handler.fileService.FileGetCommon(c, repoType, org, repo, commit, filePath)
+	return handler.fileGetCommon(c, repoType, org, repo, commit, filePath)
 }
 
 func (handler *FileHandler) GetFileHandler2(c echo.Context) error {
@@ -117,7 +117,7 @@ func (handler *FileHandler) GetFileHandler2(c echo.Context) error {
 		zap.S().Error("解码出错:%v", err)
 		return util.ErrorRequestParam(c)
 	}
-	return handler.fileService.FileGetCommon(c, repoType, org, repo, commit, filePath)
+	return handler.fileGetCommon(c, repoType, org, repo, commit, filePath)
 }
 
 func (handler *FileHandler) GetFileHandler3(c echo.Context) error {
@@ -126,5 +126,9 @@ func (handler *FileHandler) GetFileHandler3(c echo.Context) error {
 		zap.S().Error("解码出错:%v", err)
 		return util.ErrorRequestParam(c)
 	}
+	return handler.fileGetCommon(c, repoType, org, repo, commit, filePath)
+}
+
+func (handler *FileHandler) fileGetCommon(c echo.Context, repoType, org, repo, commit, filePath string) error {
 	return handler.fileService.FileGetCommon(c, repoType, org, repo, commit, filePath)
 }

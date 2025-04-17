@@ -296,20 +296,8 @@ func (c *DingCache) ReadBlock(blockIndex int64) ([]byte, error) {
 		return nil, errors.New("Invalid block index.")
 	}
 	key := c.getBlockKey(blockIndex)
-	if config.SysConfig.Cache.Enabled {
-		if blockData, ok := cache.FileBlockCache.Get(key); ok {
-			// 若当前为最后一个块，则移除最近的16个块
-			if blockIndex == c.getBlockNumber()-1 {
-				for i := config.SysConfig.GetPrefetchBlocks(); i >= 0; i-- {
-					no := blockIndex - i
-					if no >= 0 {
-						oldKey := c.getBlockKey(no)
-						cache.FileBlockCache.Delete(oldKey)
-					}
-				}
-			}
-			return blockData, nil
-		}
+	if blockData, ok := cache.FileBlockCache.Get(key); ok {
+		return blockData, nil
 	}
 	hasBlock, err := c.HasBlock(blockIndex)
 	if err != nil {
@@ -337,9 +325,7 @@ func (c *DingCache) ReadBlock(blockIndex int64) ([]byte, error) {
 }
 
 func (c *DingCache) readBlockAndCache(f *os.File, blockIndex int64) {
-	if !config.SysConfig.Cache.Enabled {
-		return
-	}
+	var cacheFlag bool
 	memoryUsedPercent := config.SysInfo.MemoryUsedPercent
 	if memoryUsedPercent != 0 && memoryUsedPercent >= config.SysConfig.GetPrefetchMemoryUsedThreshold() {
 		return
@@ -363,16 +349,20 @@ func (c *DingCache) readBlockAndCache(f *os.File, blockIndex int64) {
 				break
 			}
 			blockByte := c.padBlock(prefetchRawBlock)
-			cache.FileBlockCache.Set(key, blockByte)
+			cache.FileBlockCache.SetWithTTL(key, blockByte, cost, config.SysConfig.GetPrefetchBlockTTL())
 			// 删除上一个缓存周期的内容，释放内存
 			oldOffsetBlock := newOffsetBlock - config.SysConfig.GetPrefetchBlocks() - 1
 			if oldOffsetBlock > 0 {
 				oldKey := c.getBlockKey(newOffsetBlock)
-				cache.FileBlockCache.Delete(oldKey)
+				cache.FileBlockCache.Del(oldKey)
 			}
+			cacheFlag = true
 		} else {
 			break
 		}
+	}
+	if cacheFlag {
+		cache.FileBlockCache.Wait()
 	}
 }
 

@@ -319,7 +319,7 @@ func (f *FileDao) getResourceEtag(hfUrl, authorization string) (string, error) {
 }
 
 func (f *FileDao) FileChunkGet(c echo.Context, hfUrl, filesPath, fileName, authorization string, fileSize, startPos, endPos int64, respHeaders map[string]string) error {
-	responseChan := make(chan []byte, 100)
+	responseChan := make(chan []byte, config.SysConfig.Download.RespChanSize)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go downloader.FileDownload(ctx, hfUrl, filesPath, fileName, authorization, fileSize, startPos, endPos, responseChan)

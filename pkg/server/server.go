@@ -25,12 +25,9 @@ import (
 	"dingo-hfmirror/internal/router"
 	"dingo-hfmirror/pkg/config"
 
-	"dingo-hfmirror/middleware"
-
 	"github.com/google/wire"
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
-	"golang.org/x/time/rate"
 )
 
 var ServerProvider = wire.NewSet(NewServer, NewEngine)
@@ -77,20 +74,36 @@ func (s *Server) Stop(ctx context.Context) error {
 	return s.s.Shutdown(ctx)
 }
 
+var requestQueue chan struct{}
+
 func NewEngine() *echo.Echo {
 	r := echo.New()
 
-	// 令牌桶限流
-	limiter := rate.NewLimiter(rate.Limit(config.SysConfig.TokenBucketLimit.Rate), config.SysConfig.TokenBucketLimit.Capacity)
-	r.Use(middleware.RateLimitMiddleware(limiter))
+	// 创建一个带缓冲的通道来模拟队列
+	requestQueue = make(chan struct{}, config.SysConfig.TokenBucketLimit.HandlerCapacity)
+	// 应用限流中间件到所有路由
+	r.Use(queueLimitMiddleware)
 
-	// r.Use(gin.Logger())
-	// r.Use(gin.Recovery())
-	// r.Use(middeware.Cors())
-	// r.Use(middeware.Jwt())
 	t := &Template{
 		templates: template.Must(template.ParseFS(templatesFS, "templates/*.html")),
 	}
 	r.Renderer = t
 	return r
+}
+
+// 限流中间件
+func queueLimitMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		select {
+		case requestQueue <- struct{}{}:
+			defer func() {
+				<-requestQueue
+			}()
+			return next(c)
+		default:
+			return c.JSON(http.StatusTooManyRequests, map[string]string{
+				"message": "Too many requests, please try again later.",
+			})
+		}
+	}
 }

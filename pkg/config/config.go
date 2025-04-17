@@ -71,12 +71,14 @@ type Download struct {
 	BlockSize               int64 `json:"blockSize" yaml:"blockSize" validate:"min=1048576,max=134217728"`
 	ReqTimeout              int64 `json:"reqTimeout" yaml:"reqTimeout"`
 	RespChunkSize           int64 `json:"respChunkSize" yaml:"respChunkSize" validate:"min=4096,max=8388608"`
+	RespChanSize            int64 `json:"respChanSize" yaml:"respChanSize"`
 	RemoteFileRangeSize     int64 `json:"remoteFileRangeSize" yaml:"remoteFileRangeSize" validate:"min=0,max=1073741824"`
 	RemoteFileRangeWaitTime int64 `json:"remoteFileRangeWaitTime" yaml:"remoteFileRangeWaitTime" validate:"min=1,max=10"`
 	RemoteFileBufferSize    int64 `json:"remoteFileBufferSize" yaml:"remoteFileBufferSize" validate:"min=0,max=134217728"`
 }
 
 type Cache struct {
+	Enabled                     bool    `json:"enabled" yaml:"enabled"`
 	CollectTimePeriod           int     `json:"collectTimePeriod" yaml:"collectTimePeriod" validate:"min=1,max=600"` // 周期采集内存使用量，单位秒
 	PrefetchMemoryUsedThreshold float64 `json:"prefetchMemoryUsedThreshold" yaml:"prefetchMemoryUsedThreshold" validate:"min=50,max=99"`
 	PrefetchBlocks              int64   `json:"prefetchBlocks" yaml:"prefetchBlocks" validate:"min=1,max=32"`      // 读取块数据，预先缓存的块数据数量
@@ -95,8 +97,9 @@ type LogConfig struct {
 }
 
 type TokenBucketLimit struct {
-	Capacity int `json:"capacity" yaml:"capacity"`
-	Rate     int `json:"rate" yaml:"rate"`
+	Capacity        int `json:"capacity" yaml:"capacity"`
+	Rate            int `json:"rate" yaml:"rate"`
+	HandlerCapacity int `json:"handlerCapacity" yaml:"handlerCapacity"`
 }
 
 func (c *Config) GetHFURLBase() string {
@@ -187,8 +190,8 @@ func (c *Config) SetDefaults() {
 	if c.Cache.CollectTimePeriod == 0 {
 		c.Cache.CollectTimePeriod = 5
 	}
-	if c.Cache.PrefetchMemoryUsedThreshold == 0 {
-		c.Cache.PrefetchMemoryUsedThreshold = 90
+	if c.Download.RespChanSize == 0 {
+		c.Download.RespChanSize = 30
 	}
 }
 

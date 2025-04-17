@@ -1,7 +1,7 @@
 package middleware
 
 import (
-	"net/http"
+	"dingo-hfmirror/pkg/util"
 
 	"github.com/labstack/echo/v4"
 	"golang.org/x/time/rate"
@@ -12,9 +12,7 @@ func RateLimitMiddleware(limiter *rate.Limiter) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			if !limiter.Allow() {
-				return c.JSON(http.StatusTooManyRequests, map[string]string{
-					"error": "Too many requests",
-				})
+				return util.ErrorTooManyRequest(c)
 			}
 			return next(c)
 		}
