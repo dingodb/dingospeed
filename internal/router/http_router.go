@@ -24,19 +24,24 @@ type HttpRouter struct {
 	echo        *echo.Echo
 	fileHandler *handler.FileHandler
 	metaHandler *handler.MetaHandler
+	sysHandler  *handler.SysHandler
 }
 
-func NewHttpRouter(echo *echo.Echo, fileHandler *handler.FileHandler, metaHandler *handler.MetaHandler) *HttpRouter {
+func NewHttpRouter(echo *echo.Echo, fileHandler *handler.FileHandler, metaHandler *handler.MetaHandler, sysHandler *handler.SysHandler) *HttpRouter {
 	r := &HttpRouter{
 		echo:        echo,
 		fileHandler: fileHandler,
 		metaHandler: metaHandler,
+		sysHandler:  sysHandler,
 	}
 	r.initRouter()
 	return r
 }
 
 func (r *HttpRouter) initRouter() {
+	// 系统信息
+	r.echo.GET("/info", r.sysHandler.Info)
+
 	// 单个文件
 	r.echo.HEAD("/:repoType/:org/:repo/resolve/:commit/:filePath", r.fileHandler.HeadFileHandler1)
 	r.echo.HEAD("/:orgOrRepoType/:repo/resolve/:commit/:filePath", r.fileHandler.HeadFileHandler2)

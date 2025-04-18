@@ -132,6 +132,10 @@ func Response(ctx echo.Context, httpStatus int, headers map[string]string, data 
 	return ctx.JSON(httpStatus, data)
 }
 
+func ResponseData(ctx echo.Context, data interface{}) error {
+	return ctx.JSON(http.StatusOK, data)
+}
+
 func fullHeaders(c echo.Context, headers map[string]string) {
 	for k, v := range headers {
 		c.Response().Header().Set(k, v)

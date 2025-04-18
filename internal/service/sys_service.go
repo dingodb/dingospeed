@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"dingo-hfmirror/internal/model"
 	"dingo-hfmirror/pkg/config"
 
 	"github.com/shirou/gopsutil/mem"
@@ -19,7 +20,9 @@ func NewSysService() *SysService {
 	sysSvc := &SysService{}
 	once.Do(
 		func() {
-			go sysSvc.MemoryUsed()
+			if config.SysConfig.Cache.Enabled {
+				go sysSvc.MemoryUsed()
+			}
 		})
 	return sysSvc
 }
@@ -35,7 +38,12 @@ func (s SysService) MemoryUsed() {
 				fmt.Printf("获取内存信息时出错: %v\n", err)
 				continue
 			}
-			config.SysInfo.SetMemoryUsed(time.Now().Unix(), memoryInfo.UsedPercent)
+			config.SystemInfo.SetMemoryUsed(time.Now().Unix(), memoryInfo.UsedPercent)
 		}
 	}
+}
+
+func (s SysService) Info() *model.SystemInfo {
+	sysInfo := &model.SystemInfo{}
+	return sysInfo
 }

@@ -23,13 +23,14 @@ import (
 	"dingo-hfmirror/internal/dao"
 	"dingo-hfmirror/internal/handler"
 	"dingo-hfmirror/internal/router"
+	"dingo-hfmirror/internal/server"
 	"dingo-hfmirror/internal/service"
+	"dingo-hfmirror/pkg/app"
 	"dingo-hfmirror/pkg/config"
-	"dingo-hfmirror/pkg/server"
 
 	"github.com/google/wire"
 )
 
-func wireApp(*config.Config) (*App, func(), error) {
+func wireApp(*config.Config) (*app.App, func(), error) {
 	panic(wire.Build(server.ServerProvider, router.RouterProvider, handler.HandlerProvider, service.ServiceProvider, dao.DaoProvider, newApp))
 }

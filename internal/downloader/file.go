@@ -331,16 +331,15 @@ func (c *DingCache) ReadBlock(blockIndex int64) ([]byte, error) {
 	if _, err := f.Read(rawBlock); err != nil {
 		return nil, err
 	}
-	c.readBlockAndCache(f, blockIndex)
+	if config.SysConfig.Cache.Enabled {
+		c.readBlockAndCache(f, blockIndex)
+	}
 	block := c.padBlock(rawBlock)
 	return block, nil
 }
 
 func (c *DingCache) readBlockAndCache(f *os.File, blockIndex int64) {
-	if !config.SysConfig.Cache.Enabled {
-		return
-	}
-	memoryUsedPercent := config.SysInfo.MemoryUsedPercent
+	memoryUsedPercent := config.SystemInfo.MemoryUsedPercent
 	if memoryUsedPercent != 0 && memoryUsedPercent >= config.SysConfig.GetPrefetchMemoryUsedThreshold() {
 		return
 	}

@@ -20,6 +20,7 @@ import (
 	"os"
 	"time"
 
+	"dingo-hfmirror/internal/model"
 	myerr "dingo-hfmirror/pkg/error"
 
 	"github.com/go-playground/validator/v10"
@@ -28,21 +29,7 @@ import (
 )
 
 var SysConfig *Config
-var SysInfo *SystemInfo
-
-func init() {
-	SysInfo = &SystemInfo{}
-}
-
-type SystemInfo struct {
-	CollectTime       int64
-	MemoryUsedPercent float64
-}
-
-func (s *SystemInfo) SetMemoryUsed(collectTime int64, usedPercent float64) {
-	s.CollectTime = collectTime
-	s.MemoryUsedPercent = usedPercent
-}
+var SystemInfo *model.SystemInfo
 
 type Config struct {
 	Server           ServerConfig     `json:"server" yaml:"server"`
@@ -222,5 +209,6 @@ func Scan(path string) (*Config, error) {
 		return nil, err
 	}
 	SysConfig = &c // 设置全局配置变量
+	SystemInfo = &model.SystemInfo{}
 	return &c, nil
 }

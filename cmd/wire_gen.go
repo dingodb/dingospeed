@@ -10,9 +10,10 @@ import (
 	"dingo-hfmirror/internal/dao"
 	"dingo-hfmirror/internal/handler"
 	"dingo-hfmirror/internal/router"
+	"dingo-hfmirror/internal/server"
 	"dingo-hfmirror/internal/service"
+	"dingo-hfmirror/pkg/app"
 	"dingo-hfmirror/pkg/config"
-	"dingo-hfmirror/pkg/server"
 )
 
 import (
@@ -21,7 +22,7 @@ import (
 
 // Injectors from wire.go:
 
-func wireApp(configConfig *config.Config) (*App, func(), error) {
+func wireApp(configConfig *config.Config) (*app.App, func(), error) {
 	echo := server.NewEngine()
 	fileDao := dao.NewFileDao()
 	fileService := service.NewFileService(fileDao)
@@ -30,9 +31,10 @@ func wireApp(configConfig *config.Config) (*App, func(), error) {
 	metaDao := dao.NewMetaDao(fileDao)
 	metaService := service.NewMetaService(fileDao, metaDao)
 	metaHandler := handler.NewMetaHandler(metaService)
-	httpRouter := router.NewHttpRouter(echo, fileHandler, metaHandler)
-	serverServer := server.NewServer(configConfig, echo, httpRouter)
-	app := newApp(serverServer)
-	return app, func() {
+	sysHandler := handler.NewSysHandler(sysService)
+	httpRouter := router.NewHttpRouter(echo, fileHandler, metaHandler, sysHandler)
+	httpServer := server.NewServer(configConfig, echo, httpRouter)
+	appApp := newApp(httpServer)
+	return appApp, func() {
 	}, nil
 }
