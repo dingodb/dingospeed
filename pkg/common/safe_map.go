@@ -51,3 +51,6 @@ func (sm *SafeMap[K, V]) Len() int {
 	defer sm.mu.RUnlock()
 	return len(sm.m)
 }
+
+func (f *SafeMap[K, V]) Wait() {
+}

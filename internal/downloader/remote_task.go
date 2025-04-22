@@ -16,7 +16,6 @@ package downloader
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -32,7 +31,6 @@ import (
 
 type RemoteFileTask struct {
 	DownloadTask
-	Context       context.Context `json:"-"`
 	authorization string
 	hfUrl         string
 	Queue         chan []byte `json:"-"`
@@ -142,9 +140,22 @@ func (r RemoteFileTask) DoTask() {
 }
 
 func (r RemoteFileTask) OutResult() {
-	for data := range r.Queue {
-		r.ResponseChan <- data
+	for {
+		select {
+		case data, ok := <-r.Queue:
+			if !ok {
+				return
+			}
+			r.ResponseChan <- data
+		case <-r.Context.Done():
+			zap.S().Warnf("remote OutResult file:%s", r.FileName)
+			return
+		}
 	}
+}
+
+func (r RemoteFileTask) GetResponseChan() chan []byte {
+	return r.ResponseChan
 }
 
 func (r RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentChan chan<- []byte) {

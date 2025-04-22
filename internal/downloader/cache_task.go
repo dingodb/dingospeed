@@ -15,6 +15,8 @@
 package downloader
 
 import (
+	"context"
+
 	"go.uber.org/zap"
 )
 
@@ -24,8 +26,9 @@ type DownloadTask struct {
 	RangeEndPos   int64
 	TaskSize      int
 	FileName      string
-	DingFile      *DingCache  `json:"-"`
-	ResponseChan  chan []byte `json:"-"`
+	DingFile      *DingCache      `json:"-"`
+	ResponseChan  chan []byte     `json:"-"`
+	Context       context.Context `json:"-"`
 }
 
 type CacheFileTask struct {
@@ -48,6 +51,10 @@ func (c CacheFileTask) OutResult() {
 	endBlock := (c.RangeEndPos - 1) / c.DingFile.getBlockSize()
 	curPos := c.RangeStartPos
 	for curBlock := startBlock; curBlock <= endBlock; curBlock++ {
+		if c.Context.Err() != nil {
+			zap.S().Warnf("cache OutResult file:%s", c.FileName)
+			return
+		}
 		_, blockStartPos, blockEndPos := getBlockInfo(curPos, c.DingFile.getBlockSize(), c.DingFile.GetFileSize())
 		hasBlockBool, err := c.DingFile.HasBlock(curBlock)
 		if err != nil {
@@ -81,6 +88,9 @@ func (c CacheFileTask) OutResult() {
 	if curPos != c.RangeEndPos {
 		zap.S().Errorf("file:%s, cache range from %d to %d is incomplete.", c.FileName, c.RangeStartPos, c.RangeEndPos)
 	}
-	zap.S().Debugf("cache file out:%s, taskNo:%d, size:%d, startPos:%d, endPos:%d", c.FileName, c.TaskNo, c.TaskSize, c.RangeStartPos, c.RangeEndPos)
+	zap.S().Infof("cache file out:%s, taskNo:%d, size:%d, startPos:%d, endPos:%d", c.FileName, c.TaskNo, c.TaskSize, c.RangeStartPos, c.RangeEndPos)
+}
 
+func (c CacheFileTask) GetResponseChan() chan []byte {
+	return c.ResponseChan
 }

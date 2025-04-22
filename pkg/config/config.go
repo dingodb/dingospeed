@@ -66,6 +66,7 @@ type Download struct {
 
 type Cache struct {
 	Enabled                     bool    `json:"enabled" yaml:"enabled"`
+	Type                        int     `json:"type" yaml:"type"`
 	CollectTimePeriod           int     `json:"collectTimePeriod" yaml:"collectTimePeriod" validate:"min=1,max=600"` // 周期采集内存使用量，单位秒
 	PrefetchMemoryUsedThreshold float64 `json:"prefetchMemoryUsedThreshold" yaml:"prefetchMemoryUsedThreshold" validate:"min=50,max=99"`
 	PrefetchBlocks              int64   `json:"prefetchBlocks" yaml:"prefetchBlocks" validate:"min=1,max=32"`      // 读取块数据，预先缓存的块数据数量

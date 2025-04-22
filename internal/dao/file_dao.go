@@ -48,7 +48,9 @@ type FileDao struct {
 }
 
 func NewFileDao() *FileDao {
-	cache.InitCache() // 初始化缓存
+	if config.SysConfig.Cache.Enabled {
+		cache.InitCache() // 初始化缓存
+	}
 	return &FileDao{}
 }
 

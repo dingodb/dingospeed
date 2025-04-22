@@ -46,15 +46,16 @@ func FileDownload(ctx context.Context, hfUrl, savePath, fileName, authorization 
 		task := tasks[i]
 		if remote, ok := task.(*RemoteFileTask); ok {
 			remote.Context = ctx
+			remote.DingFile = dingFile
 			remote.authorization = authorization
 			remote.hfUrl = hfUrl
-			remote.DingFile = dingFile
 			remote.Queue = make(chan []byte, getQueueSize(remote.RangeStartPos, remote.RangeEndPos))
 			remote.ResponseChan = responseChan
 			remote.TaskSize = taskSize
 			remote.FileName = fileName
 			remoteTasks = append(remoteTasks, remote)
 		} else if cache, ok := task.(*CacheFileTask); ok {
+			cache.Context = ctx
 			cache.DingFile = dingFile
 			cache.TaskSize = taskSize
 			cache.FileName = fileName
@@ -75,6 +76,9 @@ func FileDownload(ctx context.Context, hfUrl, savePath, fileName, authorization 
 			return
 		}
 		task := tasks[i]
+		if i == 0 {
+			task.GetResponseChan() <- []byte{} // 先建立长连接
+		}
 		task.OutResult()
 	}
 	wg.Wait()
@@ -96,7 +100,6 @@ func startRemoteDownload(ctx context.Context, remoteFileTasks []*RemoteFileTask)
 		pool = common.NewPool(taskLen)
 	}
 	defer pool.Close()
-	remoteFileTasks[0].ResponseChan <- []byte{} // 先建立长连接
 	for i := 0; i < taskLen; i++ {
 		task := remoteFileTasks[i]
 		if err := pool.Submit(ctx, task); err != nil {

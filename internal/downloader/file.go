@@ -300,12 +300,17 @@ func (c *DingCache) ReadBlock(blockIndex int64) ([]byte, error) {
 		if blockData, ok := cache.FileBlockCache.Get(key); ok {
 			// 若当前为最后一个块，则移除最近的16个块
 			if blockIndex == c.getBlockNumber()-1 {
+				var cacheFlag bool
 				for i := config.SysConfig.GetPrefetchBlocks(); i >= 0; i-- {
 					no := blockIndex - i
 					if no >= 0 {
 						oldKey := c.getBlockKey(no)
 						cache.FileBlockCache.Delete(oldKey)
+						cacheFlag = true
 					}
+				}
+				if cacheFlag {
+					cache.FileBlockCache.Wait()
 				}
 			}
 			return blockData, nil
@@ -339,6 +344,7 @@ func (c *DingCache) ReadBlock(blockIndex int64) ([]byte, error) {
 }
 
 func (c *DingCache) readBlockAndCache(f *os.File, blockIndex int64) {
+	var cacheFlag bool
 	memoryUsedPercent := config.SystemInfo.MemoryUsedPercent
 	if memoryUsedPercent != 0 && memoryUsedPercent >= config.SysConfig.GetPrefetchMemoryUsedThreshold() {
 		return
@@ -369,9 +375,13 @@ func (c *DingCache) readBlockAndCache(f *os.File, blockIndex int64) {
 				oldKey := c.getBlockKey(newOffsetBlock)
 				cache.FileBlockCache.Delete(oldKey)
 			}
+			cacheFlag = true
 		} else {
 			break
 		}
+	}
+	if cacheFlag {
+		cache.FileBlockCache.Wait()
 	}
 }
 

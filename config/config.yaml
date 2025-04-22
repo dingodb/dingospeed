@@ -21,7 +21,8 @@ download:
 
 
 cache:
-    enabled: true
+    enabled: true               #是否启用缓存
+    type: 1                     # 采用哪种组件缓存，可选项0(map), 1(Ristretto)
     collectTimePeriod: 5        #定期检测内存使用量时间周期，单位秒（S）
     prefetchMemoryUsedThreshold: 90  #当内存使用量达到该值，将不会预读取，不缓存数据块
     prefetchBlocks: 16           #离线下载时，预先读取块的数量
@@ -32,7 +33,7 @@ retry:
     attempts: 3    #重试次数，默认为3
 
 log:
-    maxSize: 1      # 日志文件最大的尺寸（MB）
+    maxSize: 20      # 日志文件最大的尺寸（MB）
     maxBackups: 10  #保留旧文件的最大个数
     maxAge: 90      #保留旧文件的最大天数
 

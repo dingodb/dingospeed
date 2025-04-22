@@ -24,6 +24,7 @@ import (
 type Task interface {
 	DoTask()
 	OutResult()
+	GetResponseChan() chan []byte
 }
 
 // Pool 协程池结构体
