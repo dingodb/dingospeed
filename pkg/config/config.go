@@ -38,6 +38,7 @@ type Config struct {
 	Log              LogConfig        `json:"log" yaml:"log"`
 	Retry            Retry            `json:"retry" yaml:"retry"`
 	TokenBucketLimit TokenBucketLimit `json:"tokenBucketLimit" yaml:"tokenBucketLimit"`
+	DiskClean        DiskClean        `json:"diskClean" yaml:"diskClean"`
 }
 
 type ServerConfig struct {
@@ -88,6 +89,13 @@ type TokenBucketLimit struct {
 	Capacity        int `json:"capacity" yaml:"capacity"`
 	Rate            int `json:"rate" yaml:"rate"`
 	HandlerCapacity int `json:"handlerCapacity" yaml:"handlerCapacity"`
+}
+
+type DiskClean struct {
+	Enabled            bool   `json:"enabled" yaml:"enabled"`
+	CacheSizeLimit     int64  `json:"cacheSizeLimit" yaml:"cacheSizeLimit"`
+	CacheCleanStrategy string `json:"cacheCleanStrategy" yaml:"cacheCleanStrategy"`
+	CollectTimePeriod  int    `json:"collectTimePeriod" yaml:"collectTimePeriod" validate:"min=1,max=600"` // 周期采集内存使用量，单位秒
 }
 
 func (c *Config) GetHFURLBase() string {
@@ -148,6 +156,14 @@ func (c *Config) GetPrefetchBlocks() int64 {
 
 func (c *Config) GetPrefetchBlockTTL() time.Duration {
 	return time.Duration(c.Cache.PrefetchBlockTTL) * time.Second
+}
+
+func (c *Config) GetDiskCollectTimePeriod() time.Duration {
+	return time.Duration(c.DiskClean.CollectTimePeriod) * time.Hour
+}
+
+func (c *Config) CacheCleanStrategy() string {
+	return c.DiskClean.CacheCleanStrategy
 }
 
 func (c *Config) SetDefaults() {

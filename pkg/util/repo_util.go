@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"syscall"
 
 	"dingo-hfmirror/pkg/common"
 
@@ -150,4 +152,108 @@ func SplitFileToSegment(fileSize int64, blockSize int64) (int, []*common.Segment
 		start = end
 	}
 	return index, segments
+}
+
+func GetFolderSize(path string) (int64, error) {
+	var size int64
+	err := filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			size += info.Size()
+		}
+		return nil
+	})
+	return size, err
+}
+
+// FileWithPath 自定义结构体，用于存储文件信息和对应的路径
+type FileWithPath struct {
+	Info os.FileInfo
+	Path string
+}
+
+// SortFilesByAccessTime 按文件访问时间对指定路径下的文件进行排序
+func SortFilesByAccessTime(path string) ([]FileWithPath, error) {
+	var filesWithPaths []FileWithPath
+	err := filepath.Walk(path, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			filesWithPaths = append(filesWithPaths, FileWithPath{
+				Info: info,
+				Path: p,
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// 按访问时间对文件进行排序
+	sort.Slice(filesWithPaths, func(i, j int) bool {
+		statI, okI := filesWithPaths[i].Info.Sys().(*syscall.Stat_t)
+		statJ, okJ := filesWithPaths[j].Info.Sys().(*syscall.Stat_t)
+		if okI && okJ {
+			if statI.Atimespec.Sec < statJ.Atimespec.Sec {
+				return true
+			}
+			if statI.Atimespec.Sec == statJ.Atimespec.Sec {
+				// 比较访问时间，升序排序
+				return statI.Atimespec.Nsec < statJ.Atimespec.Nsec
+			}
+		}
+		return false
+	})
+
+	return filesWithPaths, nil
+}
+
+func SortFilesByModifyTime(path string) ([]FileWithPath, error) {
+	files, err := SortFilesByAccessTime(path)
+	return files, err
+}
+
+// SortFilesBySize 按文件大小对指定路径下的文件进行降序排序
+func SortFilesBySize(path string) ([]FileWithPath, error) {
+	var filesWithPaths []FileWithPath
+	err := filepath.Walk(path, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			filesWithPaths = append(filesWithPaths, FileWithPath{
+				Info: info,
+				Path: p,
+			})
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Slice(filesWithPaths, func(i, j int) bool {
+		// 比较文件大小，降序排序
+		return filesWithPaths[i].Info.Size() > filesWithPaths[j].Info.Size()
+	})
+
+	return filesWithPaths, nil
+}
+
+func ConvertBytesToHumanReadable(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
