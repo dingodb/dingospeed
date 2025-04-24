@@ -72,7 +72,7 @@ func checkDiskUsage() {
 	if !config.SysConfig.Online() {
 		return
 	}
-	if config.SysConfig.DiskClean.Enabled != true {
+	if !config.SysConfig.DiskClean.Enabled {
 		return
 	}
 

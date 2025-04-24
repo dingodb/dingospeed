@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"sort"
 	"syscall"
+	"time"
 
 	"dingo-hfmirror/pkg/common"
 
@@ -174,7 +175,30 @@ type FileWithPath struct {
 	Path string
 }
 
-// SortFilesByAccessTime 按文件访问时间对指定路径下的文件进行排序
+// getAccessTime 跨平台获取文件访问时间
+func getAccessTime(info os.FileInfo) time.Time {
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		if ts, ok := tryGetAtime(stat); ok {
+			return time.Unix(ts.Sec, ts.Nsec)
+		}
+	}
+	// 若无法获取访问时间，使用修改时间替代
+	return info.ModTime()
+}
+
+// tryGetAtime 尝试不同方式获取文件访问时间
+func tryGetAtime(stat *syscall.Stat_t) (syscall.Timespec, bool) {
+	if v, ok := interface{}(stat).(interface{ Atimespec() syscall.Timespec }); ok {
+		return v.Atimespec(), true
+	}
+	if v, ok := interface{}(stat).(interface{ Atim() syscall.Timespec }); ok {
+		return v.Atim(), true
+	}
+
+	return syscall.Timespec{}, false
+}
+
+// SortFilesByAccessTime 按文件访问时间对指定路径下的文件进行正序排序
 func SortFilesByAccessTime(path string) ([]FileWithPath, error) {
 	var filesWithPaths []FileWithPath
 	err := filepath.Walk(path, func(p string, info os.FileInfo, err error) error {
@@ -193,28 +217,22 @@ func SortFilesByAccessTime(path string) ([]FileWithPath, error) {
 		return nil, err
 	}
 
-	// 按访问时间对文件进行排序
+	// 按访问时间对文件进行正序排序，秒数相同则比较纳秒
 	sort.Slice(filesWithPaths, func(i, j int) bool {
-		statI, okI := filesWithPaths[i].Info.Sys().(*syscall.Stat_t)
-		statJ, okJ := filesWithPaths[j].Info.Sys().(*syscall.Stat_t)
-		if okI && okJ {
-			if statI.Atimespec.Sec < statJ.Atimespec.Sec {
-				return true
-			}
-			if statI.Atimespec.Sec == statJ.Atimespec.Sec {
-				// 比较访问时间，升序排序
-				return statI.Atimespec.Nsec < statJ.Atimespec.Nsec
-			}
+		timeI := getAccessTime(filesWithPaths[i].Info)
+		timeJ := getAccessTime(filesWithPaths[j].Info)
+		if timeI.Unix() == timeJ.Unix() {
+			return timeI.Nanosecond() < timeJ.Nanosecond()
 		}
-		return false
+		return timeI.Before(timeJ)
 	})
 
 	return filesWithPaths, nil
 }
 
 func SortFilesByModifyTime(path string) ([]FileWithPath, error) {
-	files, err := SortFilesByAccessTime(path)
-	return files, err
+	filesWithPaths, err := SortFilesByAccessTime(path)
+	return filesWithPaths, err
 }
 
 // SortFilesBySize 按文件大小对指定路径下的文件进行降序排序
