@@ -15,6 +15,8 @@ services:
             - ./repos:/app/repos
             - ./log:/app/log
         restart: always
+        environment:
+            - TZ=Asia/Shanghai
         cpus: '25'  # 限制 CPU 为 20 核
         mem_limit: '50g'  # 限制内存为 50G
     dingo-hfmirror-online:
@@ -23,6 +25,7 @@ services:
         environment:
             - http_proxy=http://10.201.44.68:1080
             - https_proxy=http://10.201.44.68:1080
+            - TZ=Asia/Shanghai
         ports:
             - "8091:8091"
         volumes:
