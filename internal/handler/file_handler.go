@@ -15,13 +15,16 @@
 package handler
 
 import (
+	"fmt"
 	"net/url"
 
 	"dingo-hfmirror/internal/service"
 	"dingo-hfmirror/pkg/consts"
+	"dingo-hfmirror/pkg/prom"
 	"dingo-hfmirror/pkg/util"
 
 	"github.com/labstack/echo/v4"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
 
@@ -130,5 +133,31 @@ func (handler *FileHandler) GetFileHandler3(c echo.Context) error {
 }
 
 func (handler *FileHandler) fileGetCommon(c echo.Context, repoType, org, repo, commit, filePath string) error {
-	return handler.fileService.FileGetCommon(c, repoType, org, repo, commit, filePath)
+	labels := prometheus.Labels{}
+	labels[repoType] = fmt.Sprintf("%s/%s", org, repo)
+	if _, ok := consts.RepoTypesMapping[repoType]; ok {
+		labels["status"] = "total"
+		if repoType == "models" {
+			prom.RequestModelCnt.With(labels).Inc()
+		} else if repoType == "datasets" {
+			prom.RequestDataSetCnt.With(labels).Inc()
+		}
+	}
+	err := handler.fileService.FileGetCommon(c, repoType, org, repo, commit, filePath)
+	if err != nil {
+		labels["status"] = "failed"
+		if repoType == "models" {
+			prom.RequestModelCnt.With(labels).Inc()
+		} else if repoType == "datasets" {
+			prom.RequestDataSetCnt.With(labels).Inc()
+		}
+	} else {
+		labels["status"] = "success"
+		if repoType == "models" {
+			prom.RequestModelCnt.With(labels).Inc()
+		} else if repoType == "datasets" {
+			prom.RequestDataSetCnt.With(labels).Inc()
+		}
+	}
+	return err
 }

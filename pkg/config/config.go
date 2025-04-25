@@ -46,6 +46,7 @@ type ServerConfig struct {
 	Host        string `json:"host" yaml:"host"`
 	Port        int    `json:"port" yaml:"port"`
 	PProf       bool   `json:"pprof" yaml:"pprof"`
+	Metrics     bool   `json:"metrics" yaml:"metrics"`
 	Online      bool   `json:"online" yaml:"online"`
 	Repos       string `json:"repos" yaml:"repos"`
 	HfNetLoc    string `json:"hfNetLoc" yaml:"hfNetLoc"`

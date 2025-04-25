@@ -16,8 +16,10 @@ package router
 
 import (
 	"dingo-hfmirror/internal/handler"
+	"dingo-hfmirror/pkg/config"
 
 	"github.com/labstack/echo/v4"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type HttpRouter struct {
@@ -41,6 +43,9 @@ func NewHttpRouter(echo *echo.Echo, fileHandler *handler.FileHandler, metaHandle
 func (r *HttpRouter) initRouter() {
 	// 系统信息
 	r.echo.GET("/info", r.sysHandler.Info)
+	if config.SysConfig.Server.Metrics {
+		r.echo.GET("/metrics", echo.WrapHandler(promhttp.Handler()))
+	}
 
 	// 单个文件
 	r.echo.HEAD("/:repoType/:org/:repo/resolve/:commit/:filePath", r.fileHandler.HeadFileHandler1)

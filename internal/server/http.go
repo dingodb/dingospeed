@@ -5,11 +5,12 @@ import (
 	"embed"
 	"errors"
 	"fmt"
-	"go.uber.org/zap"
 	"html/template"
 	"io"
 	"net"
 	"net/http"
+
+	"go.uber.org/zap"
 
 	"dingo-hfmirror/internal/router"
 	"dingo-hfmirror/pkg/config"
