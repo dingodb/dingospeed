@@ -1,0 +1,15 @@
+FROM golang:1.23.0 AS builder
+
+LABEL stage=gobuilder
+
+WORKDIR /app
+
+COPY ./dingo-hfmirror .
+
+# Expose the 8090 port of the container for external acces
+EXPOSE 8090
+
+VOLUME /app/repos
+VOLUME /app/log
+
+CMD ["./dingo-hfmirror"]

@@ -1,8 +1,9 @@
 server:
     mode: debug
-    host: localhost
+    host: 0.0.0.0
     port: 8090
     pprof: true
+    metrics: true
     online: true #true表示hf-mirror找不到，去hfNetLoc地址查找并下载模型数据，false表示本地如果没有，直接返回没有
     repos: ./repos
     hfNetLoc: hf-mirror.com   # huggingface.co     hf-mirror.com
@@ -14,7 +15,7 @@ download:
     reqTimeout: 0                #远端请求超时时间，单位秒，默认为0，不超时。
     respChunkSize: 8192          #默认对响应结果的读取大小8192，单位字节。
     respChanSize: 30             #响应队列大小
-    remoteFileBufferSize: 8388608  #每个分区文件的结果Queue的缓存大小，即当前文件下载时，缓存64MB的数据
+    remoteFileBufferSize: 8388608  #每个分区文件的结果Queue的缓存大小，即当前文件下载时，缓存8MB的数据
     remoteFileRangeSize: 0    #按照这个长度分块下载，0为不切分,测试选项：8388608（8M），67108864（64M），134217728（128M）,536870912(512M),1GB（1073741824）
     remoteFileRangeWaitTime: 1   #每个分区文件下载任务提交时间间隔，默认1s，单位（s）。
     goroutineMaxNumPerFile: 8    #远程下载任务启动的最大协程数量

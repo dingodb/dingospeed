@@ -24,9 +24,9 @@ var RepoTypesMapping = map[string]RepoType{
 type RepoType string
 
 const (
-	RepoTypeModel   RepoType = RepoType("model")
-	RepoTypeSpace            = RepoType("space")
-	RepoTypeDataset          = RepoType("dataset")
+	RepoTypeModel   RepoType = RepoType("models")
+	RepoTypeSpace            = RepoType("spaces")
+	RepoTypeDataset          = RepoType("datasets")
 )
 
 func (a RepoType) Value() string {
