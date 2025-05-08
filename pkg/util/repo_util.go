@@ -238,15 +238,25 @@ func SortFilesByModifyTime(path string) ([]FileWithPath, error) {
 // SortFilesBySize 按文件大小对指定路径下的文件进行降序排序
 func SortFilesBySize(path string) ([]FileWithPath, error) {
 	var filesWithPaths []FileWithPath
+	// 获取今天的日期
+	now := time.Now()
+	year, month, day := now.Date()
+	today := time.Date(year, month, day, 0, 0, 0, 0, now.Location())
+
 	err := filepath.Walk(path, func(p string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 		if !info.IsDir() {
-			filesWithPaths = append(filesWithPaths, FileWithPath{
-				Info: info,
-				Path: p,
-			})
+			// 获取文件修改时间
+			modTime := info.ModTime()
+			// 检查文件修改时间是否不是今天
+			if modTime.Before(today) {
+				filesWithPaths = append(filesWithPaths, FileWithPath{
+					Info: info,
+					Path: p,
+				})
+			}
 		}
 		return nil
 	})
