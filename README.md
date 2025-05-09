@@ -1,12 +1,12 @@
-# dingo-hfmirror
+# DingoSpeed
 English | [简体中文](README-zh_CN.md)
 
-dingo-hfmirror is a self-hosted Hugging Face mirror service designed to provide users with a convenient and efficient solution for accessing and managing model resources. Through local mirroring, users can reduce their reliance on remote Hugging Face servers, improve resource acquisition speed, and achieve local storage and management of data.
+DingoSpeed is a self-hosted Hugging Face mirror service designed to provide users with a convenient and efficient solution for accessing and managing model resources. Through local mirroring, users can reduce their reliance on remote Hugging Face servers, improve resource acquisition speed, and achieve local storage and management of data.
 
 # Product Features
-dingo-hfmirror has the following main product features:
+DingoSpeed has the following main product features:
 * Mirror Acceleration: Cache the resources downloaded for the first time. When the client makes a subsequent request, the data will be read from the cache and returned, greatly improving the download rate.
-* Convenient Access: There is no need for scientific internet access or complex network configuration. Simply deploy the dingo-hfmirror service and use it as the proxy address to easily complete the download.
+* Convenient Access: There is no need for scientific internet access or complex network configuration. Simply deploy the DingoSpeed service and use it as the proxy address to easily complete the download.
 * Traffic Reduction and Load Alleviation: Download once and use multiple times, reducing the traffic waste caused by repeated downloads, which is efficient and saves traffic.
 * Localized Management: Cover the entire process of local compilation, deployment, monitoring, and usage of the mirror service, bringing an excellent and flexible experience. It avoids reliance on external networks and public mirror repositories, significantly improving the system's response speed and data security.
 
