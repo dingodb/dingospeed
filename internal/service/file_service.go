@@ -15,10 +15,10 @@
 package service
 
 import (
-	"dingo-hfmirror/internal/dao"
-	"dingo-hfmirror/pkg/config"
-	"dingo-hfmirror/pkg/consts"
-	"dingo-hfmirror/pkg/util"
+	"dingospeed/internal/dao"
+	"dingospeed/pkg/config"
+	"dingospeed/pkg/consts"
+	"dingospeed/pkg/util"
 
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
@@ -56,7 +56,7 @@ func (d *FileService) FileHeadCommon(c echo.Context, repoType, org, repo, commit
 }
 
 func (d *FileService) FileGetCommon(c echo.Context, repoType, org, repo, commit, filePath string) error {
-	zap.S().Infof("exec file get:%s/%s/%s/%s/%s", repoType, org, repo, commit, filePath)
+	zap.S().Infof("exec file get:%s/%s/%s/%s/%s, remoteAdd:%s", repoType, org, repo, commit, filePath, c.Request().RemoteAddr)
 	if _, ok := consts.RepoTypesMapping[repoType]; !ok {
 		return util.ErrorPageNotFound(c)
 	}

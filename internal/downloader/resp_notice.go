@@ -14,6 +14,6 @@
 
 package downloader
 
-import "dingo-hfmirror/pkg/common"
+import "dingospeed/pkg/common"
 
 var RespNoticeMap = common.NewSafeMap[string, *Broadcaster]()

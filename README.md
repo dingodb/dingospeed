@@ -55,7 +55,7 @@ make license
 
 ```
 # Quick Start
-Deploy the compiled binary file and execute ./dingo-hfmirror to start the service. Then set the environment variable HF_ENDPOINT to the mirror site (here it is http://localhost:8090/).
+Deploy the compiled binary file and execute ./dingospeed to start the service. Then set the environment variable HF_ENDPOINT to the mirror site (here it is http://localhost:8090/).
 
 Linux:
 ```shell

@@ -19,14 +19,18 @@ import (
 	"sync"
 	"time"
 
-	"dingo-hfmirror/pkg/common"
-	"dingo-hfmirror/pkg/config"
+	"dingospeed/pkg/common"
+	"dingospeed/pkg/config"
 
 	"go.uber.org/zap"
 )
 
 // 整个文件
 func FileDownload(ctx context.Context, hfUrl, savePath, fileName, authorization string, fileSize, startPos, endPos int64, responseChan chan []byte) {
+	var (
+		remoteTasks []*RemoteFileTask
+		wg          sync.WaitGroup
+	)
 	defer close(responseChan)
 	dingCacheManager := GetInstance()
 	dingFile, err := dingCacheManager.GetDingFile(savePath, fileSize)
@@ -34,9 +38,11 @@ func FileDownload(ctx context.Context, hfUrl, savePath, fileName, authorization 
 		zap.S().Errorf("GetDingFile err.%v", err)
 		return
 	}
-	defer dingCacheManager.ReleasedDingFile(savePath)
-	tasks := getContiguousRanges(dingFile, startPos, endPos)
-	var remoteTasks []*RemoteFileTask
+	defer func() {
+		dingCacheManager.ReleasedDingFile(savePath)
+	}()
+
+	tasks := getContiguousRanges(ctx, dingFile, startPos, endPos)
 	taskSize := len(tasks)
 	for i := 0; i < taskSize; i++ {
 		if ctx.Err() != nil {
@@ -62,18 +68,18 @@ func FileDownload(ctx context.Context, hfUrl, savePath, fileName, authorization 
 			cache.ResponseChan = responseChan
 		}
 	}
-	var wg sync.WaitGroup
 	if len(remoteTasks) > 0 {
 		wg.Add(1)
 		go func() {
-			defer wg.Done()
+			defer func() {
+				wg.Done()
+			}()
 			startRemoteDownload(ctx, remoteTasks)
 		}()
 	}
 	for i := 0; i < len(tasks); i++ {
 		if ctx.Err() != nil {
-			zap.S().Errorf("FileDownload cancelled: %v", ctx.Err())
-			return
+			break
 		}
 		task := tasks[i]
 		if i == 0 {
@@ -81,7 +87,7 @@ func FileDownload(ctx context.Context, hfUrl, savePath, fileName, authorization 
 		}
 		task.OutResult()
 	}
-	wg.Wait()
+	wg.Wait() // 等待协程池所有远程下载任务执行完毕
 }
 
 func getQueueSize(rangeStartPos, rangeEndPos int64) int64 {
@@ -101,18 +107,23 @@ func startRemoteDownload(ctx context.Context, remoteFileTasks []*RemoteFileTask)
 	}
 	defer pool.Close()
 	for i := 0; i < taskLen; i++ {
+		if ctx.Err() != nil {
+			return
+		}
 		task := remoteFileTasks[i]
 		if err := pool.Submit(ctx, task); err != nil {
 			zap.S().Errorf("submit task err.%v", err)
 			return
 		}
-		time.Sleep(config.SysConfig.GetRemoteFileRangeWaitTime())
+		if config.SysConfig.GetRemoteFileRangeWaitTime() != 0 {
+			time.Sleep(config.SysConfig.GetRemoteFileRangeWaitTime())
+		}
 	}
 }
 
 // 将文件的偏移量分为cache和remote，对针对remote按照指定的RangeSize做切分
 
-func getContiguousRanges(dingFile *DingCache, startPos, endPos int64) (tasks []common.Task) {
+func getContiguousRanges(ctx context.Context, dingFile *DingCache, startPos, endPos int64) (tasks []common.Task) {
 	if startPos == 0 && endPos == 0 {
 		return
 	}
@@ -132,6 +143,9 @@ func getContiguousRanges(dingFile *DingCache, startPos, endPos int64) (tasks []c
 	rangeIsRemote := !blockExists // 不存在，从远程获取，为true
 	taskNo := 0
 	for curBlock := startBlock; curBlock <= endBlock; curBlock++ {
+		if ctx.Err() != nil {
+			return
+		}
 		_, _, blockEndPos := getBlockInfo(curPos, dingFile.getBlockSize(), dingFile.GetFileSize())
 		blockExists, err = dingFile.HasBlock(curBlock)
 		if err != nil {

@@ -7,9 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"dingo-hfmirror/internal/model"
-	"dingo-hfmirror/pkg/config"
-	"dingo-hfmirror/pkg/util"
+	"dingospeed/pkg/config"
+	"dingospeed/pkg/util"
 
 	"github.com/shirou/gopsutil/mem"
 	"go.uber.org/zap"
@@ -49,11 +48,6 @@ func (s SysService) MemoryUsed() {
 			config.SystemInfo.SetMemoryUsed(time.Now().Unix(), memoryInfo.UsedPercent)
 		}
 	}
-}
-
-func (s SysService) Info() *model.SystemInfo {
-	sysInfo := &model.SystemInfo{}
-	return sysInfo
 }
 
 func (s SysService) cycleCheckDiskUsage() {

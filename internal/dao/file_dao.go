@@ -27,13 +27,13 @@ import (
 	"strings"
 	"time"
 
-	cache "dingo-hfmirror/internal/data"
-	"dingo-hfmirror/internal/downloader"
-	"dingo-hfmirror/pkg/common"
-	"dingo-hfmirror/pkg/config"
-	"dingo-hfmirror/pkg/consts"
-	myerr "dingo-hfmirror/pkg/error"
-	"dingo-hfmirror/pkg/util"
+	cache "dingospeed/internal/data"
+	"dingospeed/internal/downloader"
+	"dingospeed/pkg/common"
+	"dingospeed/pkg/config"
+	"dingospeed/pkg/consts"
+	myerr "dingospeed/pkg/error"
+	"dingospeed/pkg/util"
 
 	"github.com/bytedance/sonic"
 	"github.com/labstack/echo/v4"
@@ -322,7 +322,9 @@ func (f *FileDao) getResourceEtag(hfUrl, authorization string) (string, error) {
 
 func (f *FileDao) FileChunkGet(c echo.Context, hfUrl, filesPath, fileName, authorization string, fileSize, startPos, endPos int64, respHeaders map[string]string) error {
 	responseChan := make(chan []byte, config.SysConfig.Download.RespChanSize)
-	ctx, cancel := context.WithCancel(context.Background())
+	source := util.Itoa(c.Get(consts.PromSource))
+	bgCtx := context.WithValue(c.Request().Context(), consts.PromSource, source)
+	ctx, cancel := context.WithCancel(bgCtx)
 	defer cancel()
 	go downloader.FileDownload(ctx, hfUrl, filesPath, fileName, authorization, fileSize, startPos, endPos, responseChan)
 	if err := util.ResponseStream(c, fileName, respHeaders, responseChan); err != nil {

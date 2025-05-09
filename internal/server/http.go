@@ -12,9 +12,9 @@ import (
 
 	"go.uber.org/zap"
 
-	"dingo-hfmirror/internal/router"
-	"dingo-hfmirror/pkg/config"
-	"dingo-hfmirror/pkg/middleware"
+	"dingospeed/internal/router"
+	"dingospeed/pkg/config"
+	"dingospeed/pkg/middleware"
 
 	"github.com/labstack/echo/v4"
 )
@@ -72,7 +72,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 }
 
 func (s *HTTPServer) Stop(ctx context.Context) error {
-	zap.S().Infof("[HTTP] server shutdown on: %s", s.lis.Addr().String())
+	zap.S().Infof("[HTTP] server shutdown.")
 	return s.Shutdown(ctx)
 }
 

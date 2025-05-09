@@ -22,9 +22,10 @@ import (
 	"strconv"
 	"sync"
 
-	"dingo-hfmirror/pkg/config"
-	"dingo-hfmirror/pkg/consts"
-	"dingo-hfmirror/pkg/util"
+	"dingospeed/pkg/config"
+	"dingospeed/pkg/consts"
+	"dingospeed/pkg/prom"
+	"dingospeed/pkg/util"
 
 	"go.uber.org/zap"
 )
@@ -46,18 +47,21 @@ func NewRemoteFileTask(taskNo int, rangeStartPos int64, rangeEndPos int64) *Remo
 
 // 分段下载
 func (r RemoteFileTask) DoTask() {
+	var (
+		curBlock int64
+		wg       sync.WaitGroup
+	)
 	contentChan := make(chan []byte, consts.RespChanSize)
 	rangeStartPos, rangeEndPos := r.RangeStartPos, r.RangeEndPos
 	zap.S().Infof("remote file download:%s, taskNo:%d, size:%d, startPos:%d, endPos:%d", r.FileName, r.TaskNo, r.TaskSize, rangeStartPos, rangeEndPos)
-	go r.getFileRangeFromRemote(rangeStartPos, rangeEndPos, contentChan)
+	wg.Add(2)
+	go r.getFileRangeFromRemote(&wg, rangeStartPos, rangeEndPos, contentChan)
 	curPos := rangeStartPos
 	streamCache := bytes.Buffer{}
 	lastBlock, lastBlockStartPos, lastBlockEndPos := getBlockInfo(curPos, r.DingFile.getBlockSize(), r.DingFile.GetFileSize()) // 块编号，开始位置，结束位置
-	var curBlock int64
-
-	defer close(r.Queue)
-	var wg sync.WaitGroup
-	wg.Add(1)
+	defer func() {
+		close(r.Queue)
+	}()
 	go func() {
 		defer func() {
 			wg.Done()
@@ -69,9 +73,22 @@ func (r RemoteFileTask) DoTask() {
 					if !ok {
 						return
 					}
-					// zap.S().Infof("task:%d, len:%d", r.TaskNo, len(chunk))
-					r.Queue <- chunk // 先写到缓存
-					curPos += int64(len(chunk))
+					// 先写到缓存
+					select {
+					case r.Queue <- chunk:
+					case <-r.Context.Done():
+						return
+					}
+
+					chunkLen := int64(len(chunk))
+					curPos += chunkLen
+
+					if config.SysConfig.EnableMetric() {
+						// 原子性地更新总下载字节数
+						source := util.Itoa(r.Context.Value(consts.PromSource))
+						prom.PromRequestByteCounter(prom.RequestRemoteByte, source, chunkLen)
+					}
+
 					if len(chunk) != 0 {
 						streamCache.Write(chunk)
 					}
@@ -146,9 +163,13 @@ func (r RemoteFileTask) OutResult() {
 			if !ok {
 				return
 			}
-			r.ResponseChan <- data
+			select {
+			case r.ResponseChan <- data:
+			case <-r.Context.Done():
+				return
+			}
 		case <-r.Context.Done():
-			zap.S().Warnf("remote OutResult file:%s", r.FileName)
+			zap.S().Warnf("remote ctx err :%s", r.FileName)
 			return
 		}
 	}
@@ -158,13 +179,15 @@ func (r RemoteFileTask) GetResponseChan() chan []byte {
 	return r.ResponseChan
 }
 
-func (r RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentChan chan<- []byte) {
+func (r RemoteFileTask) getFileRangeFromRemote(wg *sync.WaitGroup, startPos, endPos int64, contentChan chan<- []byte) {
 	headers := make(map[string]string)
 	if r.authorization != "" {
 		headers["authorization"] = r.authorization
 	}
 	headers["range"] = fmt.Sprintf("bytes=%d-%d", startPos, endPos-1)
-
+	defer func() {
+		wg.Done()
+	}()
 	var rawData []byte
 	chunkByteLen := 0
 	var contentEncoding, contentLengthStr = "", ""
@@ -184,7 +207,11 @@ func (r RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentCh
 					if contentEncoding != "" { // 数据有编码，先收集，后面解码
 						rawData = append(rawData, chunk[:n]...)
 					} else {
-						contentChan <- chunk[:n] // 没有编码，可以直接返回原始数据
+						select {
+						case contentChan <- chunk[:n]:
+						case <-r.Context.Done():
+							return
+						}
 					}
 					chunkByteLen += n // 原始数量
 				}

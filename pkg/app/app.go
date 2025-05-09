@@ -17,6 +17,7 @@ type AppInfo interface {
 	ID() string
 	Name() string
 	Version() string
+	StartTime() string
 }
 
 type App struct {
@@ -30,6 +31,7 @@ func New(opts ...Option) *App {
 		ctx:         context.Background(), // 全局最基础的ctx
 		sigs:        []os.Signal{syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGINT},
 		stopTimeout: 10 * time.Second,
+		startTime:   time.Now().Format(time.DateTime),
 	}
 	for _, opt := range opts {
 		opt(&o)
@@ -47,6 +49,8 @@ func (a *App) ID() string { return a.opts.id }
 func (a *App) Name() string { return a.opts.name }
 
 func (a *App) Version() string { return a.opts.version }
+
+func (a *App) StartTime() string { return a.opts.startTime }
 
 func (a *App) Stop() (err error) {
 	if a.cancel != nil {

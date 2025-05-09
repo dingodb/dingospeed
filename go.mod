@@ -1,4 +1,4 @@
-module dingo-hfmirror
+module dingospeed
 
 go 1.23.0
 

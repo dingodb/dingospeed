@@ -4,8 +4,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"dingo-hfmirror/pkg/common"
-	"dingo-hfmirror/pkg/config"
+	"dingospeed/pkg/common"
+	"dingospeed/pkg/config"
 
 	"go.uber.org/zap"
 )

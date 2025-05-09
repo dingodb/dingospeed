@@ -20,13 +20,13 @@
 package main
 
 import (
-	"dingo-hfmirror/internal/dao"
-	"dingo-hfmirror/internal/handler"
-	"dingo-hfmirror/internal/router"
-	"dingo-hfmirror/internal/server"
-	"dingo-hfmirror/internal/service"
-	"dingo-hfmirror/pkg/app"
-	"dingo-hfmirror/pkg/config"
+	"dingospeed/internal/dao"
+	"dingospeed/internal/handler"
+	"dingospeed/internal/router"
+	"dingospeed/internal/server"
+	"dingospeed/internal/service"
+	"dingospeed/pkg/app"
+	"dingospeed/pkg/config"
 
 	"github.com/google/wire"
 )

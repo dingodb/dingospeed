@@ -28,7 +28,7 @@ import (
 	"strings"
 	"time"
 
-	myerr "dingo-hfmirror/pkg/error"
+	myerr "dingospeed/pkg/error"
 
 	"github.com/bytedance/sonic"
 	"github.com/google/uuid"

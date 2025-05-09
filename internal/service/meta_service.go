@@ -15,10 +15,10 @@
 package service
 
 import (
-	"dingo-hfmirror/internal/dao"
-	"dingo-hfmirror/pkg/config"
-	"dingo-hfmirror/pkg/consts"
-	"dingo-hfmirror/pkg/util"
+	"dingospeed/internal/dao"
+	"dingospeed/pkg/config"
+	"dingospeed/pkg/consts"
+	"dingospeed/pkg/util"
 
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"

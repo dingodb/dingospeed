@@ -23,7 +23,7 @@ import (
 	"syscall"
 	"time"
 
-	"dingo-hfmirror/pkg/common"
+	"dingospeed/pkg/common"
 
 	"github.com/bytedance/sonic"
 )

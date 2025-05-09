@@ -41,8 +41,8 @@ func NewPool(size int) *Pool {
 		size:     size,
 	}
 
-	p.wg.Add(size)
 	for i := 0; i < size; i++ {
+		p.wg.Add(1)
 		go p.worker()
 	}
 

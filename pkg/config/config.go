@@ -20,8 +20,8 @@ import (
 	"os"
 	"time"
 
-	"dingo-hfmirror/internal/model"
-	myerr "dingo-hfmirror/pkg/error"
+	"dingospeed/internal/model"
+	myerr "dingospeed/pkg/error"
 
 	"github.com/go-playground/validator/v10"
 	"go.uber.org/zap"
@@ -46,6 +46,7 @@ type ServerConfig struct {
 	Host        string `json:"host" yaml:"host"`
 	Port        int    `json:"port" yaml:"port"`
 	PProf       bool   `json:"pprof" yaml:"pprof"`
+	PProfPort   int    `json:"pprofPort" yaml:"pprofPort"`
 	Metrics     bool   `json:"metrics" yaml:"metrics"`
 	Online      bool   `json:"online" yaml:"online"`
 	Repos       string `json:"repos" yaml:"repos"`
@@ -148,7 +149,7 @@ func (c *Config) GetPrefetchMemoryUsedThreshold() float64 {
 }
 
 func (c *Config) GetRemoteFileRangeWaitTime() time.Duration {
-	return time.Duration(c.Download.RemoteFileRangeWaitTime) * time.Second
+	return time.Duration(c.Download.RemoteFileRangeWaitTime) * time.Millisecond
 }
 
 func (c *Config) GetPrefetchBlocks() int64 {
@@ -163,6 +164,10 @@ func (c *Config) GetDiskCollectTimePeriod() time.Duration {
 	return time.Duration(c.DiskClean.CollectTimePeriod) * time.Hour
 }
 
+func (c *Config) EnableMetric() bool {
+	return c.Server.Metrics
+}
+
 func (c *Config) CacheCleanStrategy() string {
 	return c.DiskClean.CacheCleanStrategy
 }
@@ -173,6 +178,9 @@ func (c *Config) SetDefaults() {
 	}
 	if c.Server.Host == "" {
 		c.Server.Host = "localhost"
+	}
+	if c.Server.PProfPort == 0 {
+		c.Server.PProfPort = 6060
 	}
 	if c.Download.GoroutineMaxNumPerFile == 0 {
 		c.Download.GoroutineMaxNumPerFile = 8
@@ -197,6 +205,9 @@ func (c *Config) SetDefaults() {
 	}
 	if c.Download.RespChanSize == 0 {
 		c.Download.RespChanSize = 30
+	}
+	if c.DiskClean.CollectTimePeriod == 0 {
+		c.DiskClean.CollectTimePeriod = 1
 	}
 }
 

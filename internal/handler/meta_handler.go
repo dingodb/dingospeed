@@ -17,7 +17,7 @@ package handler
 import (
 	"strings"
 
-	"dingo-hfmirror/internal/service"
+	"dingospeed/internal/service"
 
 	"github.com/labstack/echo/v4"
 )

@@ -55,7 +55,7 @@ make license
 
 ```
 # 快速开始
-将编译生成的二进制部署文件，执行./dingo-hfmirror启动。然后将环境变量`HF_ENDPOINT`设置为镜像站点(这里是http://localhost:8090/)。
+将编译生成的二进制部署文件，执行./dingospeed启动。然后将环境变量`HF_ENDPOINT`设置为镜像站点(这里是http://localhost:8090/)。
 
 Linux:
 ```shell

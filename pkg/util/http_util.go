@@ -21,8 +21,10 @@ import (
 	"net/url"
 	"time"
 
-	"dingo-hfmirror/pkg/common"
-	"dingo-hfmirror/pkg/config"
+	"dingospeed/pkg/common"
+	"dingospeed/pkg/config"
+	"dingospeed/pkg/consts"
+	"dingospeed/pkg/prom"
 
 	"github.com/avast/retry-go"
 	"github.com/labstack/echo/v4"
@@ -177,6 +179,11 @@ func ResponseStream(c echo.Context, fileName string, headers map[string]string, 
 				if _, err := c.Response().Write(b); err != nil {
 					zap.S().Warnf("ResponseStream write err,file:%s,%v", fileName, err)
 					return ErrorProxyTimeout(c)
+				}
+				if config.SysConfig.EnableMetric() {
+					// 原子性地更新响应总数
+					source := Itoa(c.Get(consts.PromSource))
+					prom.PromRequestByteCounter(prom.RequestResponseByte, source, int64(len(b)))
 				}
 			}
 			flusher.Flush()

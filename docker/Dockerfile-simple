@@ -4,7 +4,7 @@ LABEL stage=gobuilder
 
 WORKDIR /app
 
-COPY ./dingo-hfmirror .
+COPY ./bin/dingospeed .
 
 # Expose the 8090 port of the container for external acces
 EXPOSE 8090
@@ -12,4 +12,4 @@ EXPOSE 8090
 VOLUME /app/repos
 VOLUME /app/log
 
-CMD ["./dingo-hfmirror"]
+CMD ["./dingospeed"]

@@ -16,21 +16,22 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
 	"runtime"
 
-	"dingo-hfmirror/internal/server"
-	"dingo-hfmirror/pkg/app"
-	"dingo-hfmirror/pkg/config"
-	log "dingo-hfmirror/pkg/logger"
+	"dingospeed/internal/server"
+	"dingospeed/pkg/app"
+	"dingospeed/pkg/config"
+	log "dingospeed/pkg/logger"
 )
 
 var (
 	configPath string
 	id, _      = os.Hostname() //nolint:errcheck
-	Name       = "dingo-hfmirror"
+	Name       = "dingospeed"
 	Version    string
 )
 
@@ -62,8 +63,7 @@ func main() {
 		runtime.SetMutexProfileFraction(1)
 
 		go func() {
-			// pprof性能分析 https://blog.csdn.net/water1209/article/details/126778930
-			panic(http.ListenAndServe(":6060", nil))
+			panic(http.ListenAndServe(fmt.Sprintf(":%d", config.SysConfig.Server.PProfPort), nil))
 		}()
 	}
 

@@ -1,9 +1,9 @@
 version: '3.8'
 
 services:
-    dingo-hfmirror:
-        image: harbor.dev01.zetyun.cn/dingofs/dingo-hfmirror:v4
-        container_name: dingo-hfmirror
+    dingospeed:
+        image: harbor.dev01.zetyun.cn/dingofs/dingospeed:v4
+        container_name: dingospeed
           #environment:
           #- http_proxy=http://100.64.1.68:1080
           #- https_proxy=http://100.64.1.68:1080
@@ -19,9 +19,9 @@ services:
             - TZ=Asia/Shanghai
         cpus: '25'  # 限制 CPU 为 20 核
         mem_limit: '50g'  # 限制内存为 50G
-    dingo-hfmirror-online:
-        image: harbor.dev01.zetyun.cn/dingofs/dingo-hfmirror-online:v4
-        container_name: dingo-hfmirror-online
+    dingospeed-online:
+        image: harbor.dev01.zetyun.cn/dingofs/dingospeed-online:v4
+        container_name: dingospeed-online
         environment:
             - http_proxy=http://10.201.44.68:1080
             - https_proxy=http://10.201.44.68:1080

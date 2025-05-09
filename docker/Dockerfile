@@ -18,7 +18,7 @@ RUN go generate ./...
 RUN mkdir "repos"
 
 # Compile Go project and generate executable file
-RUN mkdir -p bin/ && CGO_ENABLED=0 GOOS=linux GOARCH=amd64  go build -ldflags "-s -w -X main.Version=$(VERSION)" -o ./bin/dingo-hfmirror dingo-hfmirror/cmd
+RUN mkdir -p bin/ && CGO_ENABLED=0 GOOS=linux GOARCH=amd64  go build -ldflags "-s -w -X main.Version=$(VERSION)" -o ./bin/dingospeed dingospeed/cmd
 
 # Expose the 8090 port of the container for external acces
 EXPOSE 8090
@@ -26,4 +26,4 @@ EXPOSE 8090
 VOLUME /app/repos
 VOLUME /app/log
 
-CMD ["./bin/dingo-hfmirror"]
+CMD ["./bin/dingospeed"]

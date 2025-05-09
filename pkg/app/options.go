@@ -5,7 +5,7 @@ import (
 	"os"
 	"time"
 
-	"dingo-hfmirror/pkg/server"
+	"dingospeed/pkg/server"
 )
 
 type Option func(o *options)
@@ -14,6 +14,7 @@ type options struct {
 	id          string
 	name        string
 	version     string
+	startTime   string
 	ctx         context.Context
 	sigs        []os.Signal
 	stopTimeout time.Duration

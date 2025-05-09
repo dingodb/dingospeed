@@ -22,9 +22,9 @@ import (
 	"os"
 	"sync"
 
-	cache "dingo-hfmirror/internal/data"
-	"dingo-hfmirror/pkg/config"
-	"dingo-hfmirror/pkg/util"
+	cache "dingospeed/internal/data"
+	"dingospeed/pkg/config"
+	"dingospeed/pkg/util"
 
 	"go.uber.org/zap"
 )

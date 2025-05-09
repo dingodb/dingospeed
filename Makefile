@@ -2,7 +2,9 @@ GOHOSTOS:=$(shell go env GOHOSTOS)
 GOPATH:=$(shell go env GOPATH)
 VERSION=$(shell git describe --tags --always)
 PACKAGES=$(shell go list ./... | grep -v /vendor/)
-REMOTE_DIR=/root/hub-download/dingo-hfmirror
+CURRENTTIME=$(shell date +"%Y%m%d%H%M%S")
+
+REMOTE_DIR=/root/hub-download/dingospeed
 
 ifeq ($(GOHOSTOS), windows)
 	#the `find.exe` is different from `find` in bash/shell.
@@ -57,24 +59,29 @@ vet:
 .PHONY: build
 # build
 build:
-	mkdir -p bin/ && go build -ldflags "-s -w -X main.Version=$(VERSION)" -o ./bin/dingo-hfmirror dingo-hfmirror/cmd
+	mkdir -p bin/ && go build -ldflags "-s -w -X main.Version=$(VERSION)" -o ./bin/dingospeed dingospeed/cmd
 
 .PHONY: macbuild
 macbuild:
-	mkdir -p bin/ && CGO_ENABLED=0 GOOS=linux GOARCH=amd64  go build -ldflags "-s -w -X main.Version=$(VERSION)" -o ./bin/dingo-hfmirror dingo-hfmirror/cmd
+	mkdir -p bin/ && CGO_ENABLED=0 GOOS=linux GOARCH=amd64  go build -ldflags "-s -w -X main.Version=$(VERSION)" -o ./bin/dingospeed dingospeed/cmd
 
 .PHONY: scpDev
 scpDev:
-	scp bin/dingo-hfmirror root@172.30.14.123:/root/hub-download/dingo-hfmirror
+	scp bin/dingospeed root@172.30.14.123:/root/hub-download/dingospeed
 
 .PHONY: scpTest
 scpTest:
-	scp bin/dingo-hfmirror root@10.220.70.124:/root/hub-download/dingo-hfmirror
+	scp bin/dingospeed root@10.220.70.124:/root/hub-download/dingospeed
 
 # go install github.com/superproj/addlicense@latest
 .PHONY: license
 license:
 	addlicense -v -f LICENSE cmd pkg internal
+
+.PHONY: docker
+docker:
+	make macbuild;
+	docker build -f docker/Dockerfile-simple -t dingospeed:$(CURRENTTIME) .
 
 .PHONY: all
 # generate all
