@@ -19,6 +19,7 @@ import (
 	"net/url"
 
 	"dingo-hfmirror/internal/service"
+	"dingo-hfmirror/pkg/config"
 	"dingo-hfmirror/pkg/consts"
 	"dingo-hfmirror/pkg/prom"
 	"dingo-hfmirror/pkg/util"
@@ -133,31 +134,29 @@ func (handler *FileHandler) GetFileHandler3(c echo.Context) error {
 }
 
 func (handler *FileHandler) fileGetCommon(c echo.Context, repoType, org, repo, commit, filePath string) error {
-	labels := prometheus.Labels{}
-	labels[repoType] = fmt.Sprintf("%s/%s", org, repo)
-	if _, ok := consts.RepoTypesMapping[repoType]; ok {
-		labels["status"] = "total"
-		if repoType == "models" {
-			prom.RequestModelCnt.With(labels).Inc()
-		} else if repoType == "datasets" {
-			prom.RequestDataSetCnt.With(labels).Inc()
+	if config.SysConfig.EnableMetric() {
+		labels := prometheus.Labels{}
+		labels[repoType] = fmt.Sprintf("%s/%s", org, repo)
+		source := util.Itoa(c.Get(consts.PromSource))
+		if _, ok := consts.RepoTypesMapping[repoType]; ok {
+			labels["source"] = source
+			if repoType == "models" {
+				prom.RequestModelCnt.With(labels).Inc()
+			} else if repoType == "datasets" {
+				prom.RequestDataSetCnt.With(labels).Inc()
+			}
 		}
-	}
-	err := handler.fileService.FileGetCommon(c, repoType, org, repo, commit, filePath)
-	if err != nil {
-		labels["status"] = "failed"
-		if repoType == "models" {
-			prom.RequestModelCnt.With(labels).Inc()
-		} else if repoType == "datasets" {
-			prom.RequestDataSetCnt.With(labels).Inc()
+		err := handler.fileService.FileGetCommon(c, repoType, org, repo, commit, filePath)
+		if _, ok := consts.RepoTypesMapping[repoType]; ok {
+			labels["source"] = source
+			if repoType == "models" {
+				prom.RequestModelCnt.With(labels).Dec()
+			} else if repoType == "datasets" {
+				prom.RequestDataSetCnt.With(labels).Dec()
+			}
 		}
+		return err
 	} else {
-		labels["status"] = "success"
-		if repoType == "models" {
-			prom.RequestModelCnt.With(labels).Inc()
-		} else if repoType == "datasets" {
-			prom.RequestDataSetCnt.With(labels).Inc()
-		}
+		return handler.fileService.FileGetCommon(c, repoType, org, repo, commit, filePath)
 	}
-	return err
 }

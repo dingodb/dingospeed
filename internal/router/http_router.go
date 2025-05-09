@@ -43,7 +43,7 @@ func NewHttpRouter(echo *echo.Echo, fileHandler *handler.FileHandler, metaHandle
 func (r *HttpRouter) initRouter() {
 	// 系统信息
 	r.echo.GET("/info", r.sysHandler.Info)
-	if config.SysConfig.Server.Metrics {
+	if config.SysConfig.EnableMetric() {
 		r.echo.GET("/metrics", echo.WrapHandler(promhttp.Handler()))
 	}
 

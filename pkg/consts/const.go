@@ -41,3 +41,4 @@ const (
 )
 
 const RespChanSize = 100
+const PromSource = "source"

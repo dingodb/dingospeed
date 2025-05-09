@@ -4,6 +4,7 @@ type SystemInfo struct {
 	Id                string  `json:"id"`
 	Name              string  `json:"name"`
 	Version           string  `json:"version"`
+	StartTime         string  `json:"startTime"`
 	CollectTime       int64   `json:"-"`
 	MemoryUsedPercent float64 `json:"-"`
 }

@@ -3,6 +3,7 @@ server:
     host: 0.0.0.0
     port: 8090
     pprof: true
+    pprofPort: 6060
     metrics: true
     online: true #true表示hf-mirror找不到，去hfNetLoc地址查找并下载模型数据，false表示本地如果没有，直接返回没有
     repos: ./repos
@@ -17,12 +18,12 @@ download:
     respChanSize: 30             #响应队列大小
     remoteFileBufferSize: 8388608  #每个分区文件的结果Queue的缓存大小，即当前文件下载时，缓存8MB的数据
     remoteFileRangeSize: 0    #按照这个长度分块下载，0为不切分,测试选项：8388608（8M），67108864（64M），134217728（128M）,536870912(512M),1GB（1073741824）
-    remoteFileRangeWaitTime: 1   #每个分区文件下载任务提交时间间隔，默认1s，单位（s）。
+    remoteFileRangeWaitTime: 0   #每个分区文件下载任务提交时间间隔，单位（ms）。
     goroutineMaxNumPerFile: 8    #远程下载任务启动的最大协程数量
 
 
 cache:
-    enabled: true               #是否启用缓存
+    enabled: false               #是否启用缓存
     type: 1                     # 采用哪种组件缓存，可选项0(map), 1(Ristretto)
     collectTimePeriod: 5        #定期检测内存使用量时间周期，单位秒（S）
     prefetchMemoryUsedThreshold: 90  #当内存使用量达到该值，将不会预读取，不缓存数据块

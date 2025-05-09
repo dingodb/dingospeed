@@ -14,6 +14,7 @@ type options struct {
 	id          string
 	name        string
 	version     string
+	startTime   string
 	ctx         context.Context
 	sigs        []os.Signal
 	stopTimeout time.Duration

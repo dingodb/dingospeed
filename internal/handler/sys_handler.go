@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"dingo-hfmirror/internal/model"
 	"dingo-hfmirror/internal/service"
 	"dingo-hfmirror/pkg/app"
 	"dingo-hfmirror/pkg/util"
@@ -19,11 +20,12 @@ func NewSysHandler(sysService *service.SysService) *SysHandler {
 }
 
 func (s *SysHandler) Info(c echo.Context) error {
-	info := s.sysService.Info()
+	info := &model.SystemInfo{}
 	if appInfo, ok := app.FromContext(c.Request().Context()); ok {
 		info.Id = appInfo.ID()
 		info.Name = appInfo.Name()
 		info.Version = appInfo.Version()
+		info.StartTime = appInfo.StartTime()
 	}
 	return util.ResponseData(c, info)
 }

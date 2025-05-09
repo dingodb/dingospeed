@@ -2,6 +2,8 @@ GOHOSTOS:=$(shell go env GOHOSTOS)
 GOPATH:=$(shell go env GOPATH)
 VERSION=$(shell git describe --tags --always)
 PACKAGES=$(shell go list ./... | grep -v /vendor/)
+CURRENTTIME=$(shell date +"%Y%m%d%H%M%S")
+
 REMOTE_DIR=/root/hub-download/dingo-hfmirror
 
 ifeq ($(GOHOSTOS), windows)
@@ -75,6 +77,11 @@ scpTest:
 .PHONY: license
 license:
 	addlicense -v -f LICENSE cmd pkg internal
+
+.PHONY: docker
+docker:
+	make macbuild;
+	docker build -f docker/Dockerfile-simple -t dingo-hfmirror:$(CURRENTTIME) .
 
 .PHONY: all
 # generate all

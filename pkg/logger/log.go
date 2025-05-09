@@ -58,7 +58,7 @@ func getWriteSyncer() zapcore.WriteSyncer {
 		MaxSize:    config.SysConfig.Log.MaxSize, // megabytes
 		MaxBackups: config.SysConfig.Log.MaxBackups,
 		MaxAge:     config.SysConfig.Log.MaxAge, // days
-		Compress:   true,                        // disabled by default
+		Compress:   false,                       // disabled by default
 	}
 	return zapcore.AddSync(l)
 }

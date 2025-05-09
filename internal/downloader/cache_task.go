@@ -52,7 +52,7 @@ func (c CacheFileTask) OutResult() {
 	curPos := c.RangeStartPos
 	for curBlock := startBlock; curBlock <= endBlock; curBlock++ {
 		if c.Context.Err() != nil {
-			zap.S().Warnf("cache OutResult file:%s", c.FileName)
+			zap.S().Warnf("for cache ctx err :%s", c.FileName)
 			return
 		}
 		_, blockStartPos, blockEndPos := getBlockInfo(curPos, c.DingFile.getBlockSize(), c.DingFile.GetFileSize())
@@ -82,7 +82,11 @@ func (c CacheFileTask) OutResult() {
 			ePos = rawLen
 		}
 		chunk := rawBlock[sPos:ePos]
-		c.ResponseChan <- chunk
+		select {
+		case c.ResponseChan <- chunk:
+		case <-c.Context.Done():
+			return
+		}
 		curPos += int64(len(chunk))
 	}
 	if curPos != c.RangeEndPos {

@@ -16,6 +16,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -62,8 +63,7 @@ func main() {
 		runtime.SetMutexProfileFraction(1)
 
 		go func() {
-			// pprof性能分析 https://blog.csdn.net/water1209/article/details/126778930
-			panic(http.ListenAndServe(":6060", nil))
+			panic(http.ListenAndServe(fmt.Sprintf(":%d", config.SysConfig.Server.PProfPort), nil))
 		}()
 	}
 

@@ -72,7 +72,7 @@ func (s *HTTPServer) Start(ctx context.Context) error {
 }
 
 func (s *HTTPServer) Stop(ctx context.Context) error {
-	zap.S().Infof("[HTTP] server shutdown on: %s", s.lis.Addr().String())
+	zap.S().Infof("[HTTP] server shutdown.")
 	return s.Shutdown(ctx)
 }
 
