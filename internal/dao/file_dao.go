@@ -76,6 +76,7 @@ func (f *FileDao) CheckCommitHf(repoType, org, repo, commit, authorization strin
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusTemporaryRedirect {
 		return true
 	}
+	zap.S().Errorf("CheckCommitHf statusCode:%d", resp.StatusCode)
 	return false
 }
 
@@ -101,7 +102,7 @@ func (f *FileDao) GetCommitHf(repoType, org, repo, commit, authorization string)
 	}
 	var sha CommitHfSha
 	if err = sonic.Unmarshal(resp.Body, &sha); err != nil {
-		zap.S().Errorf("unmarshal error.%v", err)
+		zap.S().Errorf("unmarshal content:%s, error:%v", string(resp.Body), err)
 		return f.getCommitHfOffline(repoType, org, repo, commit)
 	}
 	return sha.Sha, nil
@@ -167,6 +168,7 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, org, repo, commit, 
 		return util.ErrorProxyError(c)
 	}
 	if len(pathsInfos) == 0 {
+		zap.S().Errorf("pathsInfos is null. org:%s, repo:%s, commit:%s, fileName:%s", org, repo, commit, fileName)
 		return util.ErrorEntryNotFound(c)
 	}
 	if len(pathsInfos) != 1 {

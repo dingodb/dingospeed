@@ -39,25 +39,29 @@ func NewMetaService(fileDao *dao.FileDao, metaDao *dao.MetaDao) *MetaService {
 func (d *MetaService) MetaProxyCommon(c echo.Context, repoType, org, repo, commit, method string) error {
 	zap.S().Debugf("MetaProxyCommon:%s/%s/%s/%s/%s", repoType, org, repo, commit, method)
 	if _, ok := consts.RepoTypesMapping[repoType]; !ok {
+		zap.S().Errorf("MetaProxyCommon repoType:%s is not exist RepoTypesMapping", repoType)
 		return util.ErrorPageNotFound(c)
 	}
 	if org == "" && repo == "" {
+		zap.S().Errorf("MetaProxyCommon or and repo is null")
 		return util.ErrorRepoNotFound(c)
 	}
 	authorization := c.Request().Header.Get("authorization")
 	if config.SysConfig.Online() {
 		// check repo
 		if !d.fileDao.CheckCommitHf(repoType, org, repo, "", authorization) {
+			zap.S().Errorf("MetaProxyCommon CheckCommitHf is false, commit is null")
 			return util.ErrorRepoNotFound(c)
 		}
 		// check repo commit
 		if !d.fileDao.CheckCommitHf(repoType, org, repo, commit, authorization) {
+			zap.S().Errorf("MetaProxyCommon CheckCommitHf is false, commit:%s", commit)
 			return util.ErrorRevisionNotFound(c, commit)
 		}
 	}
 	commitSha, err := d.fileDao.GetCommitHf(repoType, org, repo, commit, authorization)
 	if err != nil {
-		zap.S().Errorf("GetCommitHf err.%v", err)
+		zap.S().Errorf("MetaProxyCommon GetCommitHf err.%v", err)
 		return util.ErrorRepoNotFound(c)
 	}
 	if config.SysConfig.Online() && commitSha != commit {

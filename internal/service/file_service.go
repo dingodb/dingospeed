@@ -35,44 +35,42 @@ func NewFileService(fileDao *dao.FileDao) *FileService {
 }
 
 func (d *FileService) FileHeadCommon(c echo.Context, repoType, org, repo, commit, filePath string) error {
-	if _, ok := consts.RepoTypesMapping[repoType]; !ok {
-		return util.ErrorPageNotFound(c)
-	}
-	if org == "" && repo == "" {
-		return util.ErrorRepoNotFound(c)
-	}
-	authorization := c.Request().Header.Get("authorization")
-	if config.SysConfig.Online() {
-		if !d.fileDao.CheckCommitHf(repoType, org, repo, commit, authorization) {
-			return util.ErrorRepoNotFound(c)
-		}
-	}
-	commitSha, err := d.fileDao.GetCommitHf(repoType, org, repo, commit, authorization)
+	commitSha, err := d.getFileCommitSha(c, repoType, org, repo, commit)
 	if err != nil {
-		zap.S().Errorf("GetCommitHf err.%v", err)
-		return util.ErrorRepoNotFound(c)
+		return err
 	}
 	return d.fileDao.FileGetGenerator(c, repoType, org, repo, commitSha, filePath, consts.RequestTypeHead)
 }
 
 func (d *FileService) FileGetCommon(c echo.Context, repoType, org, repo, commit, filePath string) error {
 	zap.S().Infof("exec file get:%s/%s/%s/%s/%s, remoteAdd:%s", repoType, org, repo, commit, filePath, c.Request().RemoteAddr)
+	commitSha, err := d.getFileCommitSha(c, repoType, org, repo, commit)
+	if err != nil {
+		return err
+	}
+	return d.fileDao.FileGetGenerator(c, repoType, org, repo, commitSha, filePath, consts.RequestTypeGet)
+}
+
+func (d *FileService) getFileCommitSha(c echo.Context, repoType, org, repo, commit string) (string, error) {
 	if _, ok := consts.RepoTypesMapping[repoType]; !ok {
-		return util.ErrorPageNotFound(c)
+		zap.S().Errorf("FileGetCommon repoType:%s is not exist RepoTypesMapping", repoType)
+		return "", util.ErrorPageNotFound(c)
 	}
 	if org == "" && repo == "" {
-		return util.ErrorRepoNotFound(c)
+		zap.S().Errorf("FileGetCommon or and repo is null")
+		return "", util.ErrorRepoNotFound(c)
 	}
 	authorization := c.Request().Header.Get("authorization")
 	if config.SysConfig.Online() {
 		if !d.fileDao.CheckCommitHf(repoType, org, repo, commit, authorization) { // 若请求找不到，直接返回仓库不存在。
-			return util.ErrorRepoNotFound(c)
+			zap.S().Errorf("FileGetCommon CheckCommitHf is false, commit:%s", commit)
+			return "", util.ErrorRevisionNotFound(c, commit)
 		}
 	}
 	commitSha, err := d.fileDao.GetCommitHf(repoType, org, repo, commit, authorization)
 	if err != nil {
-		zap.S().Errorf("GetCommitHf err.%v", err)
-		return util.ErrorRepoNotFound(c)
+		zap.S().Errorf(" getFileCommitSha GetCommitHf err.%v", err)
+		return "", util.ErrorRepoNotFound(c)
 	}
-	return d.fileDao.FileGetGenerator(c, repoType, org, repo, commitSha, filePath, consts.RequestTypeGet)
+	return commitSha, nil
 }

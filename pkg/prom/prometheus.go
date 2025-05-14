@@ -46,12 +46,12 @@ var (
 
 	// 流量统计
 
-	RequestRemoteByte = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	RequestRemoteByte = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "request_remote_byte",
 		Help: "Total number of request remote byte",
 	}, []string{"source"})
 
-	RequestResponseByte = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	RequestResponseByte = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "request_response_byte",
 		Help: "Total number of request response byte",
 	}, []string{"source"})
@@ -63,7 +63,7 @@ func PromSourceCounter(vec *prometheus.GaugeVec, source string) {
 	vec.With(labels).Inc()
 }
 
-func PromRequestByteCounter(vec *prometheus.GaugeVec, source string, len int64) {
+func PromRequestByteCounter(vec *prometheus.CounterVec, source string, len int64) {
 	labels := prometheus.Labels{}
 	labels["source"] = source
 	vec.With(labels).Add(float64(len))
