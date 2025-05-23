@@ -26,20 +26,20 @@ import (
 )
 
 // 整个文件
-func FileDownload(ctx context.Context, hfUrl, savePath, fileName, authorization string, fileSize, startPos, endPos int64, responseChan chan []byte) {
+func FileDownload(ctx context.Context, hfUrl, blobsFile, filesPath, orgRepo, fileName, authorization string, fileSize, startPos, endPos int64, responseChan chan []byte) {
 	var (
 		remoteTasks []*RemoteFileTask
 		wg          sync.WaitGroup
 	)
 	defer close(responseChan)
 	dingCacheManager := GetInstance()
-	dingFile, err := dingCacheManager.GetDingFile(savePath, fileSize)
+	dingFile, err := dingCacheManager.GetDingFile(blobsFile, fileSize)
 	if err != nil {
 		zap.S().Errorf("GetDingFile err.%v", err)
 		return
 	}
 	defer func() {
-		dingCacheManager.ReleasedDingFile(savePath)
+		dingCacheManager.ReleasedDingFile(blobsFile)
 	}()
 
 	tasks := getContiguousRanges(ctx, dingFile, startPos, endPos)
@@ -59,15 +59,37 @@ func FileDownload(ctx context.Context, hfUrl, savePath, fileName, authorization 
 			remote.ResponseChan = responseChan
 			remote.TaskSize = taskSize
 			remote.FileName = fileName
+			remote.blobsFile = blobsFile
+			remote.filesPath = filesPath
+			remote.orgRepo = orgRepo
 			remoteTasks = append(remoteTasks, remote)
 		} else if cache, ok := task.(*CacheFileTask); ok {
 			cache.Context = ctx
 			cache.DingFile = dingFile
 			cache.TaskSize = taskSize
 			cache.FileName = fileName
+			cache.blobsFile = blobsFile
+			cache.filesPath = filesPath
+			cache.orgRepo = orgRepo
 			cache.ResponseChan = responseChan
 		}
 	}
+	wg.Add(1)
+	go func() {
+		defer func() {
+			wg.Done()
+		}()
+		for i := 0; i < len(tasks); i++ {
+			if ctx.Err() != nil {
+				break
+			}
+			task := tasks[i]
+			if i == 0 {
+				task.GetResponseChan() <- []byte{} // 先建立长连接
+			}
+			task.OutResult()
+		}
+	}()
 	if len(remoteTasks) > 0 {
 		wg.Add(1)
 		go func() {
@@ -76,16 +98,6 @@ func FileDownload(ctx context.Context, hfUrl, savePath, fileName, authorization 
 			}()
 			startRemoteDownload(ctx, remoteTasks)
 		}()
-	}
-	for i := 0; i < len(tasks); i++ {
-		if ctx.Err() != nil {
-			break
-		}
-		task := tasks[i]
-		if i == 0 {
-			task.GetResponseChan() <- []byte{} // 先建立长连接
-		}
-		task.OutResult()
 	}
 	wg.Wait() // 等待协程池所有远程下载任务执行完毕
 }

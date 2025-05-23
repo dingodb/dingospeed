@@ -99,6 +99,33 @@ func GetFileSize(path string) int64 {
 	return fh.Size()
 }
 
+func ReName(src, dst string) {
+	dstDir := filepath.Dir(dst)
+	if err := os.MkdirAll(dstDir, 0755); err != nil {
+		fmt.Printf("创建目录失败: %v\n", err)
+		return
+	}
+	if err := os.Rename(src, dst); err != nil {
+		fmt.Printf("移动文件失败: %v\n", err)
+		return
+	}
+}
+
+func CreateSymlinkIfNotExists(src, dst string) error {
+	_, err := os.Lstat(dst)
+	if os.IsNotExist(err) {
+		// 获取 dst 所在的目录
+		dstDir := filepath.Dir(dst)
+		// 计算 src 相对于 dstDir 的路径
+		relSrc, err := filepath.Rel(dstDir, src)
+		if err != nil {
+			return fmt.Errorf("计算相对路径失败: %v", err)
+		}
+		return os.Symlink(relSrc, dst)
+	}
+	return err
+}
+
 func ReadFileToBytes(filename string) ([]byte, error) {
 	return os.ReadFile(filename)
 }

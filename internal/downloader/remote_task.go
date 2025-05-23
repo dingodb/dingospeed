@@ -53,17 +53,16 @@ func (r RemoteFileTask) DoTask() {
 	)
 	contentChan := make(chan []byte, consts.RespChanSize)
 	rangeStartPos, rangeEndPos := r.RangeStartPos, r.RangeEndPos
-	zap.S().Infof("remote file download:%s, taskNo:%d, size:%d, startPos:%d, endPos:%d", r.FileName, r.TaskNo, r.TaskSize, rangeStartPos, rangeEndPos)
+	zap.S().Infof("remote file download:%s/%s, taskNo:%d, size:%d, startPos:%d, endPos:%d", r.orgRepo, r.FileName, r.TaskNo, r.TaskSize, rangeStartPos, rangeEndPos)
 	wg.Add(2)
 	go r.getFileRangeFromRemote(&wg, rangeStartPos, rangeEndPos, contentChan)
 	curPos := rangeStartPos
 	streamCache := bytes.Buffer{}
 	lastBlock, lastBlockStartPos, lastBlockEndPos := getBlockInfo(curPos, r.DingFile.getBlockSize(), r.DingFile.GetFileSize()) // 块编号，开始位置，结束位置
-	defer func() {
-		close(r.Queue)
-	}()
+	blockNumber := r.DingFile.getBlockNumber()
 	go func() {
 		defer func() {
+			close(r.Queue)
 			wg.Done()
 		}()
 		for {
@@ -113,7 +112,7 @@ func (r RemoteFileTask) DoTask() {
 								if err = r.DingFile.WriteBlock(lastBlock, rawBlock); err != nil {
 									zap.S().Errorf("writeBlock err.%v", err)
 								}
-								zap.S().Debugf("file:%s, taskNo:%d, block：%d write done, range：%d-%d.", r.FileName, r.TaskNo, lastBlock, lastBlockStartPos, lastBlockEndPos)
+								zap.S().Debugf("%s/%s, taskNo:%d, block：%d(%d)write done, range：%d-%d.", r.orgRepo, r.FileName, r.TaskNo, lastBlock, blockNumber, lastBlockStartPos, lastBlockEndPos)
 							}
 						}
 						nextBlock := streamCacheBytes[splitPos:] // 下一个块的数据
@@ -123,7 +122,7 @@ func (r RemoteFileTask) DoTask() {
 					}
 				}
 			case <-r.Context.Done():
-				zap.S().Warnf("file:%s, task %d, ctx done, DoTask exit.", r.FileName, r.TaskNo)
+				zap.S().Warnf("file:%s/%s, task %d, ctx done, DoTask exit.", r.orgRepo, r.FileName, r.TaskNo)
 				return
 			}
 		}
@@ -148,7 +147,10 @@ func (r RemoteFileTask) DoTask() {
 			if err = r.DingFile.WriteBlock(lastBlock, rawBlock); err != nil {
 				zap.S().Errorf("last writeBlock err.%v", err)
 			}
-			zap.S().Debugf("file:%s, taskNo:%d, last block：%d write done, range：%d-%d.", r.FileName, r.TaskNo, lastBlock, lastBlockStartPos, lastBlockEndPos)
+			zap.S().Debugf("file:%s/%s, taskNo:%d, last block：%d(%d)write done, range：%d-%d.", r.orgRepo, r.FileName, r.TaskNo, lastBlock, blockNumber, lastBlockStartPos, lastBlockEndPos)
+			if err = util.CreateSymlinkIfNotExists(r.blobsFile, r.filesPath); err != nil {
+				zap.S().Errorf("filesPath:%s is not link", r.filesPath)
+			}
 		}
 	}
 	if curPos != rangeEndPos {
@@ -161,15 +163,17 @@ func (r RemoteFileTask) OutResult() {
 		select {
 		case data, ok := <-r.Queue:
 			if !ok {
+				zap.S().Debugf("OutResult r.Queue close %s/%s", r.orgRepo, r.FileName)
 				return
 			}
 			select {
 			case r.ResponseChan <- data:
 			case <-r.Context.Done():
+				zap.S().Debugf("OutResult remote Context.Done() %s/%s", r.orgRepo, r.FileName)
 				return
 			}
 		case <-r.Context.Done():
-			zap.S().Warnf("remote ctx err :%s", r.FileName)
+			zap.S().Debugf("OutResult remote ctx err, fileName:%s/%s,err:%v", r.orgRepo, r.FileName, r.Context.Err())
 			return
 		}
 	}
@@ -186,12 +190,12 @@ func (r RemoteFileTask) getFileRangeFromRemote(wg *sync.WaitGroup, startPos, end
 	}
 	headers["range"] = fmt.Sprintf("bytes=%d-%d", startPos, endPos-1)
 	defer func() {
+		close(contentChan)
 		wg.Done()
 	}()
 	var rawData []byte
 	chunkByteLen := 0
 	var contentEncoding, contentLengthStr = "", ""
-	defer close(contentChan)
 
 	if err := util.GetStream(r.hfUrl, headers, config.SysConfig.GetReqTimeOut(), func(resp *http.Response) {
 		contentEncoding = resp.Header.Get("content-encoding")
@@ -199,6 +203,7 @@ func (r RemoteFileTask) getFileRangeFromRemote(wg *sync.WaitGroup, startPos, end
 		for {
 			select {
 			case <-r.Context.Done():
+				zap.S().Warnf("getFileRangeFromRemote Context.Done err :%s", r.FileName)
 				return
 			default:
 				chunk := make([]byte, config.SysConfig.Download.RespChunkSize)

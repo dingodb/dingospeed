@@ -24,6 +24,7 @@ import (
 	myerr "dingospeed/pkg/error"
 
 	"github.com/go-playground/validator/v10"
+	"github.com/labstack/gommon/log"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
@@ -42,17 +43,16 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Mode        string `json:"mode" yaml:"mode"`
-	Host        string `json:"host" yaml:"host"`
-	Port        int    `json:"port" yaml:"port"`
-	PProf       bool   `json:"pprof" yaml:"pprof"`
-	PProfPort   int    `json:"pprofPort" yaml:"pprofPort"`
-	Metrics     bool   `json:"metrics" yaml:"metrics"`
-	Online      bool   `json:"online" yaml:"online"`
-	Repos       string `json:"repos" yaml:"repos"`
-	HfNetLoc    string `json:"hfNetLoc" yaml:"hfNetLoc"`
-	HfScheme    string `json:"hfScheme" yaml:"hfScheme" validate:"oneof=https http"`
-	HfLfsNetLoc string `json:"hfLfsNetLoc" yaml:"hfLfsNetLoc"`
+	Mode      string `json:"mode" yaml:"mode"`
+	Host      string `json:"host" yaml:"host"`
+	Port      int    `json:"port" yaml:"port"`
+	PProf     bool   `json:"pprof" yaml:"pprof"`
+	PProfPort int    `json:"pprofPort" yaml:"pprofPort"`
+	Metrics   bool   `json:"metrics" yaml:"metrics"`
+	Online    bool   `json:"online" yaml:"online"`
+	Repos     string `json:"repos" yaml:"repos"`
+	HfNetLoc  string `json:"hfNetLoc" yaml:"hfNetLoc"`
+	HfScheme  string `json:"hfScheme" yaml:"hfScheme" validate:"oneof=https http"`
 }
 
 type Download struct {
@@ -130,10 +130,6 @@ func (c *Config) GetRate() int {
 
 func (c *Config) GetHfScheme() string {
 	return c.Server.HfScheme
-}
-
-func (c *Config) GetHfLfsNetLoc() string {
-	return c.Server.HfLfsNetLoc
 }
 
 func (c *Config) GetReqTimeOut() time.Duration {
@@ -238,6 +234,12 @@ func Scan(path string) (*Config, error) {
 		return nil, err
 	}
 	SysConfig = &c // 设置全局配置变量
+
+	marshal, err := yaml.Marshal(c)
+	if err != nil {
+		return nil, err
+	}
+	log.Info(string(marshal))
 	SystemInfo = &model.SystemInfo{}
 	return &c, nil
 }

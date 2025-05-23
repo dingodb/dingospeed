@@ -84,7 +84,14 @@ type PathsInfo struct {
 	Type string `json:"type"`
 	Oid  string `json:"oid"`
 	Size int64  `json:"size"`
+	Lfs  Lfs    `json:"lfs"`
 	Path string `json:"path"`
+}
+
+type Lfs struct {
+	Oid         string `json:"oid"`
+	Size        int64  `json:"size"`
+	PointerSize int64  `json:"pointerSize"`
 }
 
 type CacheContent struct {

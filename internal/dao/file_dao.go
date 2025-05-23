@@ -16,7 +16,6 @@ package dao
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -54,7 +53,7 @@ func NewFileDao() *FileDao {
 	return &FileDao{}
 }
 
-func (f *FileDao) CheckCommitHf(repoType, org, repo, commit, authorization string) bool {
+func (f *FileDao) CheckCommitHf(repoType, org, repo, commit, authorization string) (int, error) {
 	orgRepo := util.GetOrgRepo(org, repo)
 	var reqUrl string
 	if commit == "" {
@@ -71,13 +70,13 @@ func (f *FileDao) CheckCommitHf(repoType, org, repo, commit, authorization strin
 	})
 	if err != nil {
 		zap.S().Errorf("call %s error.%v", reqUrl, err)
-		return false
+		return http.StatusInternalServerError, err
 	}
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusTemporaryRedirect {
-		return true
+		return resp.StatusCode, nil
 	}
 	zap.S().Errorf("CheckCommitHf statusCode:%d", resp.StatusCode)
-	return false
+	return resp.StatusCode, myerr.New("request commit err")
 }
 
 // 若为离线或在线请求失败，将进行本地仓库查找。
@@ -128,15 +127,9 @@ func (f *FileDao) getCommitHfOffline(repoType, org, repo, commit string) (string
 
 func (f *FileDao) FileGetGenerator(c echo.Context, repoType, org, repo, commit, fileName, method string) error {
 	orgRepo := util.GetOrgRepo(org, repo)
-	headsPath := fmt.Sprintf("%s/heads/%s/%s/resolve/%s/%s", config.SysConfig.Repos(), repoType, orgRepo, commit, fileName)
 	filesDir := fmt.Sprintf("%s/files/%s/%s/resolve/%s", config.SysConfig.Repos(), repoType, orgRepo, commit)
 	filesPath := fmt.Sprintf("%s/%s", filesDir, fileName)
-	err := util.MakeDirs(headsPath)
-	if err != nil {
-		zap.S().Errorf("create %s dir err.%v", headsPath, err)
-		return util.ErrorProxyError(c)
-	}
-	err = util.MakeDirs(filesPath)
+	err := util.MakeDirs(filesPath)
 	if err != nil {
 		zap.S().Errorf("create %s dir err.%v", filesPath, err)
 		return util.ErrorProxyError(c)
@@ -172,6 +165,7 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, org, repo, commit, 
 		return util.ErrorEntryNotFound(c)
 	}
 	if len(pathsInfos) != 1 {
+		zap.S().Errorf("pathsInfos not equal to 1. org:%s, repo:%s, commit:%s, fileName:%s", org, repo, commit, fileName)
 		return util.ErrorProxyTimeout(c)
 	}
 	respHeaders := map[string]string{}
@@ -191,15 +185,24 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, org, repo, commit, 
 	if commit != "" {
 		respHeaders[strings.ToLower(consts.HUGGINGFACE_HEADER_X_REPO_COMMIT)] = commit
 	}
-	etag, err := f.getResourceEtag(hfUrl, authorization)
-	if err != nil {
-		return util.ErrorProxyTimeout(c)
+	var etag string
+	if pathInfo.Lfs.Oid != "" {
+		etag = pathInfo.Lfs.Oid
+	} else {
+		etag = pathInfo.Oid
 	}
 	respHeaders["etag"] = etag
+	blobsDir := fmt.Sprintf("%s/files/%s/%s/blobs", config.SysConfig.Repos(), repoType, orgRepo)
+	blobsFile := fmt.Sprintf("%s/%s", blobsDir, etag)
+	err = util.MakeDirs(blobsFile)
+	if err != nil {
+		zap.S().Errorf("create %s dir err.%v", blobsDir, err)
+		return util.ErrorProxyError(c)
+	}
 	if method == consts.RequestTypeHead {
 		return util.ResponseHeaders(c, respHeaders)
 	} else if method == consts.RequestTypeGet {
-		return f.FileChunkGet(c, hfUrl, filesPath, fileName, authorization, pathInfo.Size, startPos, endPos, respHeaders)
+		return f.FileChunkGet(c, hfUrl, blobsFile, filesPath, orgRepo, fileName, authorization, pathInfo.Size, startPos, endPos, respHeaders)
 	} else {
 		return util.ErrorMethodError(c)
 	}
@@ -295,41 +298,16 @@ func (f *FileDao) pathsInfoProxy(targetUrl, authorization string, filePaths []st
 	})
 }
 
-func (f *FileDao) getResourceEtag(hfUrl, authorization string) (string, error) {
-	// 计算 hfURL 的 SHA256 哈希值
-	hash := sha256.Sum256([]byte(hfUrl))
-	contentHash := hex.EncodeToString(hash[:])
-	var retEtag string
-	if !config.SysConfig.Online() {
-		retEtag = fmt.Sprintf(`"%s-10"`, contentHash[:32])
-	} else {
-		etagHeaders := make(map[string]string)
-		if authorization != "" {
-			etagHeaders["authorization"] = authorization
-		}
-		resp, err := util.RetryRequest(func() (*common.Response, error) {
-			return util.Head(hfUrl, etagHeaders, config.SysConfig.GetReqTimeOut())
-		})
-		if err != nil {
-			return "", err
-		}
-		if etag := resp.GetKey("etag"); etag != "" {
-			retEtag = etag
-		} else {
-			retEtag = fmt.Sprintf(`"%s-10"`, contentHash[:32])
-		}
-	}
-	return retEtag, nil
-}
-
-func (f *FileDao) FileChunkGet(c echo.Context, hfUrl, filesPath, fileName, authorization string, fileSize, startPos, endPos int64, respHeaders map[string]string) error {
+func (f *FileDao) FileChunkGet(c echo.Context, hfUrl, blobsFile, filesPath, orgRepo, fileName, authorization string, fileSize, startPos, endPos int64, respHeaders map[string]string) error {
 	responseChan := make(chan []byte, config.SysConfig.Download.RespChanSize)
 	source := util.Itoa(c.Get(consts.PromSource))
 	bgCtx := context.WithValue(c.Request().Context(), consts.PromSource, source)
 	ctx, cancel := context.WithCancel(bgCtx)
-	defer cancel()
-	go downloader.FileDownload(ctx, hfUrl, filesPath, fileName, authorization, fileSize, startPos, endPos, responseChan)
-	if err := util.ResponseStream(c, fileName, respHeaders, responseChan); err != nil {
+	defer func() {
+		cancel()
+	}()
+	go downloader.FileDownload(ctx, hfUrl, blobsFile, filesPath, orgRepo, fileName, authorization, fileSize, startPos, endPos, responseChan)
+	if err := util.ResponseStream(c, fmt.Sprintf("%s/%s", orgRepo, fileName), respHeaders, responseChan); err != nil {
 		zap.S().Warnf("FileChunkGet stream err.%v", err)
 		return util.ErrorProxyTimeout(c)
 	}

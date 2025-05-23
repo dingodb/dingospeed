@@ -62,9 +62,9 @@ func (d *FileService) getFileCommitSha(c echo.Context, repoType, org, repo, comm
 	}
 	authorization := c.Request().Header.Get("authorization")
 	if config.SysConfig.Online() {
-		if !d.fileDao.CheckCommitHf(repoType, org, repo, commit, authorization) { // 若请求找不到，直接返回仓库不存在。
+		if code, err := d.fileDao.CheckCommitHf(repoType, org, repo, commit, authorization); err != nil { // 若请求找不到，直接返回仓库不存在。
 			zap.S().Errorf("FileGetCommon CheckCommitHf is false, commit:%s", commit)
-			return "", util.ErrorRevisionNotFound(c, commit)
+			return "", util.ErrorEntryUnknown(c, code, err.Error())
 		}
 	}
 	commitSha, err := d.fileDao.GetCommitHf(repoType, org, repo, commit, authorization)

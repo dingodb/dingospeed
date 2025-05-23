@@ -4,6 +4,7 @@ import (
 	"dingospeed/internal/model"
 	"dingospeed/internal/service"
 	"dingospeed/pkg/app"
+	"dingospeed/pkg/config"
 	"dingospeed/pkg/util"
 
 	"github.com/labstack/echo/v4"
@@ -27,5 +28,6 @@ func (s *SysHandler) Info(c echo.Context) error {
 		info.Version = appInfo.Version()
 		info.StartTime = appInfo.StartTime()
 	}
+	info.HfNetLoc = config.SysConfig.GetHfNetLoc()
 	return util.ResponseData(c, info)
 }

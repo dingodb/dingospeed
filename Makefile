@@ -65,6 +65,15 @@ build:
 macbuild:
 	mkdir -p bin/ && CGO_ENABLED=0 GOOS=linux GOARCH=amd64  go build -ldflags "-s -w -X main.Version=$(VERSION)" -o ./bin/dingospeed dingospeed/cmd
 
+.PHONY: repairbuild
+repairbuild:
+	mkdir -p bin/ && CGO_ENABLED=0 GOOS=linux GOARCH=amd64  go build -ldflags "-s -w -X main.Version=$(VERSION)" -o ./bin/repair dingospeed/repair
+
+.PHONY: repairScpDev
+repairScpDev:
+	scp bin/repair root@172.30.14.123:/root/hub-download/dingospeed
+
+
 .PHONY: scpDev
 scpDev:
 	scp bin/dingospeed root@172.30.14.123:/root/hub-download/dingospeed

@@ -17,6 +17,8 @@ package downloader
 import (
 	"context"
 
+	"dingospeed/pkg/util"
+
 	"go.uber.org/zap"
 )
 
@@ -29,6 +31,9 @@ type DownloadTask struct {
 	DingFile      *DingCache      `json:"-"`
 	ResponseChan  chan []byte     `json:"-"`
 	Context       context.Context `json:"-"`
+	blobsFile     string
+	filesPath     string
+	orgRepo       string
 }
 
 type CacheFileTask struct {
@@ -92,7 +97,10 @@ func (c CacheFileTask) OutResult() {
 	if curPos != c.RangeEndPos {
 		zap.S().Errorf("file:%s, cache range from %d to %d is incomplete.", c.FileName, c.RangeStartPos, c.RangeEndPos)
 	}
-	zap.S().Infof("cache file out:%s, taskNo:%d, size:%d, startPos:%d, endPos:%d", c.FileName, c.TaskNo, c.TaskSize, c.RangeStartPos, c.RangeEndPos)
+	zap.S().Infof("cache file out:%s/%s, taskNo:%d, size:%d, startPos:%d, endPos:%d", c.orgRepo, c.FileName, c.TaskNo, c.TaskSize, c.RangeStartPos, c.RangeEndPos)
+	if err := util.CreateSymlinkIfNotExists(c.blobsFile, c.filesPath); err != nil {
+		zap.S().Errorf("filesPath:%s is not link", c.filesPath)
+	}
 }
 
 func (c CacheFileTask) GetResponseChan() chan []byte {

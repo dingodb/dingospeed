@@ -49,14 +49,14 @@ func (d *MetaService) MetaProxyCommon(c echo.Context, repoType, org, repo, commi
 	authorization := c.Request().Header.Get("authorization")
 	if config.SysConfig.Online() {
 		// check repo
-		if !d.fileDao.CheckCommitHf(repoType, org, repo, "", authorization) {
+		if code, err := d.fileDao.CheckCommitHf(repoType, org, repo, "", authorization); err != nil {
 			zap.S().Errorf("MetaProxyCommon CheckCommitHf is false, commit is null")
-			return util.ErrorRepoNotFound(c)
+			return util.ErrorEntryUnknown(c, code, err.Error())
 		}
 		// check repo commit
-		if !d.fileDao.CheckCommitHf(repoType, org, repo, commit, authorization) {
+		if code, err := d.fileDao.CheckCommitHf(repoType, org, repo, commit, authorization); err != nil {
 			zap.S().Errorf("MetaProxyCommon CheckCommitHf is false, commit:%s", commit)
-			return util.ErrorRevisionNotFound(c, commit)
+			return util.ErrorEntryUnknown(c, code, err.Error())
 		}
 	}
 	commitSha, err := d.fileDao.GetCommitHf(repoType, org, repo, commit, authorization)

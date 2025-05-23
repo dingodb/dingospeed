@@ -40,7 +40,7 @@ func QueueLimitMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 					defer func() {
 						<-requestQueue
 					}()
-					if err := next(c); err != nil {
+					if err = next(c); err != nil {
 						prom.PromSourceCounter(prom.RequestFailCnt, source)
 						return err
 					} else {

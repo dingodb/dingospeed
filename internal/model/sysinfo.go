@@ -5,6 +5,7 @@ type SystemInfo struct {
 	Name              string  `json:"name"`
 	Version           string  `json:"version"`
 	StartTime         string  `json:"startTime"`
+	HfNetLoc          string  `json:"hfNetLoc"`
 	CollectTime       int64   `json:"-"`
 	MemoryUsedPercent float64 `json:"-"`
 }
