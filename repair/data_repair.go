@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 
@@ -99,13 +101,13 @@ func repoRepair(repoPath, repoType, org, repo string) {
 	}
 	fileBlobs := fmt.Sprintf("%s/blobs", filePath)
 	if exist := util.FileExists(fileBlobs); exist {
-		log.Errorf(fmt.Sprintf("该仓库已完成修复：%s", fileBlobs))
-		return
+		// log.Errorf(fmt.Sprintf("该仓库已完成修复：%s", fileBlobs))
+		// return
 	}
 	metaGetPath := fmt.Sprintf("%s/api/%s/%s/%s/revision/main/meta_get.json", repoPath, repoType, org, repo)
 	if exist := util.FileExists(metaGetPath); !exist {
-		log.Errorf(fmt.Sprintf("该%s/%s不存在meta_get文件，无法修复.", org, repo))
-		return
+		// log.Errorf(fmt.Sprintf("该%s/%s不存在meta_get文件，无法修复.", org, repo))
+		// return
 	}
 	log.Infof("start repair：%s/%s/%s", repoType, org, repo)
 	cacheContent, err := ReadCacheRequest(metaGetPath)
@@ -262,5 +264,36 @@ func pathsInfoProxy(targetUrl, authorization string, filePaths []string) (*commo
 	if authorization != "" {
 		headers["authorization"] = authorization
 	}
-	return util.Post(targetUrl, "application/json", jsonData, headers)
+	return Post(targetUrl, "application/json", jsonData, headers)
+}
+
+// Post 方法用于发送带请求头的 POST 请求
+func Post(url string, contentType string, data []byte, headers map[string]string) (*common.Response, error) {
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(data))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", contentType)
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	respHeaders := make(map[string]interface{})
+	for key, value := range resp.Header {
+		respHeaders[key] = value
+	}
+	return &common.Response{
+		StatusCode: resp.StatusCode,
+		Headers:    respHeaders,
+		Body:       body,
+	}, nil
 }

@@ -199,6 +199,9 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, org, repo, commit, 
 		zap.S().Errorf("create %s dir err.%v", blobsDir, err)
 		return util.ErrorProxyError(c)
 	}
+	if err = util.CreateSymlinkIfNotExists(blobsFile, filesPath); err != nil {
+		zap.S().Errorf("filesPath:%s is not link", filesPath)
+	}
 	if method == consts.RequestTypeHead {
 		return util.ResponseHeaders(c, respHeaders)
 	} else if method == consts.RequestTypeGet {

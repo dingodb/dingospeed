@@ -148,9 +148,6 @@ func (r RemoteFileTask) DoTask() {
 				zap.S().Errorf("last writeBlock err.%v", err)
 			}
 			zap.S().Debugf("file:%s/%s, taskNo:%d, last block：%d(%d)write done, range：%d-%d.", r.orgRepo, r.FileName, r.TaskNo, lastBlock, blockNumber, lastBlockStartPos, lastBlockEndPos)
-			if err = util.CreateSymlinkIfNotExists(r.blobsFile, r.filesPath); err != nil {
-				zap.S().Errorf("filesPath:%s is not link", r.filesPath)
-			}
 		}
 	}
 	if curPos != rangeEndPos {
