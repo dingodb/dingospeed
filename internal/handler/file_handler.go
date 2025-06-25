@@ -135,8 +135,10 @@ func (handler *FileHandler) GetFileHandler3(c echo.Context) error {
 
 func (handler *FileHandler) fileGetCommon(c echo.Context, repoType, org, repo, commit, filePath string) error {
 	if config.SysConfig.EnableMetric() {
+		orgRepo := fmt.Sprintf("%s/%s", org, repo)
+		c.Set(consts.PromOrgRepo, orgRepo)
 		labels := prometheus.Labels{}
-		labels[repoType] = fmt.Sprintf("%s/%s", org, repo)
+		labels[repoType] = orgRepo
 		source := util.Itoa(c.Get(consts.PromSource))
 		if _, ok := consts.RepoTypesMapping[repoType]; ok {
 			labels["source"] = source

@@ -15,9 +15,11 @@
 package handler
 
 import (
+	"fmt"
 	"strings"
 
 	"dingospeed/internal/service"
+	"dingospeed/pkg/consts"
 
 	"github.com/labstack/echo/v4"
 )
@@ -38,6 +40,8 @@ func (handler *MetaHandler) MetaProxyCommonHandler(c echo.Context) error {
 	repo := c.Param("repo")
 	commit := c.Param("commit")
 	method := strings.ToLower(c.Request().Method)
+	orgRepo := fmt.Sprintf("%s/%s", org, repo)
+	c.Set(consts.PromOrgRepo, orgRepo)
 	return handler.metaService.MetaProxyCommon(c, repoType, org, repo, commit, method)
 }
 

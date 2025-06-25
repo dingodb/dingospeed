@@ -41,18 +41,30 @@ func init() {
 }
 
 func main() {
-	fmt.Println("starting data repair....")
 	if repoPathParam == "" || repoTypeParam == "" {
 		log.Errorf("repoPath,repoType不能为空")
 		return
 	}
+	if exist := util.FileExists(repoPathParam); !exist {
+		log.Errorf("repoPath:%s目录不存在", repoPathParam)
+		return
+	}
+	if repoTypeParam != "models" && repoTypeParam != "datasets" {
+		log.Errorf("repoType的可选值为models或datasets。")
+		return
+	}
+	typePath := fmt.Sprintf("%s/api/%s", repoPathParam, repoTypeParam)
+	if exist := util.FileExists(typePath); !exist {
+		log.Errorf("不存在类型为%s的缓存数据", repoTypeParam)
+		return
+	}
+
 	if orgParam != "" && repoParam != "" {
 		repoRepair(repoPathParam, repoTypeParam, orgParam, repoParam)
 	} else {
 		if orgParam != "" && repoParam == "" {
 			orgRepair(repoPathParam, repoTypeParam, orgParam)
 		} else if orgParam == "" && repoParam == "" {
-			typePath := fmt.Sprintf("%s/api/%s", repoPathParam, repoTypeParam)
 			// 读取目录内容
 			orgEntries, err := os.ReadDir(typePath)
 			if err != nil {
@@ -97,17 +109,18 @@ func repoRepair(repoPath, repoType, org, repo string) {
 	}
 	filePath := fmt.Sprintf("%s/files/%s/%s/%s", repoPath, repoType, org, repo)
 	if exist := util.FileExists(filePath); !exist {
+		log.Errorf("不存在org:%s, repo:%s的缓存数据", org, repo)
 		return
 	}
 	fileBlobs := fmt.Sprintf("%s/blobs", filePath)
 	if exist := util.FileExists(fileBlobs); exist {
-		// log.Errorf(fmt.Sprintf("该仓库已完成修复：%s", fileBlobs))
-		// return
+		log.Infof(fmt.Sprintf("该仓库已完成修复：%s", fileBlobs))
+		return
 	}
 	metaGetPath := fmt.Sprintf("%s/api/%s/%s/%s/revision/main/meta_get.json", repoPath, repoType, org, repo)
 	if exist := util.FileExists(metaGetPath); !exist {
-		// log.Errorf(fmt.Sprintf("该%s/%s不存在meta_get文件，无法修复.", org, repo))
-		// return
+		log.Errorf(fmt.Sprintf("该%s/%s不存在meta_get文件，无法修复.", org, repo))
+		return
 	}
 	log.Infof("start repair：%s/%s/%s", repoType, org, repo)
 	cacheContent, err := ReadCacheRequest(metaGetPath)
@@ -141,7 +154,7 @@ func repoRepair(repoPath, repoType, org, repo string) {
 		}
 		filePath = fmt.Sprintf("%s/files/%s/%s/%s/resolve/%s/%s", repoPath, repoType, org, repo, sha.Sha, fileName)
 		if exist := util.FileExists(filePath); !exist {
-			log.Warnf(fmt.Sprintf("该文件%s不存在.", filePath))
+			// 文件不存在，则无需处理，直接跳过
 			continue
 		}
 		newBlobsFilePath := fmt.Sprintf("%s/files/%s/%s/%s/blobs/%s", repoPath, repoType, org, repo, etag)
@@ -154,6 +167,8 @@ func repoRepair(repoPath, repoType, org, repo string) {
 	}
 	// 删除其他版本
 	resolvePath := fmt.Sprintf("%s/files/%s/%s/%s/resolve", repoPath, repoType, org, repo)
+	revisionPath := fmt.Sprintf("%s/api/%s/%s/%s/revision", repoPath, repoType, org, repo)
+	pathInfoPath := fmt.Sprintf("%s/api/%s/%s/%s/paths-info", repoPath, repoType, org, repo)
 	entries, err := os.ReadDir(resolvePath)
 	if err != nil {
 		fmt.Printf("读取目录失败: %v\n", err)
@@ -162,10 +177,23 @@ func repoRepair(repoPath, repoType, org, repo string) {
 	for _, entry := range entries {
 		if entry.IsDir() {
 			if entry.Name() != sha.Sha {
-				err := os.RemoveAll(fmt.Sprintf("%s/%s", resolvePath, entry.Name()))
+				// 清除resolve目录
+				rpp := fmt.Sprintf("%s/%s", resolvePath, entry.Name())
+				err = os.RemoveAll(rpp)
 				if err != nil {
-					fmt.Printf("删除目录失败: %v\n", err)
-					continue
+					fmt.Printf("删除resolve目录%s失败: %v\n", rpp, err)
+				}
+				// 清除revision目录
+				revisionP := fmt.Sprintf("%s/%s", revisionPath, entry.Name())
+				err = os.RemoveAll(revisionP)
+				if err != nil {
+					fmt.Printf("删除revision目录%s失败: %v\n", revisionP, err)
+				}
+				// 清除paths-info目录
+				ppth := fmt.Sprintf("%s/%s", pathInfoPath, entry.Name())
+				err = os.RemoveAll(ppth)
+				if err != nil {
+					fmt.Printf("删除pathinfo目录%s失败: %v\n", ppth, err)
 				}
 			}
 		}

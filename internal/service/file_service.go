@@ -15,6 +15,8 @@
 package service
 
 import (
+	"fmt"
+
 	"dingospeed/internal/dao"
 	"dingospeed/pkg/config"
 	"dingospeed/pkg/consts"
@@ -35,6 +37,8 @@ func NewFileService(fileDao *dao.FileDao) *FileService {
 }
 
 func (d *FileService) FileHeadCommon(c echo.Context, repoType, org, repo, commit, filePath string) error {
+	orgRepo := fmt.Sprintf("%s/%s", org, repo)
+	c.Set(consts.PromOrgRepo, orgRepo)
 	commitSha, err := d.getFileCommitSha(c, repoType, org, repo, commit)
 	if err != nil {
 		return err

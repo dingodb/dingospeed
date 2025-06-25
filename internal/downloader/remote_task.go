@@ -85,7 +85,7 @@ func (r RemoteFileTask) DoTask() {
 					if config.SysConfig.EnableMetric() {
 						// 原子性地更新总下载字节数
 						source := util.Itoa(r.Context.Value(consts.PromSource))
-						prom.PromRequestByteCounter(prom.RequestRemoteByte, source, chunkLen)
+						prom.PromRequestByteCounter(prom.RequestRemoteByte, source, chunkLen, r.orgRepo)
 					}
 
 					if len(chunk) != 0 {

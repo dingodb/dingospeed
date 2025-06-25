@@ -183,7 +183,8 @@ func ResponseStream(c echo.Context, fileName string, headers map[string]string, 
 				if config.SysConfig.EnableMetric() {
 					// 原子性地更新响应总数
 					source := Itoa(c.Get(consts.PromSource))
-					prom.PromRequestByteCounter(prom.RequestResponseByte, source, int64(len(b)))
+					orgRepo := Itoa(c.Get(consts.PromOrgRepo))
+					prom.PromRequestByteCounter(prom.RequestResponseByte, source, int64(len(b)), orgRepo)
 				}
 			}
 			flusher.Flush()

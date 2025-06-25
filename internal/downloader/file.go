@@ -200,9 +200,10 @@ func (c *DingCache) Close() error {
 	}
 	c.fileLock.Lock()
 	defer c.fileLock.Unlock()
-	if err := c.flushHeader(); err != nil {
-		return err
-	}
+	// 20250619 fix when the file is read, the update date is modified
+	// if err := c.flushHeader(); err != nil {
+	// 	return err
+	// }
 	c.path = ""
 	c.header = nil
 	c.isOpen = false
@@ -251,14 +252,6 @@ func (c *DingCache) getHeaderSize() int64 {
 	return c.header.GetHeaderSize()
 }
 
-func (c *DingCache) resizeHeader(blockNum, fileSize int64) error {
-	c.headerLock.RLock()
-	defer c.headerLock.RUnlock()
-	c.header.BlockNumber = blockNum
-	c.header.FileSize = fileSize
-	return c.header.ValidHeader()
-}
-
 func (c *DingCache) setHeaderBlock(blockIndex int64) error {
 	// c.headerLock.Lock()
 	// defer c.headerLock.Unlock()
@@ -270,15 +263,6 @@ func (c *DingCache) testHeaderBlock(blockIndex int64) (bool, error) {
 	c.headerLock.RLock()
 	defer c.headerLock.RUnlock()
 	return c.header.BlockMask.Test(blockIndex)
-}
-
-// padBlock 填充块数据
-func (c *DingCache) padBlock(rawBlock []byte) []byte {
-	blockSize := c.getBlockSize()
-	if int64(len(rawBlock)) < blockSize {
-		return append(rawBlock, bytes.Repeat([]byte{0}, int(blockSize)-len(rawBlock))...)
-	}
-	return rawBlock
 }
 
 // HasBlock 检查块是否存在
@@ -385,6 +369,15 @@ func (c *DingCache) readBlockAndCache(f *os.File, blockIndex int64) {
 	}
 }
 
+// padBlock 填充块数据
+func (c *DingCache) padBlock(rawBlock []byte) []byte {
+	blockSize := c.getBlockSize()
+	if int64(len(rawBlock)) < blockSize {
+		return append(rawBlock, bytes.Repeat([]byte{0}, int(blockSize)-len(rawBlock))...)
+	}
+	return rawBlock
+}
+
 func (c *DingCache) WriteBlock(blockIndex int64, blockBytes []byte) error {
 	if !c.isOpen {
 		return errors.New("this file has been closed")
@@ -427,6 +420,24 @@ func (c *DingCache) WriteBlock(blockIndex int64, blockBytes []byte) error {
 	return nil
 }
 
+func (c *DingCache) Resize(fileSize int64) error {
+	if !c.isOpen {
+		return errors.New("this file has been closed")
+	}
+	bs := c.getBlockSize()
+	newBlockNum := (fileSize + bs - 1) / bs
+	c.fileLock.Lock()
+	defer c.fileLock.Unlock()
+	if err := c.resizeFileSize(fileSize); err != nil {
+		return err
+	}
+	// 设置块数量、文件大小参数
+	if err := c.resizeHeader(newBlockNum, fileSize); err != nil {
+		return err
+	}
+	return c.flushHeader()
+}
+
 // resizeFileSize 调整文件大小
 func (c *DingCache) resizeFileSize(fileSize int64) error {
 	if !c.isOpen {
@@ -457,23 +468,12 @@ func (c *DingCache) resizeFileSize(fileSize int64) error {
 	return nil
 }
 
-// Resize 调整缓存大小
-func (c *DingCache) Resize(fileSize int64) error {
-	if !c.isOpen {
-		return errors.New("this file has been closed")
-	}
-	bs := c.getBlockSize()
-	newBlockNum := (fileSize + bs - 1) / bs
-	c.fileLock.Lock()
-	defer c.fileLock.Unlock()
-	if err := c.resizeFileSize(fileSize); err != nil {
-		return err
-	}
-	// 设置块数量、文件大小参数
-	if err := c.resizeHeader(newBlockNum, fileSize); err != nil {
-		return err
-	}
-	return c.flushHeader()
+func (c *DingCache) resizeHeader(blockNum, fileSize int64) error {
+	c.headerLock.RLock()
+	defer c.headerLock.RUnlock()
+	c.header.BlockNumber = blockNum
+	c.header.FileSize = fileSize
+	return c.header.ValidHeader()
 }
 
 func (c *DingCache) getBlockKey(blockIndex int64) string {
