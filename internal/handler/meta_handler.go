@@ -52,3 +52,10 @@ func (handler *MetaHandler) WhoamiV2Handler(c echo.Context) error {
 func (handler *MetaHandler) ReposHandler(c echo.Context) error {
 	return handler.metaService.Repos(c)
 }
+
+func (handler *MetaHandler) RepoRefsHandler(c echo.Context) error {
+	repoType := c.Param("repoType")
+	org := c.Param("org")
+	repo := c.Param("repo")
+	return handler.metaService.RepoRefs(c, repoType, org, repo)
+}

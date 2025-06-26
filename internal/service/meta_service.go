@@ -15,7 +15,10 @@
 package service
 
 import (
+	"fmt"
+
 	"dingospeed/internal/dao"
+	"dingospeed/pkg/common"
 	"dingospeed/pkg/config"
 	"dingospeed/pkg/consts"
 	"dingospeed/pkg/util"
@@ -36,48 +39,96 @@ func NewMetaService(fileDao *dao.FileDao, metaDao *dao.MetaDao) *MetaService {
 	}
 }
 
-func (d *MetaService) MetaProxyCommon(c echo.Context, repoType, org, repo, commit, method string) error {
+func (m *MetaService) MetaProxyCommon(c echo.Context, repoType, org, repo, commit, method string) error {
 	zap.S().Debugf("MetaProxyCommon:%s/%s/%s/%s/%s", repoType, org, repo, commit, method)
 	if _, ok := consts.RepoTypesMapping[repoType]; !ok {
 		zap.S().Errorf("MetaProxyCommon repoType:%s is not exist RepoTypesMapping", repoType)
 		return util.ErrorPageNotFound(c)
 	}
 	if org == "" && repo == "" {
-		zap.S().Errorf("MetaProxyCommon or and repo is null")
+		zap.S().Errorf("MetaProxyCommon org and repo is null")
 		return util.ErrorRepoNotFound(c)
 	}
 	authorization := c.Request().Header.Get("authorization")
 	if config.SysConfig.Online() {
 		// check repo
-		if code, err := d.fileDao.CheckCommitHf(repoType, org, repo, "", authorization); err != nil {
+		if code, err := m.fileDao.CheckCommitHf(repoType, org, repo, "", authorization); err != nil {
 			zap.S().Errorf("MetaProxyCommon CheckCommitHf is false, commit is null")
 			return util.ErrorEntryUnknown(c, code, err.Error())
 		}
 		// check repo commit
-		if code, err := d.fileDao.CheckCommitHf(repoType, org, repo, commit, authorization); err != nil {
+		if code, err := m.fileDao.CheckCommitHf(repoType, org, repo, commit, authorization); err != nil {
 			zap.S().Errorf("MetaProxyCommon CheckCommitHf is false, commit:%s", commit)
 			return util.ErrorEntryUnknown(c, code, err.Error())
 		}
 	}
-	commitSha, err := d.fileDao.GetCommitHf(repoType, org, repo, commit, authorization)
+	commitSha, err := m.fileDao.GetCommitHf(repoType, org, repo, commit, authorization)
 	if err != nil {
 		zap.S().Errorf("MetaProxyCommon GetCommitHf err.%v", err)
 		return util.ErrorRepoNotFound(c)
 	}
 	if config.SysConfig.Online() && commitSha != commit {
-		_ = d.metaDao.MetaGetGenerator(c, repoType, org, repo, commit, method, false)
-		return d.metaDao.MetaGetGenerator(c, repoType, org, repo, commitSha, method, true)
+		_ = m.metaDao.MetaGetGenerator(c, repoType, org, repo, commit, method, false)
+		return m.metaDao.MetaGetGenerator(c, repoType, org, repo, commitSha, method, true)
 	} else {
-		return d.metaDao.MetaGetGenerator(c, repoType, org, repo, commitSha, method, true)
+		return m.metaDao.MetaGetGenerator(c, repoType, org, repo, commitSha, method, true)
 	}
 }
 
-func (d *MetaService) WhoamiV2(c echo.Context) error {
-	err := d.fileDao.WhoamiV2Generator(c)
+func (m *MetaService) WhoamiV2(c echo.Context) error {
+	err := m.fileDao.WhoamiV2Generator(c)
 	return err
 }
 
-func (d *MetaService) Repos(c echo.Context) error {
-	err := d.fileDao.ReposGenerator(c)
+func (m *MetaService) Repos(c echo.Context) error {
+	err := m.fileDao.ReposGenerator(c)
 	return err
+}
+
+func (m *MetaService) RepoRefs(c echo.Context, repoType, org, repo string) error {
+	orgRepo := util.GetOrgRepo(org, repo)
+	zap.S().Debugf("RepoRefs:%s/%s", repoType, orgRepo)
+	if _, ok := consts.RepoTypesMapping[repoType]; !ok {
+		zap.S().Errorf("RepoRefs repoType:%s is not exist RepoTypesMapping", repoType)
+		return util.ErrorPageNotFound(c)
+	}
+	if org == "" && repo == "" {
+		zap.S().Errorf("RepoRefs org and repo is null")
+		return util.ErrorRepoNotFound(c)
+	}
+	authorization := c.Request().Header.Get("authorization")
+	localRefsDir := fmt.Sprintf("%s/api/%s/%s/refs", config.SysConfig.Repos(), repoType, orgRepo)
+	localRefsPath := fmt.Sprintf("%s/%s", localRefsDir, fmt.Sprintf("refs_get.json"))
+	err := util.MakeDirs(localRefsPath)
+	if err != nil {
+		zap.S().Errorf("create %s dir err.%v", localRefsPath, err)
+		return util.ErrorProxyError(c)
+	}
+	var cacheContent *common.CacheContent
+	if !config.SysConfig.Online() && util.FileExists(localRefsPath) {
+		cacheContent, err = m.fileDao.ReadCacheRequest(localRefsPath)
+		if err != nil {
+			zap.S().Errorf("ReadCacheRequest %s dir err.%v", localRefsPath, err)
+			return util.ErrorProxyError(c)
+		}
+	} else {
+		resp, err := m.metaDao.RepoRefs(repoType, orgRepo, authorization)
+		if err != nil {
+			zap.S().Errorf("get repo refs err.%v", err)
+			return util.ErrorProxyError(c)
+		}
+		extractHeaders := resp.ExtractHeaders(resp.Headers)
+		if err = m.fileDao.WriteCacheRequest(localRefsPath, resp.StatusCode, extractHeaders, resp.Body); err != nil {
+			zap.S().Errorf("writeCacheRequest err.%v", err)
+			return util.ErrorProxyError(c)
+		}
+		cacheContent = &common.CacheContent{
+			Headers:       extractHeaders,
+			OriginContent: resp.Body,
+		}
+	}
+	var bodyStreamChan = make(chan []byte, consts.RespChanSize)
+	bodyStreamChan <- cacheContent.OriginContent
+	close(bodyStreamChan)
+	return util.ResponseStream(c, orgRepo, cacheContent.Headers, bodyStreamChan)
 }

@@ -113,3 +113,15 @@ func (m *MetaDao) MetaProxyGenerator(c echo.Context, repoType, org, repo, commit
 	}
 	return nil
 }
+
+func (m *MetaDao) RepoRefs(repoType string, orgRepo string, authorization string) (*common.Response, error) {
+	refsUrl := fmt.Sprintf("%s/api/%s/%s/refs", config.SysConfig.GetHFURLBase(), repoType, orgRepo)
+	headers := map[string]string{}
+	if authorization != "" {
+		headers["authorization"] = authorization
+	}
+	resp, err := util.RetryRequest(func() (*common.Response, error) {
+		return util.Get(refsUrl, headers, config.SysConfig.GetReqTimeOut())
+	})
+	return resp, err
+}
