@@ -19,6 +19,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"dingospeed/pkg/common"
@@ -105,7 +106,8 @@ func Get(url string, headers map[string]string, timeout time.Duration) (*common.
 func GetStream(url string, headers map[string]string, timeout time.Duration, f func(r *http.Response)) error {
 	client := &http.Client{}
 	client.Timeout = timeout
-	req, err := http.NewRequest("GET", url, nil)
+	escapedURL := strings.ReplaceAll(url, "#", "%23")
+	req, err := http.NewRequest("GET", escapedURL, nil)
 	if err != nil {
 		return err
 	}
