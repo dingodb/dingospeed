@@ -40,19 +40,21 @@ type Config struct {
 	Retry            Retry            `json:"retry" yaml:"retry"`
 	TokenBucketLimit TokenBucketLimit `json:"tokenBucketLimit" yaml:"tokenBucketLimit"`
 	DiskClean        DiskClean        `json:"diskClean" yaml:"diskClean"`
+	DynamicProxy     DynamicProxy     `json:"dynamicProxy" yaml:"dynamicProxy"`
 }
 
 type ServerConfig struct {
-	Mode      string `json:"mode" yaml:"mode"`
-	Host      string `json:"host" yaml:"host"`
-	Port      int    `json:"port" yaml:"port"`
-	PProf     bool   `json:"pprof" yaml:"pprof"`
-	PProfPort int    `json:"pprofPort" yaml:"pprofPort"`
-	Metrics   bool   `json:"metrics" yaml:"metrics"`
-	Online    bool   `json:"online" yaml:"online"`
-	Repos     string `json:"repos" yaml:"repos"`
-	HfNetLoc  string `json:"hfNetLoc" yaml:"hfNetLoc"`
-	HfScheme  string `json:"hfScheme" yaml:"hfScheme" validate:"oneof=https http"`
+	Mode       string `json:"mode" yaml:"mode"`
+	Host       string `json:"host" yaml:"host"`
+	Port       int    `json:"port" yaml:"port"`
+	PProf      bool   `json:"pprof" yaml:"pprof"`
+	PProfPort  int    `json:"pprofPort" yaml:"pprofPort"`
+	Metrics    bool   `json:"metrics" yaml:"metrics"`
+	Online     bool   `json:"online" yaml:"online"`
+	Repos      string `json:"repos" yaml:"repos"`
+	HfNetLoc   string `json:"hfNetLoc" yaml:"hfNetLoc"`
+	BpHfNetLoc string `json:"bpHfNetLoc" yaml:"bpHfNetLoc"`
+	HfScheme   string `json:"hfScheme" yaml:"hfScheme" validate:"oneof=https http"`
 }
 
 type Download struct {
@@ -100,8 +102,18 @@ type DiskClean struct {
 	CollectTimePeriod  int    `json:"collectTimePeriod" yaml:"collectTimePeriod" validate:"min=1,max=600"` // 周期采集内存使用量，单位秒
 }
 
+type DynamicProxy struct {
+	Enabled    bool   `json:"enabled" yaml:"enabled"`
+	HttpProxy  string `json:"httpProxy" yaml:"httpProxy"`
+	TimePeriod int    `json:"timePeriod" yaml:"timePeriod"`
+}
+
 func (c *Config) GetHFURLBase() string {
 	return fmt.Sprintf("%s://%s", c.GetHfScheme(), c.GetHfNetLoc())
+}
+
+func (c *Config) GetBpHFURLBase() string {
+	return fmt.Sprintf("%s://%s", c.GetHfScheme(), c.GetBpHfNetLoc())
 }
 
 func (c *Config) Online() bool {
@@ -118,6 +130,10 @@ func (c *Config) GetHost() string {
 
 func (c *Config) GetHfNetLoc() string {
 	return c.Server.HfNetLoc
+}
+
+func (c *Config) GetBpHfNetLoc() string {
+	return c.Server.BpHfNetLoc
 }
 
 func (c *Config) GetCapacity() int {
@@ -166,6 +182,15 @@ func (c *Config) EnableMetric() bool {
 
 func (c *Config) CacheCleanStrategy() string {
 	return c.DiskClean.CacheCleanStrategy
+}
+
+func (c *Config) GetHttpProxy() string {
+	return c.DynamicProxy.HttpProxy
+}
+
+func (c *Config) GetDynamicProxyTimePeriod() time.Duration {
+	fmt.Println(c.DynamicProxy.TimePeriod)
+	return time.Duration(c.DynamicProxy.TimePeriod) * time.Second
 }
 
 func (c *Config) SetDefaults() {
