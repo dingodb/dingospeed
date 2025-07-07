@@ -62,8 +62,9 @@ func (r *HttpRouter) initRouter() {
 
 	// refs
 	r.echo.GET("/api/:repoType/:org/:repo/refs", r.metaHandler.RepoRefsHandler)
-
 	r.echo.GET("/api/whoami-v2", r.metaHandler.WhoamiV2Handler)
 	r.echo.GET("/repos", r.metaHandler.ReposHandler)
+
+	r.echo.Any("/*", r.metaHandler.ForwardToNewSiteHandler)
 
 }

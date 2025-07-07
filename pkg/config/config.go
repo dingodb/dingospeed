@@ -17,6 +17,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"time"
 
@@ -102,6 +103,15 @@ type DiskClean struct {
 
 func (c *Config) GetHFURLBase() string {
 	return fmt.Sprintf("%s://%s", c.GetHfScheme(), c.GetHfNetLoc())
+}
+
+func (c *Config) GetHFURL() (*url.URL, error) {
+	targetURL, err := url.Parse(c.GetHFURLBase())
+	if err != nil {
+		zap.S().Errorf("解析目标URL失败: %v", err)
+		return nil, err
+	}
+	return targetURL, nil
 }
 
 func (c *Config) Online() bool {

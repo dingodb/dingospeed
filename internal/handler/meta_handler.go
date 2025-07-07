@@ -59,3 +59,7 @@ func (handler *MetaHandler) RepoRefsHandler(c echo.Context) error {
 	repo := c.Param("repo")
 	return handler.metaService.RepoRefs(c, repoType, org, repo)
 }
+
+func (handler *MetaHandler) ForwardToNewSiteHandler(c echo.Context) error {
+	return handler.metaService.ForwardToNewSite(c)
+}
