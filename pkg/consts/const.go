@@ -43,3 +43,8 @@ const (
 const RespChanSize = 100
 const PromSource = "source"
 const PromOrgRepo = "orgRepo"
+
+const (
+	VersionOrigin   = 0
+	VersionSnapshot = 1
+)

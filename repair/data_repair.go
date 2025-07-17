@@ -3,16 +3,20 @@ package main
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"time"
 
 	"dingospeed/pkg/common"
+	"dingospeed/pkg/consts"
 	myerr "dingospeed/pkg/error"
 	"dingospeed/pkg/util"
 
+	"github.com/avast/retry-go"
 	"github.com/bytedance/sonic"
 	"github.com/labstack/gommon/log"
 	"go.uber.org/zap"
@@ -23,6 +27,12 @@ var (
 	repoTypeParam string
 	orgParam      string
 	repoParam     string
+	token         string
+	hfUrl         string
+	batchSize     int
+
+	type_meta     = "meta"
+	type_pathInfo = "pathInfo"
 )
 
 type CommitHfSha struct {
@@ -32,15 +42,15 @@ type CommitHfSha struct {
 	} `json:"siblings"`
 }
 
-func init() {
+func main() {
 	flag.StringVar(&repoPathParam, "repoPath", "./repos", "仓库路径")
 	flag.StringVar(&repoTypeParam, "repoType", "models", "类型")
 	flag.StringVar(&orgParam, "org", "", "组织")
 	flag.StringVar(&repoParam, "repo", "", "仓库")
+	flag.StringVar(&token, "token", "", "token") //
+	flag.StringVar(&hfUrl, "hfUrl", "hf-mirror.com", "hfUrl")
+	flag.IntVar(&batchSize, "batchSize", 100, "batchSize")
 	flag.Parse()
-}
-
-func main() {
 	if repoPathParam == "" || repoTypeParam == "" {
 		log.Errorf("repoPath,repoType不能为空")
 		return
@@ -68,7 +78,7 @@ func main() {
 			// 读取目录内容
 			orgEntries, err := os.ReadDir(typePath)
 			if err != nil {
-				fmt.Printf("读取目录失败: %v\n", err)
+				log.Warnf("读取目录失败: %v\n", err)
 				return
 			}
 			for _, entry := range orgEntries {
@@ -82,7 +92,7 @@ func main() {
 	if exist := util.FileExists(headsPath); exist {
 		err := os.RemoveAll(headsPath)
 		if err != nil {
-			fmt.Printf("删除目录失败: %v\n", err)
+			log.Warnf("删除目录失败: %v\n", err)
 			return
 		}
 	}
@@ -93,7 +103,7 @@ func orgRepair(repoPath, repoType, org string) {
 	// 读取目录内容
 	repoEntries, err := os.ReadDir(orgPath)
 	if err != nil {
-		fmt.Printf("读取目录失败: %v\n", err)
+		log.Warnf("读取目录失败: %v\n", err)
 		return
 	}
 	for _, entry := range repoEntries {
@@ -109,124 +119,299 @@ func repoRepair(repoPath, repoType, org, repo string) {
 	}
 	filePath := fmt.Sprintf("%s/files/%s/%s/%s", repoPath, repoType, org, repo)
 	if exist := util.FileExists(filePath); !exist {
-		log.Errorf("不存在org:%s, repo:%s的缓存数据", org, repo)
-		return
-	}
-	fileBlobs := fmt.Sprintf("%s/blobs", filePath)
-	if exist := util.FileExists(fileBlobs); exist {
-		log.Infof(fmt.Sprintf("该仓库已完成修复：%s", fileBlobs))
+		log.Warnf("不存在org:%s, repo:%s的缓存数据", org, repo)
 		return
 	}
 	metaGetPath := fmt.Sprintf("%s/api/%s/%s/%s/revision/main/meta_get.json", repoPath, repoType, org, repo)
-	if exist := util.FileExists(metaGetPath); !exist {
-		log.Errorf(fmt.Sprintf("该%s/%s不存在meta_get文件，无法修复.", org, repo))
-		return
-	}
-	log.Infof("start repair：%s/%s/%s", repoType, org, repo)
-	cacheContent, err := ReadCacheRequest(metaGetPath)
-	if err != nil {
-		return
-	}
-	var sha CommitHfSha
-	if err = sonic.Unmarshal(cacheContent.OriginContent, &sha); err != nil {
-		zap.S().Errorf("unmarshal error.%v", err)
-		return
-	}
-	remoteReqFilePathMap := make(map[string]*common.PathsInfo, 0)
-	for _, item := range sha.Siblings {
-		remoteReqFilePathMap[item.Rfilename] = nil
-	}
-	getPathInfoOid(remoteReqFilePathMap, repoType, fmt.Sprintf("%s/%s", org, repo), sha.Sha)
-	for _, item := range sha.Siblings {
-		fileName := item.Rfilename
-		pathInfo, ok := remoteReqFilePathMap[fileName]
-		if !ok {
-			continue
-		}
-		if err = updatePathInfo(repoPath, repoType, org, repo, sha.Sha, fileName, pathInfo); err != nil {
-			continue
-		}
-		var etag string
-		if pathInfo.Lfs.Oid != "" {
-			etag = pathInfo.Lfs.Oid
-		} else {
-			etag = pathInfo.Oid
-		}
-		filePath = fmt.Sprintf("%s/files/%s/%s/%s/resolve/%s/%s", repoPath, repoType, org, repo, sha.Sha, fileName)
-		if exist := util.FileExists(filePath); !exist {
-			// 文件不存在，则无需处理，直接跳过
-			continue
-		}
-		newBlobsFilePath := fmt.Sprintf("%s/files/%s/%s/%s/blobs/%s", repoPath, repoType, org, repo, etag)
-		util.ReName(filePath, newBlobsFilePath)
-		err = util.CreateSymlinkIfNotExists(newBlobsFilePath, filePath)
+	if exist := util.FileExists(metaGetPath); exist {
+		cacheContent, err := ReadCacheRequest(metaGetPath)
 		if err != nil {
-			log.Errorf("CreateSymlinkIfNotExists err.%v", err)
-			continue
+			return
+		}
+		var commitHfSha CommitHfSha
+		if err = sonic.Unmarshal(cacheContent.OriginContent, &commitHfSha); err != nil {
+			log.Warnf("unmarshal commitHfSha %s/%s error.%v", org, repo, err)
+			// metaget解析失败，采用迭代pathsInfo处理
+			iteratePathsInfoDir(repoPath, repoType, org, repo)
+			return
+		}
+		fileOrderMap := make(map[string]interface{}, 0)
+		for _, item := range commitHfSha.Siblings {
+			fileOrderMap[item.Rfilename] = nil
+		}
+		// meta_get读取正确，获取最新的main sha值，得到其pathsInfo
+		if err = iteratePathsInfoDirSha(fileOrderMap, repoPath, repoType, org, repo, commitHfSha.Sha, type_meta); err != nil {
+			log.Errorf("iteratePathsInfoDirSha error.%v", err)
+			return
+		}
+	} else {
+		iteratePathsInfoDir(repoPath, repoType, org, repo)
+	}
+}
+
+func iteratePathsInfoDir(repoPath, repoType, org, repo string) {
+	pathsInfoDir := fmt.Sprintf("%s/api/%s/%s/%s/paths-info", repoPath, repoType, org, repo)
+	// pathsInfo文件不存在，不予处理
+	if b := util.FileExists(pathsInfoDir); !b {
+		log.Warnf("pathsInfoDir is not exitst.%s", pathsInfoDir)
+		return
+	}
+	if shas, err := util.ReadDir(pathsInfoDir); err != nil {
+		log.Warnf("ReadDir %s/%s , %s error.%v", org, repo, pathsInfoDir, err)
+		return
+	} else {
+		for _, item := range shas {
+			metaResp, err := remoteRequestMeta(repoType, org, repo, item, token)
+			if err != nil {
+				continue
+			}
+			var sha CommitHfSha
+			if err = sonic.Unmarshal(metaResp.Body, &sha); err != nil {
+				zap.S().Errorf("unmarshal content:%s, error:%v", string(metaResp.Body), err)
+				continue
+			}
+			fileOrderMap := make(map[string]interface{}, 0)
+			for _, sibling := range sha.Siblings {
+				fileOrderMap[sibling.Rfilename] = nil
+			}
+			if err = iteratePathsInfoDirSha(fileOrderMap, repoPath, repoType, org, repo, item, type_pathInfo); err != nil {
+				log.Errorf("iteratePathsInfoDirSha error.%v", err)
+				continue
+			}
 		}
 	}
-	// 删除其他版本
+}
+
+func iteratePathsInfoDirSha(fileOrderMap map[string]interface{}, repoPath, repoType, org, repo, sha, strategyPathInfo string) error {
+	pathsInfoDir := fmt.Sprintf("%s/api/%s/%s/%s/paths-info", repoPath, repoType, org, repo)
+	shaDir := fmt.Sprintf("%s/%s", pathsInfoDir, sha)
+	// pathsInfo文件不存在，不予处理
+	if b := util.FileExists(shaDir); !b {
+		log.Infof("shaDir is not exist.%s", shaDir)
+		return nil
+	}
+	if fileNames, err := util.TraverseDir(shaDir, shaDir); err != nil {
+		log.Errorf("ReadDir error.%v", err)
+		return err
+	} else {
+		newFileNames := make([]string, 0)
+		for _, fileName := range fileNames {
+			if _, ok := fileOrderMap[fileName]; ok {
+				newFileNames = append(newFileNames, fileName)
+			}
+		}
+		if len(newFileNames) == 0 {
+			log.Infof("there are no files to repair.%s", shaDir)
+			return nil
+		}
+		err = repoRepairProcess(repoPath, repoType, org, repo, sha, newFileNames, strategyPathInfo)
+		if err != nil {
+			log.Errorf("repoRepairProcess error.%v", err)
+			return err
+		}
+	}
+	return nil
+}
+
+func repoRepairProcess(repoPath, repoType, org, repo, sha string, fileNames []string, strategy string) error {
+	fileBlobs := fmt.Sprintf("%s/files/%s/%s/%s/blobs", repoPath, repoType, org, repo)
+	blobExist := util.FileExists(fileBlobs)
+	shaPath := fmt.Sprintf("%s/files/%s/%s/%s/resolve/%s", repoPath, repoType, org, repo, sha)
+	if shaPathExist := util.FileExists(shaPath); !shaPathExist {
+		log.Warnf("shaPath file not exist.%s", shaPath)
+		return nil
+	}
+	repairLockPath := fmt.Sprintf("%s/%s", shaPath, "lock")
+	lockExist := util.FileExists(repairLockPath)
+	if strategy == type_meta {
+		if blobExist && !lockExist {
+			log.Infof(fmt.Sprintf("该仓库已完成修复：%s", fileBlobs))
+			return nil
+		}
+	}
+	log.Infof("start repair：%s/%s/%s/%s", repoType, org, repo, sha)
+	if err := util.CreateFile(repairLockPath); err != nil {
+		return err
+	}
+	blobsDir := fmt.Sprintf("%s/files/%s/%s/%s/blobs/", repoPath, repoType, org, repo)
+	if err := util.MakeDirs(blobsDir); err != nil {
+		log.Errorf("MakeDirs err.%v", err)
+		return err
+	}
+	var (
+		i              = 0
+		pieceFileNames = make([]string, 0)
+	)
+	for _, k := range fileNames {
+		pieceFileNames = append(pieceFileNames, k)
+		i++
+		if i%batchSize == 0 {
+			if err := repoRepairProcessPiece(pieceFileNames, repoPath, repoType, org, repo, sha); err != nil {
+				var t myerr.Error
+				if errors.As(err, &t) {
+					if t.StatusCode() == http.StatusNotFound {
+						// 若查询模型官网已不存在，则删除该模型数据
+						deleteOrgRepo(repoPath, repoType, org, repo)
+						return nil
+					}
+				}
+				return err
+			}
+			i = i / batchSize
+			pieceFileNames = make([]string, 0)
+		}
+	}
+	if i > 0 {
+		if err := repoRepairProcessPiece(pieceFileNames, repoPath, repoType, org, repo, sha); err != nil {
+			var t myerr.Error
+			if errors.As(err, &t) {
+				if t.StatusCode() == http.StatusNotFound {
+					// 若查询模型官网已不存在，则删除该模型数据
+					deleteOrgRepo(repoPath, repoType, org, repo)
+					return nil
+				}
+			}
+			return err
+		}
+	}
+	if strategy == type_meta {
+		// 删除其他版本
+		deleteOtherVersion(repoPath, repoType, org, repo, sha)
+	}
+	if err := util.DeleteFile(repairLockPath); err != nil {
+		return err
+	}
+	log.Infof("end repair：%s/%s/%s/%s", repoType, org, repo, sha)
+	return nil
+}
+
+func repoRepairProcessPiece(fileNames []string, repoPath, repoType, org, repo, sha string) error {
+	todoRepairFileNames := make([]string, 0)
+	// 先判断哪些文件已被修复
+	for _, fileName := range fileNames {
+		filePath := fmt.Sprintf("%s/files/%s/%s/%s/resolve/%s/%s", repoPath, repoType, org, repo, sha, fileName)
+		if exist := util.FileExists(filePath); exist {
+			if b, err := util.IsSymlink(filePath); err != nil {
+				todoRepairFileNames = append(todoRepairFileNames, fileName)
+			} else {
+				if !b {
+					todoRepairFileNames = append(todoRepairFileNames, fileName)
+				}
+			}
+		} else {
+			// 文件不存在，也需要更新pathsInfo
+			todoRepairFileNames = append(todoRepairFileNames, fileName)
+		}
+	}
+	if len(todoRepairFileNames) == 0 {
+		return nil
+	}
+	remoteReqFilePathMap, err := batchGetPathInfo(todoRepairFileNames, repoType, fmt.Sprintf("%s/%s", org, repo), sha)
+	if err != nil {
+		return err
+	}
+	blobsDir := fmt.Sprintf("%s/files/%s/%s/%s/blobs/", repoPath, repoType, org, repo)
+	for _, fileName := range todoRepairFileNames {
+		pathInfo := remoteReqFilePathMap[fileName]
+		if pathInfo == nil {
+			log.Warnf("pathInfo is nil, %s/%s, sha:%s, fileName:%s", org, repo, sha, fileName)
+			continue
+		}
+		if err = updatePathInfo(repoPath, repoType, org, repo, sha, fileName, pathInfo); err != nil {
+			continue
+		}
+		filePath := fmt.Sprintf("%s/files/%s/%s/%s/resolve/%s/%s", repoPath, repoType, org, repo, sha, fileName)
+		if exist := util.FileExists(filePath); exist {
+			var etag string
+			if pathInfo.Lfs.Oid != "" {
+				etag = pathInfo.Lfs.Oid
+			} else {
+				etag = pathInfo.Oid
+			}
+			newBlobsFilePath := fmt.Sprintf("%s/%s", blobsDir, etag)
+			util.ReName(filePath, newBlobsFilePath)
+			err = util.CreateSymlinkIfNotExists(newBlobsFilePath, filePath)
+			if err != nil {
+				log.Errorf("CreateSymlinkIfNotExists err.%v", err)
+				continue
+			}
+		}
+	}
+	return nil
+}
+
+func deleteOrgRepo(repoPath, repoType, org, repo string) {
+	repoFilesPath := fmt.Sprintf("%s/files/%s/%s/%s", repoPath, repoType, org, repo)
+	repoApiPath := fmt.Sprintf("%s/api/%s/%s/%s", repoPath, repoType, org, repo)
+	err := os.RemoveAll(repoFilesPath)
+	if err != nil {
+		log.Errorf("删除files目录%s失败: %v", repoFilesPath, err)
+	}
+	err = os.RemoveAll(repoApiPath)
+	if err != nil {
+		log.Errorf("删除api目录%s失败: %v", repoApiPath, err)
+	}
+	log.Infof("delete repo data %s/%s", org, repo)
+}
+
+func deleteOtherVersion(repoPath, repoType, org, repo, sha string) {
 	resolvePath := fmt.Sprintf("%s/files/%s/%s/%s/resolve", repoPath, repoType, org, repo)
 	revisionPath := fmt.Sprintf("%s/api/%s/%s/%s/revision", repoPath, repoType, org, repo)
 	pathInfoPath := fmt.Sprintf("%s/api/%s/%s/%s/paths-info", repoPath, repoType, org, repo)
 	entries, err := os.ReadDir(resolvePath)
 	if err != nil {
-		fmt.Printf("读取目录失败: %v\n", err)
+		log.Errorf("读取目录失败: %v", err)
 		return
 	}
 	for _, entry := range entries {
 		if entry.IsDir() {
-			if entry.Name() != sha.Sha {
-				// 清除resolve目录
+			if entry.Name() != sha {
 				rpp := fmt.Sprintf("%s/%s", resolvePath, entry.Name())
 				err = os.RemoveAll(rpp)
 				if err != nil {
-					fmt.Printf("删除resolve目录%s失败: %v\n", rpp, err)
+					log.Errorf("删除resolve目录失败: %v", err)
 				}
-				// 清除revision目录
 				revisionP := fmt.Sprintf("%s/%s", revisionPath, entry.Name())
 				err = os.RemoveAll(revisionP)
 				if err != nil {
-					fmt.Printf("删除revision目录%s失败: %v\n", revisionP, err)
+					log.Errorf("删除revision目录失败: %v", err)
 				}
-				// 清除paths-info目录
 				ppth := fmt.Sprintf("%s/%s", pathInfoPath, entry.Name())
 				err = os.RemoveAll(ppth)
 				if err != nil {
-					fmt.Printf("删除pathinfo目录%s失败: %v\n", ppth, err)
+					log.Errorf("删除pathinfo目录失败: %v", err)
 				}
 			}
 		}
 	}
-	log.Infof("end repair：%s/%s/%s", repoType, org, repo)
 }
 
 func updatePathInfo(repoPath, repoType, org, repo, commit, fileName string, pathInfo *common.PathsInfo) error {
 	pathInfoPath := fmt.Sprintf("%s/api/%s/%s/%s/paths-info/%s/%s/paths-info_post.json", repoPath, repoType, org, repo, commit, fileName)
-	if exist := util.FileExists(pathInfoPath); !exist {
-		return myerr.New("file is not exist")
-	}
-	cacheContent, err := ReadCacheRequest(pathInfoPath)
-	if err != nil {
-		log.Errorf(fmt.Sprintf("read file:%s err", pathInfoPath))
-		return err
-	}
-	pathsInfos := make([]*common.PathsInfo, 0)
-	pathsInfos = append(pathsInfos, pathInfo)
-	b, err := sonic.Marshal(pathsInfos)
-	if err != nil {
-		zap.S().Errorf("pathsInfo Unmarshal err.%v", err)
-		return err
-	}
-	if err = WriteCacheRequest(pathInfoPath, cacheContent.StatusCode, cacheContent.Headers, b); err != nil {
-		zap.S().Errorf("WriteCacheRequest err.%s,%v", pathInfoPath, err)
-		return err
+	if exist := util.FileExists(pathInfoPath); exist {
+		cacheContent, err := ReadCacheRequest(pathInfoPath)
+		if err != nil {
+			log.Errorf(fmt.Sprintf("read file:%s err", pathInfoPath))
+			return err
+		}
+		pathsInfos := make([]*common.PathsInfo, 0)
+		pathsInfos = append(pathsInfos, pathInfo)
+		b, err := sonic.Marshal(pathsInfos)
+		if err != nil {
+			log.Errorf("pathsInfo Unmarshal err.%v", err)
+			return err
+		}
+		if err = WriteCacheRequest(pathInfoPath, cacheContent.StatusCode, cacheContent.Headers, b); err != nil {
+			log.Errorf("WriteCacheRequest err.%s,%v", pathInfoPath, err)
+			return err
+		}
 	}
 	return nil
 }
 
 func WriteCacheRequest(apiPath string, statusCode int, headers map[string]string, content []byte) error {
 	cacheContent := common.CacheContent{
+		Version:    consts.VersionSnapshot,
 		StatusCode: statusCode,
 		Headers:    headers,
 		Content:    hex.EncodeToString(content),
@@ -251,33 +436,29 @@ func ReadCacheRequest(apiPath string) (*common.CacheContent, error) {
 	return &cacheContent, nil
 }
 
-func getPathInfoOid(remoteReqFilePathMap map[string]*common.PathsInfo, repoType, orgRepo, commit string) {
-	filePaths := make([]string, 0)
-	for k := range remoteReqFilePathMap {
-		filePaths = append(filePaths, k)
-	}
-	pathsInfoUrl := fmt.Sprintf("%s/api/%s/%s/paths-info/%s", "https://hf-mirror.com", repoType, orgRepo, commit)
-	response, err := pathsInfoProxy(pathsInfoUrl, "", filePaths)
+func batchGetPathInfo(filePaths []string, repoType, orgRepo, commit string) (map[string]*common.PathsInfo, error) {
+	pathsInfoUrl := fmt.Sprintf("%s/api/%s/%s/paths-info/%s", getDomainUrl(), repoType, orgRepo, commit)
+	response, err := pathsInfoProxy(pathsInfoUrl, token, filePaths)
 	if err != nil {
-		zap.S().Errorf("req %s err.%v", pathsInfoUrl, err)
-		return
+		log.Errorf("req %s err.%v", pathsInfoUrl, err)
+		return nil, myerr.Wrap("batchGetPathInfo err", err)
 	}
 	if response.StatusCode != http.StatusOK {
-		zap.S().Errorf("response.StatusCode err:%d", response.StatusCode)
-		return
+		log.Errorf("response orgRepo:%s, StatusCode err:%d", orgRepo, response.StatusCode)
+		return nil, myerr.NewAppendCode(response.StatusCode, "request fail")
 	}
 	remoteRespPathsInfos := make([]common.PathsInfo, 0)
 	err = sonic.Unmarshal(response.Body, &remoteRespPathsInfos)
 	if err != nil {
-		zap.S().Errorf("req %s remoteRespPathsInfos Unmarshal err.%v", pathsInfoUrl, err)
-		return
+		log.Errorf("req %s remoteRespPathsInfos Unmarshal err.%v", pathsInfoUrl, err)
+		return nil, myerr.Wrap("Unmarshal err", err)
 	}
+	remoteReqFilePathMap := make(map[string]*common.PathsInfo, 0)
 	for _, item := range remoteRespPathsInfos {
-		// 对单个文件pathsInfo做存储
-		if _, ok := remoteReqFilePathMap[item.Path]; ok {
-			remoteReqFilePathMap[item.Path] = &item
-		}
+		localPathInfo := item
+		remoteReqFilePathMap[localPathInfo.Path] = &localPathInfo
 	}
+	return remoteReqFilePathMap, nil
 }
 
 func pathsInfoProxy(targetUrl, authorization string, filePaths []string) (*common.Response, error) {
@@ -290,9 +471,43 @@ func pathsInfoProxy(targetUrl, authorization string, filePaths []string) (*commo
 	}
 	headers := map[string]string{}
 	if authorization != "" {
-		headers["authorization"] = authorization
+		headers["authorization"] = fmt.Sprintf("Bearer %s", authorization)
 	}
-	return Post(targetUrl, "application/json", jsonData, headers)
+	return RetryRequest(func() (*common.Response, error) {
+		return Post(targetUrl, "application/json", jsonData, headers)
+	})
+}
+
+func remoteRequestMeta(repoType, org, repo, commit, authorization string) (*common.Response, error) {
+	orgRepo := util.GetOrgRepo(org, repo)
+	var reqUrl string
+	if commit == "" {
+		reqUrl = fmt.Sprintf("%s/api/%s/%s", getDomainUrl(), repoType, orgRepo)
+	} else {
+		reqUrl = fmt.Sprintf("%s/api/%s/%s/revision/%s", getDomainUrl(), repoType, orgRepo, commit)
+	}
+	headers := map[string]string{}
+	if authorization != "" {
+		headers["authorization"] = fmt.Sprintf("Bearer %s", authorization)
+	}
+	return RetryRequest(func() (*common.Response, error) {
+		return util.Get(reqUrl, headers, time.Duration(10)*time.Second)
+	})
+}
+
+func RetryRequest(f func() (*common.Response, error)) (*common.Response, error) {
+	var resp *common.Response
+	err := retry.Do(
+		func() error {
+			var err error
+			resp, err = f()
+			return err
+		},
+		retry.Delay(1*time.Second),
+		retry.Attempts(5),
+		retry.DelayType(retry.FixedDelay),
+	)
+	return resp, err
 }
 
 // Post 方法用于发送带请求头的 POST 请求
@@ -324,4 +539,8 @@ func Post(url string, contentType string, data []byte, headers map[string]string
 		Headers:    respHeaders,
 		Body:       body,
 	}, nil
+}
+
+func getDomainUrl() string {
+	return fmt.Sprintf("https://%s", hfUrl)
 }

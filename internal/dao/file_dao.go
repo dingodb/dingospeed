@@ -54,22 +54,9 @@ func NewFileDao() *FileDao {
 }
 
 func (f *FileDao) CheckCommitHf(repoType, org, repo, commit, authorization string) (int, error) {
-	orgRepo := util.GetOrgRepo(org, repo)
-	var reqUrl string
-	if commit == "" {
-		reqUrl = fmt.Sprintf("%s/api/%s/%s", config.SysConfig.GetHFURLBase(), repoType, orgRepo)
-	} else {
-		reqUrl = fmt.Sprintf("%s/api/%s/%s/revision/%s", config.SysConfig.GetHFURLBase(), repoType, orgRepo, commit)
-	}
-	headers := map[string]string{}
-	if authorization != "" {
-		headers["authorization"] = authorization
-	}
-	resp, err := util.RetryRequest(func() (*common.Response, error) {
-		return util.Head(reqUrl, headers, config.SysConfig.GetReqTimeOut())
-	})
+	resp, err := f.remoteRequestMeta(consts.RequestTypeHead, repoType, org, repo, commit, authorization)
 	if err != nil {
-		zap.S().Errorf("call %s error.%v", reqUrl, err)
+		zap.S().Errorf("head call meta %s/%s/%s error.%v", org, repo, commit, err)
 		return http.StatusInternalServerError, err
 	}
 	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusTemporaryRedirect {
@@ -85,26 +72,59 @@ func (f *FileDao) GetCommitHf(repoType, org, repo, commit, authorization string)
 	if !config.SysConfig.Online() {
 		return f.getCommitHfOffline(repoType, org, repo, commit)
 	}
-	orgRepo := util.GetOrgRepo(org, repo)
-	var reqUrl string
-	reqUrl = fmt.Sprintf("%s/api/%s/%s/revision/%s", config.SysConfig.GetHFURLBase(), repoType, orgRepo, commit)
-	headers := map[string]string{}
-	if authorization != "" {
-		headers["authorization"] = authorization
-	}
-	resp, err := util.RetryRequest(func() (*common.Response, error) {
-		return util.Get(reqUrl, headers, config.SysConfig.GetReqTimeOut())
-	})
+	resp, err := f.remoteRequestMeta(consts.RequestTypeGet, repoType, org, repo, commit, authorization)
 	if err != nil {
-		zap.S().Errorf("call %s error.%v", reqUrl, err)
+		zap.S().Errorf("get call meta %s/%s/%s error.%v", org, repo, commit, err)
 		return f.getCommitHfOffline(repoType, org, repo, commit)
 	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusTemporaryRedirect {
+		return f.getCommitHfOffline(repoType, org, repo, commit)
+	}
+	// 保存到文件
+	// orgRepo := util.GetOrgRepo(org, repo)
+	// apiDir := fmt.Sprintf("%s/api/%s/%s/revision/%s", config.SysConfig.Repos(), repoType, orgRepo, commit)
+	// apiMetaPath := fmt.Sprintf("%s/%s", apiDir, fmt.Sprintf("meta_get.json"))
+	// if exist := util.FileExists(apiMetaPath); !exist {
+	// 	err = util.MakeDirs(apiMetaPath)
+	// 	if err != nil {
+	// 		zap.S().Errorf("create %s dir err.%v", apiDir, err)
+	// 		return f.getCommitHfOffline(repoType, org, repo, commit)
+	// 	}
+	// 	extractHeaders := resp.ExtractHeaders(resp.Headers)
+	// 	if err = f.WriteCacheRequest(apiMetaPath, resp.StatusCode, extractHeaders, resp.Body); err != nil {
+	// 		zap.S().Errorf("writeCacheRequest err.%v", err)
+	// 		return f.getCommitHfOffline(repoType, org, repo, commit)
+	// 	}
+	// }
 	var sha CommitHfSha
 	if err = sonic.Unmarshal(resp.Body, &sha); err != nil {
 		zap.S().Errorf("unmarshal content:%s, error:%v", string(resp.Body), err)
 		return f.getCommitHfOffline(repoType, org, repo, commit)
 	}
 	return sha.Sha, nil
+}
+
+func (f *FileDao) remoteRequestMeta(method, repoType, org, repo, commit, authorization string) (*common.Response, error) {
+	orgRepo := util.GetOrgRepo(org, repo)
+	var reqUrl string
+	if commit == "" {
+		reqUrl = fmt.Sprintf("%s/api/%s/%s", config.SysConfig.GetHFURLBase(), repoType, orgRepo)
+	} else {
+		reqUrl = fmt.Sprintf("%s/api/%s/%s/revision/%s", config.SysConfig.GetHFURLBase(), repoType, orgRepo, commit)
+	}
+	headers := map[string]string{}
+	if authorization != "" {
+		headers["authorization"] = authorization
+	}
+	return util.RetryRequest(func() (*common.Response, error) {
+		if method == consts.RequestTypeHead {
+			return util.Head(reqUrl, headers, config.SysConfig.GetReqTimeOut())
+		} else if method == consts.RequestTypeGet {
+			return util.Get(reqUrl, headers, config.SysConfig.GetReqTimeOut())
+		} else {
+			return nil, fmt.Errorf("request method err")
+		}
+	})
 }
 
 func (f *FileDao) getCommitHfOffline(repoType, org, repo, commit string) (string, error) {
@@ -125,15 +145,7 @@ func (f *FileDao) getCommitHfOffline(repoType, org, repo, commit string) (string
 	return "", myerr.New(fmt.Sprintf("apiPath file not exist, %s", apiPath))
 }
 
-func (f *FileDao) FileGetGenerator(c echo.Context, repoType, org, repo, commit, fileName, method string) error {
-	orgRepo := util.GetOrgRepo(org, repo)
-	filesDir := fmt.Sprintf("%s/files/%s/%s/resolve/%s", config.SysConfig.Repos(), repoType, orgRepo, commit)
-	filesPath := fmt.Sprintf("%s/%s", filesDir, fileName)
-	err := util.MakeDirs(filesPath)
-	if err != nil {
-		zap.S().Errorf("create %s dir err.%v", filesPath, err)
-		return util.ErrorProxyError(c)
-	}
+func (f *FileDao) FileGetGenerator(c echo.Context, repoType, orgRepo, commit, fileName, method string) error {
 	var hfUrl string
 	if repoType == "models" {
 		hfUrl = fmt.Sprintf("%s/%s/resolve/%s/%s", config.SysConfig.GetHFURLBase(), orgRepo, commit, fileName)
@@ -151,7 +163,7 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, org, repo, commit, 
 	}
 	authorization := reqHeaders["authorization"]
 	// _file_realtime_stream
-	pathsInfos, err := f.pathsInfoGenerator(repoType, org, repo, commit, authorization, []string{fileName}, "post")
+	pathsInfos, err := f.pathsInfoGenerator(repoType, orgRepo, commit, authorization, []string{fileName}, "post")
 	if err != nil {
 		if e, ok := err.(myerr.Error); ok {
 			zap.S().Errorf("pathsInfoGenerator code:%d, err:%v", e.StatusCode(), err)
@@ -161,15 +173,19 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, org, repo, commit, 
 		return util.ErrorProxyError(c)
 	}
 	if len(pathsInfos) == 0 {
-		zap.S().Errorf("pathsInfos is null. org:%s, repo:%s, commit:%s, fileName:%s", org, repo, commit, fileName)
+		zap.S().Errorf("pathsInfos is null. repo:%s, commit:%s, fileName:%s", orgRepo, commit, fileName)
 		return util.ErrorEntryNotFound(c)
 	}
 	if len(pathsInfos) != 1 {
-		zap.S().Errorf("pathsInfos not equal to 1. org:%s, repo:%s, commit:%s, fileName:%s", org, repo, commit, fileName)
+		zap.S().Errorf("pathsInfos not equal to 1. repo:%s, commit:%s, fileName:%s", orgRepo, commit, fileName)
 		return util.ErrorProxyTimeout(c)
 	}
 	respHeaders := map[string]string{}
 	pathInfo := pathsInfos[0]
+	if pathInfo.Type == "directory" {
+		zap.S().Warnf("repo:%s, commit:%s, fileName:%s is directory", orgRepo, commit, fileName)
+		return util.ErrorEntryNotFound(c)
+	}
 	var startPos, endPos int64
 	if pathInfo.Size > 0 { // There exists a file of size 0
 		var headRange = reqHeaders["range"]
@@ -194,13 +210,10 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, org, repo, commit, 
 	respHeaders["etag"] = etag
 	blobsDir := fmt.Sprintf("%s/files/%s/%s/blobs", config.SysConfig.Repos(), repoType, orgRepo)
 	blobsFile := fmt.Sprintf("%s/%s", blobsDir, etag)
-	err = util.MakeDirs(blobsFile)
-	if err != nil {
-		zap.S().Errorf("create %s dir err.%v", blobsDir, err)
-		return util.ErrorProxyError(c)
-	}
-	if err = util.CreateSymlinkIfNotExists(blobsFile, filesPath); err != nil {
-		zap.S().Errorf("filesPath:%s is not link", filesPath)
+	filesDir := fmt.Sprintf("%s/files/%s/%s/resolve/%s", config.SysConfig.Repos(), repoType, orgRepo, commit)
+	filesPath := fmt.Sprintf("%s/%s", filesDir, fileName)
+	if err = f.constructBlobsAndFileFile(c, blobsFile, filesPath); err != nil {
+		return err
 	}
 	if method == consts.RequestTypeHead {
 		return util.ResponseHeaders(c, respHeaders)
@@ -211,8 +224,51 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, org, repo, commit, 
 	}
 }
 
-func (f *FileDao) pathsInfoGenerator(repoType, org, repo, commit, authorization string, paths []string, method string) ([]common.PathsInfo, error) {
-	orgRepo := util.GetOrgRepo(org, repo)
+func (f *FileDao) constructBlobsAndFileFile(c echo.Context, blobsFile, filesPath string) (err error) {
+	if err = util.MakeDirs(blobsFile); err != nil {
+		zap.S().Errorf("create %s dir err.%v", blobsFile, err)
+		err = util.ErrorProxyError(c)
+		return
+	}
+	if err = util.MakeDirs(filesPath); err != nil {
+		zap.S().Errorf("create %s dir err.%v", filesPath, err)
+		err = util.ErrorProxyError(c)
+		return
+	}
+	if exist := util.FileExists(filesPath); exist {
+		if b, localErr := util.IsSymlink(filesPath); localErr != nil {
+			zap.S().Errorf("IsSymlink %s err.%v", filesPath, localErr)
+			err = util.ErrorProxyError(c)
+			return
+		} else {
+			if !b {
+				zap.S().Infof("old data transfer, from %s to %s", filesPath, blobsFile)
+				if blobFileExist := util.FileExists(blobsFile); blobFileExist {
+					if err = util.DeleteFile(filesPath); err != nil {
+						err = util.ErrorProxyError(c)
+						return
+					}
+				} else {
+					util.ReName(filesPath, blobsFile)
+				}
+				if err = util.CreateSymlinkIfNotExists(blobsFile, filesPath); err != nil {
+					zap.S().Errorf("filesPath:%s is not link", filesPath)
+					err = util.ErrorProxyError(c)
+					return
+				}
+			}
+		}
+	} else {
+		if err = util.CreateSymlinkIfNotExists(blobsFile, filesPath); err != nil {
+			zap.S().Errorf("filesPath:%s is not link", filesPath)
+			err = util.ErrorProxyError(c)
+			return
+		}
+	}
+	return
+}
+
+func (f *FileDao) pathsInfoGenerator(repoType, orgRepo, commit, authorization string, paths []string, method string) ([]common.PathsInfo, error) {
 	remoteReqFilePathMap := make(map[string]string, 0)
 	ret := make([]common.PathsInfo, 0)
 	for _, pathFileName := range paths {
@@ -223,6 +279,10 @@ func (f *FileDao) pathsInfoGenerator(repoType, org, repo, commit, authorization 
 			cacheContent, err := f.ReadCacheRequest(apiPathInfoPath)
 			if err != nil {
 				zap.S().Errorf("ReadCacheRequest err.%v", err)
+				continue
+			}
+			if cacheContent.Version != consts.VersionSnapshot {
+				remoteReqFilePathMap[pathFileName] = apiPathInfoPath
 				continue
 			}
 			pathsInfos := make([]common.PathsInfo, 0)
@@ -272,10 +332,12 @@ func (f *FileDao) pathsInfoGenerator(repoType, org, repo, commit, authorization 
 					zap.S().Errorf("create %s dir err.%v", apiPath, err)
 					continue
 				}
-				b, _ := sonic.Marshal([]common.PathsInfo{item}) // 转成单个文件的切片
-				if err = f.WriteCacheRequest(apiPath, response.StatusCode, response.ExtractHeaders(response.Headers), b); err != nil {
-					zap.S().Errorf("WriteCacheRequest err.%s,%v", apiPath, err)
-					continue
+				if item.Type == "file" {
+					b, _ := sonic.Marshal([]common.PathsInfo{item}) // 转成单个文件的切片
+					if err = f.WriteCacheRequest(apiPath, response.StatusCode, response.ExtractHeaders(response.Headers), b); err != nil {
+						zap.S().Errorf("WriteCacheRequest err.%s,%v", apiPath, err)
+						continue
+					}
 				}
 			}
 		}
@@ -388,6 +450,7 @@ func (f *FileDao) WhoamiV2Generator(c echo.Context) error {
 
 func (f *FileDao) WriteCacheRequest(apiPath string, statusCode int, headers map[string]string, content []byte) error {
 	cacheContent := common.CacheContent{
+		Version:    consts.VersionSnapshot,
 		StatusCode: statusCode,
 		Headers:    headers,
 		Content:    hex.EncodeToString(content),

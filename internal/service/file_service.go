@@ -43,7 +43,7 @@ func (d *FileService) FileHeadCommon(c echo.Context, repoType, org, repo, commit
 	if err != nil {
 		return err
 	}
-	return d.fileDao.FileGetGenerator(c, repoType, org, repo, commitSha, filePath, consts.RequestTypeHead)
+	return d.fileDao.FileGetGenerator(c, repoType, orgRepo, commitSha, filePath, consts.RequestTypeHead)
 }
 
 func (d *FileService) FileGetCommon(c echo.Context, repoType, org, repo, commit, filePath string) error {
@@ -52,7 +52,8 @@ func (d *FileService) FileGetCommon(c echo.Context, repoType, org, repo, commit,
 	if err != nil {
 		return err
 	}
-	return d.fileDao.FileGetGenerator(c, repoType, org, repo, commitSha, filePath, consts.RequestTypeGet)
+	orgRepo := util.GetOrgRepo(org, repo)
+	return d.fileDao.FileGetGenerator(c, repoType, orgRepo, commitSha, filePath, consts.RequestTypeGet)
 }
 
 func (d *FileService) getFileCommitSha(c echo.Context, repoType, org, repo, commit string) (string, error) {

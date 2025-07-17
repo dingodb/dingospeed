@@ -103,7 +103,7 @@ func Get(url string, headers map[string]string, timeout time.Duration) (*common.
 	}, nil
 }
 
-func GetStream(url string, headers map[string]string, timeout time.Duration, f func(r *http.Response)) error {
+func GetStream(url string, headers map[string]string, timeout time.Duration, f func(r *http.Response) error) error {
 	client := &http.Client{}
 	client.Timeout = timeout
 	escapedURL := strings.ReplaceAll(url, "#", "%23")
@@ -123,8 +123,7 @@ func GetStream(url string, headers map[string]string, timeout time.Duration, f f
 	for key, value := range resp.Header {
 		respHeaders[key] = value
 	}
-	f(resp)
-	return nil
+	return f(resp)
 }
 
 // Post 方法用于发送带请求头的 POST 请求

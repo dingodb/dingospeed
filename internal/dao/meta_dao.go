@@ -16,6 +16,7 @@ package dao
 
 import (
 	"fmt"
+	"net/http"
 
 	"dingospeed/pkg/common"
 	"dingospeed/pkg/config"
@@ -37,6 +38,8 @@ func NewMetaDao(fileDao *FileDao) *MetaDao {
 }
 
 func (m *MetaDao) MetaGetGenerator(c echo.Context, repoType, org, repo, commit, method string, writeResp bool) error {
+	request := c.Request()
+	authorization := request.Header.Get("authorization")
 	orgRepo := util.GetOrgRepo(org, repo)
 	apiDir := fmt.Sprintf("%s/api/%s/%s/revision/%s", config.SysConfig.Repos(), repoType, orgRepo, commit)
 	apiMetaPath := fmt.Sprintf("%s/%s", apiDir, fmt.Sprintf("meta_%s.json", method))
@@ -45,8 +48,6 @@ func (m *MetaDao) MetaGetGenerator(c echo.Context, repoType, org, repo, commit, 
 		zap.S().Errorf("create %s dir err.%v", apiDir, err)
 		return err
 	}
-	request := c.Request()
-	authorization := request.Header.Get("authorization")
 	// 若缓存文件存在，且为离线模式，从缓存读取
 	if util.FileExists(apiMetaPath) && !config.SysConfig.Online() {
 		return m.MetaCacheGenerator(c, repo, apiMetaPath)
@@ -73,31 +74,18 @@ func (m *MetaDao) MetaCacheGenerator(c echo.Context, repo, apiMetaPath string) e
 // 请求api文件
 
 func (m *MetaDao) MetaProxyGenerator(c echo.Context, repoType, org, repo, commit, method, authorization, apiMetaPath string, writeResp bool) error {
-	orgRepo := util.GetOrgRepo(org, repo)
-	metaUrl := fmt.Sprintf("%s/api/%s/%s/revision/%s", config.SysConfig.GetHFURLBase(), repoType, orgRepo, commit)
-	headers := map[string]string{}
-	if authorization != "" {
-		headers["authorization"] = authorization
+	resp, err := m.fileDao.remoteRequestMeta(method, repoType, org, repo, commit, authorization)
+	if err != nil {
+		zap.S().Errorf("%s err.%v", method, err)
+		return util.ErrorEntryNotFound(c)
 	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusTemporaryRedirect {
+		return util.ErrorEntryUnknown(c, resp.StatusCode, "request err")
+	}
+	extractHeaders := resp.ExtractHeaders(resp.Headers)
 	if method == consts.RequestTypeHead {
-		resp, err := util.RetryRequest(func() (*common.Response, error) {
-			return util.Head(metaUrl, headers, config.SysConfig.GetReqTimeOut())
-		})
-		if err != nil {
-			zap.S().Errorf("head %s err.%v", metaUrl, err)
-			return util.ErrorEntryNotFound(c)
-		}
-		extractHeaders := resp.ExtractHeaders(resp.Headers)
 		return util.ResponseHeaders(c, extractHeaders)
 	} else if method == consts.RequestTypeGet {
-		resp, err := util.RetryRequest(func() (*common.Response, error) {
-			return util.Get(metaUrl, headers, config.SysConfig.GetReqTimeOut())
-		})
-		if err != nil {
-			zap.S().Errorf("get %s err.%v", metaUrl, err)
-			return util.ErrorEntryNotFound(c)
-		}
-		extractHeaders := resp.ExtractHeaders(resp.Headers)
 		if writeResp {
 			var bodyStreamChan = make(chan []byte, consts.RespChanSize)
 			bodyStreamChan <- resp.Body

@@ -194,14 +194,14 @@ func (r RemoteFileTask) getFileRangeFromRemote(wg *sync.WaitGroup, startPos, end
 	chunkByteLen := 0
 	var contentEncoding, contentLengthStr = "", ""
 
-	if err := util.GetStream(r.hfUrl, headers, config.SysConfig.GetReqTimeOut(), func(resp *http.Response) {
+	if err := util.GetStream(r.hfUrl, headers, config.SysConfig.GetReqTimeOut(), func(resp *http.Response) error {
 		contentEncoding = resp.Header.Get("content-encoding")
 		contentLengthStr = resp.Header.Get("content-length")
 		for {
 			select {
 			case <-r.Context.Done():
 				zap.S().Warnf("getFileRangeFromRemote Context.Done err :%s", r.FileName)
-				return
+				return nil
 			default:
 				chunk := make([]byte, config.SysConfig.Download.RespChunkSize)
 				n, err := resp.Body.Read(chunk)
@@ -212,17 +212,17 @@ func (r RemoteFileTask) getFileRangeFromRemote(wg *sync.WaitGroup, startPos, end
 						select {
 						case contentChan <- chunk[:n]:
 						case <-r.Context.Done():
-							return
+							return nil
 						}
 					}
 					chunkByteLen += n // 原始数量
 				}
 				if err != nil {
 					if err == io.EOF {
-						return
+						return nil
 					}
 					zap.S().Errorf("file:%s, task %d, req remote err.%v", r.FileName, r.TaskNo, err)
-					return
+					return err
 				}
 			}
 		}

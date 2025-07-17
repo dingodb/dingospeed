@@ -95,6 +95,7 @@ type Lfs struct {
 }
 
 type CacheContent struct {
+	Version       int               `json:"version"`
 	StatusCode    int               `json:"status_code"` // json格式要个之前的版本做兼容
 	Headers       map[string]string `json:"headers"`
 	Content       string            `json:"content"`

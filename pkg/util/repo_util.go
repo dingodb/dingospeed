@@ -72,6 +72,28 @@ func FileExists(filename string) bool {
 	return err == nil
 }
 
+func CreateFile(filePath string) error {
+	file, err := os.Create(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close() // 确保文件最终被关闭
+	return nil
+}
+
+func DeleteFile(filePath string) error {
+	err := os.Remove(filePath)
+	return err
+}
+
+func IsSymlink(path string) (bool, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return false, err
+	}
+	return info.Mode()&os.ModeSymlink != 0, nil
+}
+
 // IsDir 判断所给路径是否为文件夹
 func IsDir(path string) bool {
 	s, err := os.Stat(path)
@@ -97,6 +119,49 @@ func GetFileSize(path string) int64 {
 		fmt.Printf("读取文件%s失败, err: %s\n", path, err)
 	}
 	return fh.Size()
+}
+
+func ReadDir(dir string) ([]string, error) {
+	dirNames := make([]string, 0)
+	repoEntries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range repoEntries {
+		dirNames = append(dirNames, entry.Name())
+	}
+	return dirNames, nil
+}
+
+func TraverseDir(root, currentDir string) ([]string, error) {
+	var dirPaths []string
+
+	// 读取目录内容
+	entries, err := os.ReadDir(currentDir)
+	if err != nil {
+		return nil, fmt.Errorf("无法读取目录 %s: %v", currentDir, err)
+	}
+
+	for _, entry := range entries {
+		entryPath := filepath.Join(currentDir, entry.Name())
+
+		if entry.IsDir() {
+			// 递归处理子目录
+			subDirs, err := TraverseDir(root, entryPath)
+			if err != nil {
+				return nil, err
+			}
+			dirPaths = append(dirPaths, subDirs...)
+		} else {
+			// 获取从根目录到文件所在目录的相对路径
+			relPath, err := filepath.Rel(root, filepath.Dir(entryPath))
+			if err != nil {
+				return nil, fmt.Errorf("计算相对路径失败: %v", err)
+			}
+			dirPaths = append(dirPaths, relPath)
+		}
+	}
+	return dirPaths, nil
 }
 
 func ReName(src, dst string) {
@@ -287,16 +352,13 @@ func SortFilesBySize(path string) ([]FileWithPath, error) {
 		}
 		return nil
 	})
-
 	if err != nil {
 		return nil, err
 	}
-
 	sort.Slice(filesWithPaths, func(i, j int) bool {
 		// 比较文件大小，降序排序
 		return filesWithPaths[i].Info.Size() > filesWithPaths[j].Info.Size()
 	})
-
 	return filesWithPaths, nil
 }
 
