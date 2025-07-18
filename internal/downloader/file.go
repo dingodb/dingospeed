@@ -70,7 +70,6 @@ func (h *DingCacheHeader) GetHeaderSize() int64 {
 	return int64(36 + len(h.BlockMask.bits))
 }
 
-// Read 从文件流中读取头部信息
 func (h *DingCacheHeader) Read(f *os.File) error {
 	magic := make([]byte, 4)
 	if _, err := f.Read(magic); err != nil {
@@ -145,47 +144,49 @@ type DingCache struct {
 	fileLock   sync.RWMutex
 }
 
-// NewDingCache 创建一个新的 DingCache 对象
 func NewDingCache(path string, blockSize int64) (*DingCache, error) {
-	cache := &DingCache{
+	dingCache := &DingCache{
 		path:       path,
 		header:     nil,
 		isOpen:     false,
 		headerLock: sync.RWMutex{},
 	}
-	if err := cache.Open(path, blockSize); err != nil {
+	if err := dingCache.Open(path, blockSize); err != nil {
 		return nil, err
 	}
-	return cache, nil
+	return dingCache, nil
 }
 
-// Open 打开缓存文件
 func (c *DingCache) Open(path string, blockSize int64) error {
 	if c.isOpen {
 		return errors.New("this file has been open")
 	}
+	var f *os.File
 	if _, err := os.Stat(path); err == nil { // 文件存在
 		c.headerLock.Lock()
 		defer c.headerLock.Unlock()
-		f, err := os.OpenFile(path, os.O_RDONLY, 0644)
+		f, err = os.OpenFile(path, os.O_RDWR, 0644) // null file
 		if err != nil {
 			return err
 		}
 		defer f.Close()
 		c.header = &DingCacheHeader{}
-		if err := c.header.Read(f); err != nil {
-			return err
+		if err = c.header.Read(f); err != nil {
+			c.header = NewDingCacheHeader(CURRENT_OLAH_CACHE_VERSION, blockSize, 0)
+			if err = c.header.Write(f); err != nil {
+				return err
+			}
 		}
 	} else {
 		c.headerLock.Lock()
 		defer c.headerLock.Unlock()
-		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0644)
+		f, err = os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0644)
 		if err != nil {
 			return err
 		}
 		defer f.Close()
 		c.header = NewDingCacheHeader(CURRENT_OLAH_CACHE_VERSION, blockSize, 0)
-		if err := c.header.Write(f); err != nil {
+		if err = c.header.Write(f); err != nil {
 			return err
 		}
 	}
@@ -438,7 +439,6 @@ func (c *DingCache) Resize(fileSize int64) error {
 	return c.flushHeader()
 }
 
-// resizeFileSize 调整文件大小
 func (c *DingCache) resizeFileSize(fileSize int64) error {
 	if !c.isOpen {
 		return errors.New("this file has been closed")
