@@ -259,6 +259,12 @@ func (f *FileDao) constructBlobsAndFileFile(c echo.Context, blobsFile, filesPath
 			}
 		}
 	} else {
+		err = util.CreateFileIfNotExist(blobsFile)
+		if err != nil {
+			zap.S().Errorf("create filesPath:%s err", filesPath)
+			err = util.ErrorProxyError(c)
+			return err
+		}
 		if err = util.CreateSymlinkIfNotExists(blobsFile, filesPath); err != nil {
 			zap.S().Errorf("filesPath:%s is not link", filesPath)
 			err = util.ErrorProxyError(c)

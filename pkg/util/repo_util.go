@@ -64,8 +64,8 @@ func MakeDirs(path string) error {
 }
 
 // FileExists 函数用于判断文件是否存在
-func FileExists(filename string) bool {
-	_, err := os.Stat(filename)
+func FileExists(filePath string) bool {
+	_, err := os.Stat(filePath)
 	if os.IsNotExist(err) {
 		return false
 	}
@@ -78,6 +78,13 @@ func CreateFile(filePath string) error {
 		return err
 	}
 	defer file.Close() // 确保文件最终被关闭
+	return nil
+}
+
+func CreateFileIfNotExist(filePath string) error {
+	if exists := FileExists(filePath); !exists {
+		return CreateFile(filePath)
+	}
 	return nil
 }
 

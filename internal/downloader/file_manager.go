@@ -51,7 +51,7 @@ func (f *DingCacheManager) GetDingFile(savePath string, fileSize int64) (*DingCa
 			zap.S().Errorf("NewDingCache err.%v", err)
 			return nil, err
 		}
-		if dingFile.GetFileSize() == 0 { // 表示首次获取当前文件句柄，需要Resize。
+		if dingFile.GetFileSize() == 0 && fileSize > 0 { // 表示首次获取当前文件句柄，需要Resize。
 			if err = dingFile.Resize(fileSize); err != nil {
 				zap.S().Errorf("Resize err.%v", err)
 				return nil, err
