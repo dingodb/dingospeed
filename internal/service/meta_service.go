@@ -16,8 +16,7 @@ package service
 
 import (
 	"fmt"
-	"io"
-	"net/http"
+	"time"
 
 	"dingospeed/internal/dao"
 	"dingospeed/pkg/common"
@@ -140,35 +139,23 @@ func (m *MetaService) ForwardToNewSite(c echo.Context) error {
 	if err != nil {
 		return util.ErrorProxyError(c)
 	}
+
 	req := c.Request()
-	targetQuery := target.RawQuery
 	zap.S().Infof("ForwardToNewSite url:%s", req.URL.Path)
-	proxyReq, err := http.NewRequest(req.Method, target.String()+req.URL.Path, req.Body)
+
+	resp, err := m.metaDao.ForwardRefs(target.String(), req, 30*time.Second)
 	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "create request fail."})
+		zap.S().Errorf("forward request refs err.%v", err)
+		return util.ErrorProxyError(c)
 	}
-	for key, values := range req.Header {
-		for _, value := range values {
-			proxyReq.Header.Add(key, value)
-		}
+	extractHeaders := resp.ExtractHeaders(resp.Headers)
+	cacheContent := &common.CacheContent{
+		Headers:       extractHeaders,
+		OriginContent: resp.Body,
 	}
-	proxyReq.Host = target.Host
-	proxyReq.URL.RawQuery = targetQuery
-	client := &http.Client{}
-	resp, err := client.Do(proxyReq)
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "forward request fail"})
-	}
-	defer resp.Body.Close()
-	for key, values := range resp.Header {
-		for _, value := range values {
-			c.Response().Header().Add(key, value)
-		}
-	}
-	c.Response().WriteHeader(resp.StatusCode)
-	_, err = io.Copy(c.Response().Writer, resp.Body)
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "copy response fail"})
-	}
-	return nil
+
+	var bodyStreamChan = make(chan []byte, consts.RespChanSize)
+	bodyStreamChan <- cacheContent.OriginContent
+	close(bodyStreamChan)
+	return util.ResponseStream(c, target.String(), cacheContent.Headers, bodyStreamChan)
 }

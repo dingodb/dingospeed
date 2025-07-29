@@ -7,7 +7,8 @@ server:
     metrics: true
     online: true #true表示本地找不到，去hfNetLoc地址查找并下载模型数据，false表示本地如果没有，直接返回没有
     repos: ./repos
-    hfNetLoc: hf-mirror.com   # huggingface.co     hf-mirror.com
+    hfNetLoc: huggingface.co   # huggingface.co
+    bpHfNetLoc: hf-mirror.com #hf-mirror.com
     hfScheme: https
 
 download:
@@ -47,3 +48,8 @@ diskClean:
     cacheCleanStrategy: "LRU"  #LRU,FIFO,LARGE_FIRST
     collectTimePeriod: 1  #定期检测磁盘使用量时间周期，单位小时（H）
 
+dynamicProxy:
+    enabled: true
+    httpProxy: http://100.64.1.68:1080
+    httpProxyName: "马鞍山服务器"
+    timePeriod: 1 #定期检测代理是否可用时间周期，单位秒（S）
