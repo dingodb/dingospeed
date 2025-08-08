@@ -15,13 +15,14 @@
 package handler
 
 import (
-	"fmt"
 	"strings"
 
 	"dingospeed/internal/service"
 	"dingospeed/pkg/consts"
+	"dingospeed/pkg/util"
 
 	"github.com/labstack/echo/v4"
+	"go.uber.org/zap"
 )
 
 type MetaHandler struct {
@@ -40,9 +41,17 @@ func (handler *MetaHandler) MetaProxyCommonHandler(c echo.Context) error {
 	repo := c.Param("repo")
 	commit := c.Param("commit")
 	method := strings.ToLower(c.Request().Method)
-	orgRepo := fmt.Sprintf("%s/%s", org, repo)
+	orgRepo := util.GetOrgRepo(org, repo)
 	c.Set(consts.PromOrgRepo, orgRepo)
-	return handler.metaService.MetaProxyCommon(c, repoType, org, repo, commit, method)
+	if _, ok := consts.RepoTypesMapping[repoType]; !ok {
+		zap.S().Errorf("MetaProxyCommon repoType:%s is not exist RepoTypesMapping", repoType)
+		return util.ErrorPageNotFound(c)
+	}
+	if org == "" && repo == "" {
+		zap.S().Errorf("MetaProxyCommon org and repo is null")
+		return util.ErrorRepoNotFound(c)
+	}
+	return handler.metaService.MetaProxyCommon(c, repoType, orgRepo, commit, method)
 }
 
 func (handler *MetaHandler) WhoamiV2Handler(c echo.Context) error {

@@ -21,6 +21,7 @@ package main
 
 import (
 	"dingospeed/internal/dao"
+	"dingospeed/internal/data"
 	"dingospeed/internal/handler"
 	"dingospeed/internal/router"
 	"dingospeed/internal/server"
@@ -32,5 +33,5 @@ import (
 )
 
 func wireApp(*config.Config) (*app.App, func(), error) {
-	panic(wire.Build(server.ServerProvider, router.RouterProvider, handler.HandlerProvider, service.ServiceProvider, dao.DaoProvider, newApp))
+	panic(wire.Build(server.ServerProvider, router.RouterProvider, handler.HandlerProvider, service.ServiceProvider, dao.DaoProvider, data.BaseDataProvider, newApp))
 }

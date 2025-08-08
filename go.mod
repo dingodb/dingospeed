@@ -9,8 +9,9 @@ require (
 	github.com/avast/retry-go v3.0.0+incompatible
 	github.com/bytedance/sonic v1.13.2
 	github.com/dgraph-io/ristretto/v2 v2.2.0
-	github.com/go-playground/validator/v10 v10.26.0
-	github.com/google/uuid v1.3.0
+	github.com/go-playground/validator/v10 v10.27.0
+	github.com/go-redsync/redsync/v4 v4.13.0
+	github.com/google/uuid v1.6.0
 	github.com/google/wire v0.6.0
 	github.com/klauspost/compress v1.18.0
 	github.com/labstack/echo/v4 v4.13.3
@@ -20,6 +21,8 @@ require (
 	github.com/shirou/gopsutil v3.21.11+incompatible
 	go.uber.org/zap v1.24.0
 	golang.org/x/sync v0.13.0
+	google.golang.org/grpc v1.73.0
+	google.golang.org/protobuf v1.36.6
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gopkg.in/yaml.v3 v3.0.1
 
@@ -35,6 +38,8 @@ require (
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
+	github.com/hashicorp/errwrap v1.1.0 // indirect
+	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
@@ -56,5 +61,5 @@ require (
 	golang.org/x/net v0.39.0 // indirect
 	golang.org/x/sys v0.32.0 // indirect
 	golang.org/x/text v0.24.0 // indirect
-	google.golang.org/protobuf v1.36.5 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20250324211829-b45e905df463 // indirect
 )

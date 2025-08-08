@@ -7,6 +7,7 @@ import (
 	"dingospeed/pkg/config"
 	"dingospeed/pkg/util"
 
+	"github.com/bytedance/sonic"
 	"github.com/labstack/echo/v4"
 )
 
@@ -29,5 +30,11 @@ func (s *SysHandler) Info(c echo.Context) error {
 		info.StartTime = appInfo.StartTime()
 	}
 	info.HfNetLoc = config.SysConfig.GetHfNetLoc()
+	info.ProxyIsAvailable = util.ProxyIsAvailable
+	marshal, err := sonic.Marshal(config.SysConfig.DynamicProxy)
+	if err != nil {
+		return err
+	}
+	info.DynamicProxy = string(marshal)
 	return util.ResponseData(c, info)
 }

@@ -51,53 +51,17 @@ func RetryRequest(f func() (*common.Response, error)) (*common.Response, error) 
 	return resp, err
 }
 
-// buildURL 构建请求URL，根据代理可用性选择主URL或备用URL
-func buildURL(requestURL string) (string, error) {
-	// 解析输入的请求URL
-	parsedURL, err := url.Parse(requestURL)
-	if err != nil {
-		return "", fmt.Errorf("解析请求URL失败: %w", err)
-	}
-
-	// 根据代理配置确定基础URL（baseURL）
-	var baseURL string
-	if ProxyIsAvailable || !config.SysConfig.DynamicProxy.Enabled {
-		baseURL = config.SysConfig.GetHFURLBase()
-	} else {
-		baseURL = config.SysConfig.GetBpHFURLBase()
-	}
-
-	// 构建目标URL（包含路径、查询参数和锚点）
-	targetURL := baseURL + parsedURL.Path
-
-	// 追加查询参数（若存在）
-	if parsedURL.RawQuery != "" {
-		targetURL += "?" + parsedURL.RawQuery
-	}
-
-	// 追加锚点（若存在）
-	if parsedURL.Fragment != "" {
-		targetURL += "#" + parsedURL.Fragment
-	}
-
-	return targetURL, nil
+func NewHTTPClient(timeout time.Duration) (*http.Client, error) {
+	client := &http.Client{Timeout: timeout}
+	return client, nil
 }
 
-// NewHTTPClientWithProxy 根据代理地址、超时时间和代理可用性创建HTTP客户端
-func NewHTTPClientWithProxy(proxyAddr string, timeout time.Duration, proxyIsAvailable bool) (*http.Client, error) {
+func NewHTTPClientWithProxy(timeout time.Duration) (*http.Client, error) {
 	client := &http.Client{Timeout: timeout}
-	if !proxyIsAvailable || proxyAddr == "" {
-		if proxyAddr == "" {
-			zap.S().Warnf("未配置代理，使用默认HTTP客户端")
-		}
-		return client, nil
-	}
-
-	proxyURL, err := url.Parse(proxyAddr)
+	proxyURL, err := url.Parse(config.SysConfig.GetHttpProxy())
 	if err != nil {
 		return nil, fmt.Errorf("代理地址解析失败: %v", err)
 	}
-
 	transport := &http.Transport{
 		Proxy: http.ProxyURL(proxyURL),
 		DialContext: (&net.Dialer{
@@ -111,17 +75,36 @@ func NewHTTPClientWithProxy(proxyAddr string, timeout time.Duration, proxyIsAvai
 	}
 
 	client.Transport = transport
-	zap.S().Warnf("已启用HTTP代理: %s", proxyAddr)
+	zap.S().Warnf("已启用HTTP代理: %s", config.SysConfig.GetHttpProxy())
 	return client, nil
 }
 
-// Head 方法用于发送带请求头的 HEAD 请求
-func Head(requestURL string, headers map[string]string, timeout time.Duration) (*common.Response, error) {
-	targetURL, err := buildURL(requestURL)
-	if err != nil {
-		return nil, err
+func constructClient(timeout time.Duration) (string, *http.Client, error) {
+	var (
+		domain string
+		client *http.Client
+		err    error
+	)
+	if !ProxyIsAvailable && config.SysConfig.DynamicProxy.Enabled {
+		domain = config.SysConfig.GetBpHFURLBase()
+		client, err = NewHTTPClient(timeout)
+	} else {
+		domain = config.SysConfig.GetHFURLBase()
+		client, err = NewHTTPClientWithProxy(timeout)
 	}
+	return domain, client, err
+}
 
+func Head(requestUri string, headers map[string]string, timeout time.Duration) (*common.Response, error) {
+	domain, client, err := constructClient(timeout)
+	if err != nil {
+		return nil, fmt.Errorf("construct http client err: %v", err)
+	}
+	requestURL := fmt.Sprintf("%s%s", domain, requestUri)
+	return doHead(client, requestURL, headers)
+}
+
+func doHead(client *http.Client, targetURL string, headers map[string]string) (*common.Response, error) {
 	req, err := http.NewRequest("HEAD", targetURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("创建HEAD请求失败: %v", err)
@@ -129,25 +112,17 @@ func Head(requestURL string, headers map[string]string, timeout time.Duration) (
 	for key, value := range headers {
 		req.Header.Set(key, value)
 	}
-
-	client, clientErr := NewHTTPClientWithProxy(config.SysConfig.GetHttpProxy(), timeout, ProxyIsAvailable)
-	if clientErr != nil {
-		return nil, clientErr
-	}
-
 	resp, err := client.Do(req)
 	if err != nil {
 		zap.S().Warnf("URL请求失败: %s, 错误: %v", targetURL, err)
 		return nil, fmt.Errorf("执行HEAD请求失败: %v", err)
 	}
-
 	defer func() {
 		if r := recover(); r != nil {
 			zap.S().Errorf("关闭响应体资源时出现异常: %v", r)
 		}
 		resp.Body.Close()
 	}()
-
 	respHeaders := make(map[string]interface{})
 	for key, values := range resp.Header {
 		respHeaders[key] = values
@@ -158,13 +133,16 @@ func Head(requestURL string, headers map[string]string, timeout time.Duration) (
 	}, nil
 }
 
-// Get 方法用于发送带请求头的 GET 请求
-func Get(requestURL string, headers map[string]string, timeout time.Duration) (*common.Response, error) {
-	targetURL, err := buildURL(requestURL)
+func Get(requestUri string, headers map[string]string, timeout time.Duration) (*common.Response, error) {
+	domain, client, err := constructClient(timeout)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("construct http client err: %v", err)
 	}
+	requestURL := fmt.Sprintf("%s%s", domain, requestUri)
+	return doGet(client, requestURL, headers)
+}
 
+func doGet(client *http.Client, targetURL string, headers map[string]string) (*common.Response, error) {
 	req, err := http.NewRequest("GET", targetURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("创建GET请求失败: %v", err)
@@ -172,12 +150,6 @@ func Get(requestURL string, headers map[string]string, timeout time.Duration) (*
 	for key, value := range headers {
 		req.Header.Set(key, value)
 	}
-
-	client, clientErr := NewHTTPClientWithProxy(config.SysConfig.GetHttpProxy(), timeout, ProxyIsAvailable)
-	if clientErr != nil {
-		return nil, clientErr
-	}
-
 	resp, err := client.Do(req)
 	if err != nil {
 		zap.S().Warnf("URL请求失败: %s, 错误: %v", targetURL, err)
@@ -208,13 +180,25 @@ func Get(requestURL string, headers map[string]string, timeout time.Duration) (*
 	}, nil
 }
 
-// GetStream 方法用于发送带请求头的 GET 请求并流式处理响应
-func GetStream(requestURL string, headers map[string]string, timeout time.Duration, f func(r *http.Response) error) error {
-	targetURL, err := buildURL(requestURL)
-	if err != nil {
-		return err
+func GetStream(domain, uri string, headers map[string]string, timeout time.Duration, f func(r *http.Response) error) error {
+	var (
+		client *http.Client
+		err    error
+	)
+	if IsInnerDomain(domain) {
+		client, err = NewHTTPClient(timeout)
+		headers[consts.RequestSourceInner] = Itoa(1)
+	} else {
+		domain, client, err = constructClient(timeout)
 	}
+	if err != nil {
+		return fmt.Errorf("construct http client err: %v", err)
+	}
+	requestURL := fmt.Sprintf("%s%s", domain, uri)
+	return doGetStream(client, requestURL, headers, timeout, f)
+}
 
+func doGetStream(client *http.Client, targetURL string, headers map[string]string, timeout time.Duration, f func(r *http.Response) error) error {
 	escapedURL := strings.ReplaceAll(targetURL, "#", "%23")
 	req, err := http.NewRequest("GET", escapedURL, nil)
 	if err != nil {
@@ -223,18 +207,10 @@ func GetStream(requestURL string, headers map[string]string, timeout time.Durati
 	for key, value := range headers {
 		req.Header.Set(key, value)
 	}
-
-	client, clientErr := NewHTTPClientWithProxy(config.SysConfig.GetHttpProxy(), timeout, ProxyIsAvailable)
-	if clientErr != nil {
-		return clientErr
-	}
-
 	resp, err := client.Do(req)
 	if err != nil {
-		zap.S().Warnf("URL请求失败: %s, 错误: %v", escapedURL, err)
-		return fmt.Errorf("执行GET请求失败: %v", err)
+		return err
 	}
-
 	defer resp.Body.Close()
 	respHeaders := make(map[string]interface{})
 	for key, value := range resp.Header {
@@ -243,13 +219,16 @@ func GetStream(requestURL string, headers map[string]string, timeout time.Durati
 	return f(resp)
 }
 
-// Post 方法用于发送带请求头的 POST 请求
-func Post(requestURL string, contentType string, data []byte, headers map[string]string) (*common.Response, error) {
-	targetURL, err := buildURL(requestURL)
+func Post(requestUri string, contentType string, data []byte, headers map[string]string) (*common.Response, error) {
+	domain, client, err := constructClient(config.SysConfig.GetReqTimeOut())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("construct http client err: %v", err)
 	}
+	requestURL := fmt.Sprintf("%s%s", domain, requestUri)
+	return doPost(client, requestURL, contentType, data, headers)
+}
 
+func doPost(client *http.Client, targetURL string, contentType string, data []byte, headers map[string]string) (*common.Response, error) {
 	req, err := http.NewRequest("POST", targetURL, bytes.NewBuffer(data))
 	if err != nil {
 		return nil, fmt.Errorf("创建POST请求失败: %v", err)
@@ -258,11 +237,6 @@ func Post(requestURL string, contentType string, data []byte, headers map[string
 	req.Header.Set("Content-Type", contentType)
 	for key, value := range headers {
 		req.Header.Set(key, value)
-	}
-
-	client, clientErr := NewHTTPClientWithProxy(config.SysConfig.GetHttpProxy(), 0, ProxyIsAvailable)
-	if clientErr != nil {
-		return nil, clientErr
 	}
 
 	resp, err := client.Do(req)
@@ -311,7 +285,7 @@ func ResponseStream(c echo.Context, fileName string, headers map[string]string, 
 		select {
 		case b, ok := <-content:
 			if !ok {
-				zap.S().Infof("ResponseStream complete, %s.", fileName)
+				zap.S().Infof("ResponseStream complete, %s", fileName)
 				return nil
 			}
 			if len(b) > 0 {
@@ -331,83 +305,47 @@ func ResponseStream(c echo.Context, fileName string, headers map[string]string, 
 	}
 }
 
-func GetDomain(hfURL string) (string, error) {
-	parsedURL, err := url.Parse(hfURL)
+func ForwardRequest(originalReq *http.Request, timeout time.Duration) (*common.Response, error) {
+	domain, client, err := constructClient(timeout)
 	if err != nil {
-		return "", err
+		return nil, fmt.Errorf("construct http client err: %v", err)
 	}
-	return parsedURL.Host, nil
-}
-
-// ForwardRequest 用于转发HTTP请求到目标URL，返回统一的Response结构
-func ForwardRequest(requestURL string, originalReq *http.Request, timeout time.Duration) (*common.Response, error) {
-	// 构建完整的目标URL
-	parsedURL, err := url.Parse(requestURL)
-	if err != nil {
-		return nil, fmt.Errorf("解析目标URL失败: %v", err)
-	}
-
-	// 组合目标路径和原始请求路径
-	fullPath := parsedURL.String() + originalReq.URL.Path
-	if originalReq.URL.RawQuery != "" {
-		fullPath += "?" + originalReq.URL.RawQuery
-	}
-
-	targetURL, err := buildURL(fullPath)
-	if err != nil {
-		return nil, err
-	}
-
-	// 创建转发请求
+	targetURL := fmt.Sprintf("%s%s", domain, originalReq.URL.Path)
 	proxyReq, err := http.NewRequest(originalReq.Method, targetURL, originalReq.Body)
 	if err != nil {
 		return nil, fmt.Errorf("创建转发请求失败: %v", err)
 	}
-
-	// 复制原始请求头
 	for key, values := range originalReq.Header {
 		for _, value := range values {
 			proxyReq.Header.Add(key, value)
 		}
 	}
-
-	// 创建带代理和超时的HTTP客户端
-	client, clientErr := NewHTTPClientWithProxy(config.SysConfig.GetHttpProxy(), timeout, ProxyIsAvailable)
-	if clientErr != nil {
-		return nil, clientErr
-	}
-
-	// 发送转发请求
 	resp, err := client.Do(proxyReq)
 	if err != nil {
 		zap.S().Warnf("转发请求失败: %s, 错误: %v", targetURL, err)
 		return nil, fmt.Errorf("执行转发请求失败: %v", err)
 	}
-
-	// 确保响应体被关闭
 	defer func() {
 		if r := recover(); r != nil {
 			zap.S().Errorf("关闭响应体资源时出现异常: %v", r)
 		}
 		resp.Body.Close()
 	}()
-
-	// 读取响应体内容
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("读取响应体失败: %v", err)
 	}
-
-	// 处理响应头
 	respHeaders := make(map[string]interface{})
 	for key, values := range resp.Header {
 		respHeaders[key] = values
 	}
-
-	// 返回统一的响应结构
 	return &common.Response{
 		StatusCode: resp.StatusCode,
 		Headers:    respHeaders,
 		Body:       body,
 	}, nil
+}
+
+func IsInnerDomain(url string) bool {
+	return !strings.Contains(url, consts.Huggingface) && !strings.Contains(url, consts.Hfmirror)
 }

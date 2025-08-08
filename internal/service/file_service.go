@@ -15,116 +15,50 @@
 package service
 
 import (
-	"fmt"
-
-	"time"
-
 	"dingospeed/internal/dao"
-	"dingospeed/pkg/config"
+	"dingospeed/internal/model"
+	"dingospeed/pkg/common"
 	"dingospeed/pkg/consts"
+	myerr "dingospeed/pkg/error"
 	"dingospeed/pkg/util"
 
 	"github.com/labstack/echo/v4"
-	"github.com/patrickmn/go-cache"
 	"go.uber.org/zap"
 )
 
 type FileService struct {
-	fileDao     *dao.FileDao
-	commitCache *cache.Cache
+	fileDao *dao.FileDao
 }
 
 func NewFileService(fileDao *dao.FileDao) *FileService {
 	return &FileService{
-		fileDao:     fileDao,
-		commitCache: cache.New(10*time.Minute, 20*time.Minute),
+		fileDao: fileDao,
 	}
 }
 
-func (d *FileService) FileHeadCommon(c echo.Context, repoType, org, repo, commit, filePath string) error {
-	orgRepo := fmt.Sprintf("%s/%s", org, repo)
-	c.Set(consts.PromOrgRepo, orgRepo)
-	cacheKey := fmt.Sprintf("commitSha:%s:%s:%s:%s", repoType, org, repo, commit)
-	if cached, found := d.commitCache.Get(cacheKey); found {
-		commitSha, ok := cached.(string)
-		if ok {
-			return d.fileDao.FileGetGenerator(c, repoType, orgRepo, commitSha, filePath, consts.RequestTypeHead)
-		}
-	}
-
-	commitSha, err := d.getFileCommitSha(c, repoType, org, repo, commit)
+func (f *FileService) FileHeadCommon(c echo.Context, repoType, orgRepo, commit, filePath string) error {
+	commitSha, err := f.fileDao.GetFileCommitSha(c, repoType, orgRepo, commit)
 	if err != nil {
-		return err
+		if e, ok := err.(myerr.Error); ok {
+			return util.ErrorEntryUnknown(c, e.StatusCode(), e.Error())
+		}
+		return util.ErrorProxyError(c)
 	}
-
-	d.commitCache.Set(cacheKey, commitSha, cache.DefaultExpiration)
-	return d.fileDao.FileGetGenerator(c, repoType, orgRepo, commitSha, filePath, consts.RequestTypeHead)
+	return f.fileDao.FileGetGenerator(c, repoType, orgRepo, commitSha, filePath, consts.RequestTypeHead)
 }
 
-func (d *FileService) FileGetCommon(c echo.Context, repoType, org, repo, commit, filePath string) error {
-	zap.S().Infof("exec file get:%s/%s/%s/%s/%s, remoteAdd:%s", repoType, org, repo, commit, filePath, c.Request().RemoteAddr)
-	cacheKey := fmt.Sprintf("commitSha:%s:%s:%s:%s", repoType, org, repo, commit)
-
-	// 检查缓存
-	orgRepo := util.GetOrgRepo(org, repo)
-	if cached, found := d.commitCache.Get(cacheKey); found {
-		if commitSha, ok := cached.(string); ok {
-			zap.S().Debugf("cache hit for commitSha: %s", commitSha)
-			return d.fileDao.FileGetGenerator(c, repoType, orgRepo, commitSha, filePath, consts.RequestTypeGet)
-		}
-		zap.S().Warnf("cache type mismatch for key: %s", cacheKey)
-	}
-
-	commitSha, err := d.getFileCommitSha(c, repoType, org, repo, commit)
+func (f *FileService) FileGetCommon(c echo.Context, repoType, orgRepo, commit, filePath string) error {
+	zap.S().Infof("exec file get:%s/%s/%s/%s, remoteAdd:%s", repoType, orgRepo, commit, filePath, c.Request().RemoteAddr)
+	commitSha, err := f.fileDao.GetFileCommitSha(c, repoType, orgRepo, commit)
 	if err != nil {
-		return err
+		if e, ok := err.(myerr.Error); ok {
+			return util.ErrorEntryUnknown(c, e.StatusCode(), e.Error())
+		}
+		return util.ErrorProxyError(c)
 	}
-
-	d.commitCache.Set(cacheKey, commitSha, cache.DefaultExpiration)
-	return d.fileDao.FileGetGenerator(c, repoType, orgRepo, commitSha, filePath, consts.RequestTypeGet)
+	return f.fileDao.FileGetGenerator(c, repoType, orgRepo, commitSha, filePath, consts.RequestTypeGet)
 }
 
-func (d *FileService) getFileCommitSha(c echo.Context, repoType, org, repo, commit string) (string, error) {
-	// 参数校验（保持原有逻辑不变）
-	if _, ok := consts.RepoTypesMapping[repoType]; !ok {
-		zap.S().Errorf("getFileCommitSha repoType:%s is not exist RepoTypesMapping", repoType)
-		return "", util.ErrorPageNotFound(c)
-	}
-	if org == "" && repo == "" {
-		zap.S().Errorf("getFileCommitSha org and repo are null")
-		return "", util.ErrorRepoNotFound(c)
-	}
-
-	// 生成缓存键
-	cacheKey := fmt.Sprintf("commitSha:%s:%s:%s:%s", repoType, org, repo, commit)
-
-	// 检查缓存
-	if cached, found := d.commitCache.Get(cacheKey); found {
-		if commitSha, ok := cached.(string); ok {
-			zap.S().Debugf("cache hit for commitSha: %s (key: %s)", commitSha, cacheKey)
-			return commitSha, nil
-		}
-		zap.S().Warnf("cache type mismatch for key: %s", cacheKey)
-	}
-
-	// 缓存未命中，执行原始逻辑
-	authorization := c.Request().Header.Get("authorization")
-
-	if config.SysConfig.Online() {
-		if code, err := d.fileDao.CheckCommitHf(repoType, org, repo, commit, authorization); err != nil {
-			zap.S().Errorf("getFileCommitSha CheckCommitHf failed, commit:%s, error:%v", commit, err)
-			return "", util.ErrorEntryUnknown(c, code, err.Error())
-		}
-	}
-
-	commitSha, err := d.fileDao.GetCommitHf(repoType, org, repo, commit, authorization)
-	if err != nil {
-		zap.S().Errorf("getFileCommitSha GetCommitHf error: %v", err)
-		return "", util.ErrorRepoNotFound(c)
-	}
-
-	d.commitCache.Set(cacheKey, commitSha, cache.DefaultExpiration)
-	zap.S().Debugf("stored commitSha in cache: %s (key: %s)", commitSha, cacheKey)
-
-	return commitSha, nil
+func (f *FileService) GetPathInfo(query *model.PathInfoQuery) ([]common.PathsInfo, error) {
+	return f.fileDao.GetPathsInfo(query.Datatype, util.GetOrgRepo(query.Org, query.Repo), query.Revision, query.Token, query.FileNames)
 }

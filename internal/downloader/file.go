@@ -16,7 +16,6 @@ package downloader
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -36,104 +35,6 @@ const (
 
 	cost = 1
 )
-
-var magicNumber = [4]byte{'O', 'L', 'A', 'H'}
-
-// DingCacheHeader 结构体表示 Olah 缓存文件的头部
-type DingCacheHeader struct {
-	MagicNumber   [4]byte
-	Version       int64
-	BlockSize     int64
-	FileSize      int64
-	BlockMaskSize int64
-	BlockNumber   int64
-	BlockMask     *Bitset
-}
-
-// NewDingCacheHeader 创建一个新的 DingCacheHeader 对象
-func NewDingCacheHeader(version, blockSize, fileSize int64) *DingCacheHeader {
-	blockNumber := (fileSize + blockSize - 1) / blockSize
-	blockMask := NewBitset(int64(DEFAULT_BLOCK_MASK_MAX))
-	return &DingCacheHeader{
-		MagicNumber:   magicNumber,
-		Version:       version,
-		BlockSize:     blockSize,
-		FileSize:      fileSize,
-		BlockMaskSize: DEFAULT_BLOCK_MASK_MAX,
-		BlockNumber:   blockNumber,
-		BlockMask:     blockMask,
-	}
-}
-
-// GetHeaderSize 返回头部的大小
-func (h *DingCacheHeader) GetHeaderSize() int64 {
-	return int64(36 + len(h.BlockMask.bits))
-}
-
-func (h *DingCacheHeader) Read(f *os.File) error {
-	magic := make([]byte, 4)
-	if _, err := f.Read(magic); err != nil {
-		return errors.New("read magic 4 bytes err")
-	}
-	if !bytes.Equal(magic, []byte{'O', 'L', 'A', 'H'}) {
-		return errors.New("file is not a Olah cache file")
-	}
-	h.MagicNumber = magicNumber
-	if err := binary.Read(f, binary.LittleEndian, &h.Version); err != nil {
-		return err
-	}
-	if err := binary.Read(f, binary.LittleEndian, &h.BlockSize); err != nil {
-		return err
-	}
-	if err := binary.Read(f, binary.LittleEndian, &h.FileSize); err != nil {
-		return err
-	}
-	if err := binary.Read(f, binary.LittleEndian, &h.BlockMaskSize); err != nil {
-		return err
-	}
-	h.BlockNumber = (h.FileSize + h.BlockSize - 1) / h.BlockSize
-	h.BlockMask = NewBitset(h.BlockMaskSize)
-	if _, err := f.Read(h.BlockMask.bits); err != nil {
-		return err
-	}
-	return h.ValidHeader()
-}
-
-func (h *DingCacheHeader) ValidHeader() error {
-	if h.FileSize > h.BlockMaskSize*h.BlockSize {
-		return fmt.Errorf("the size of file %d is out of the max capability of container (%d * %d)", h.FileSize, h.BlockMaskSize, h.BlockSize)
-	}
-	if h.Version < CURRENT_OLAH_CACHE_VERSION {
-		return fmt.Errorf("the Olah Cache file is created by older version Olah. Please remove cache files and retry")
-	}
-	if h.Version > CURRENT_OLAH_CACHE_VERSION {
-		return fmt.Errorf("the Olah Cache file is created by newer version Olah. Please remove cache files and retry")
-	}
-	return nil
-}
-
-// Write 将头部信息写入文件流
-func (h *DingCacheHeader) Write(f *os.File) error {
-	if _, err := f.Write(h.MagicNumber[:]); err != nil {
-		return err
-	}
-	if err := binary.Write(f, binary.LittleEndian, h.Version); err != nil {
-		return err
-	}
-	if err := binary.Write(f, binary.LittleEndian, h.BlockSize); err != nil {
-		return err
-	}
-	if err := binary.Write(f, binary.LittleEndian, h.FileSize); err != nil {
-		return err
-	}
-	if err := binary.Write(f, binary.LittleEndian, h.BlockMaskSize); err != nil {
-		return err
-	}
-	if _, err := f.Write(h.BlockMask.bits); err != nil {
-		return err
-	}
-	return nil
-}
 
 // DingCache 结构体表示 Olah 缓存文件
 type DingCache struct {
@@ -239,8 +140,8 @@ func (c *DingCache) getBlockNumber() int64 {
 	return c.header.BlockNumber
 }
 
-// getBlockSize 返回块大小
-func (c *DingCache) getBlockSize() int64 {
+// GetBlockSize 返回块大小
+func (c *DingCache) GetBlockSize() int64 {
 	c.headerLock.RLock()
 	defer c.headerLock.RUnlock()
 	return c.header.BlockSize
@@ -259,16 +160,10 @@ func (c *DingCache) setHeaderBlock(blockIndex int64) error {
 	return c.header.BlockMask.Set(blockIndex)
 }
 
-// testHeaderBlock 测试头部块信息
-func (c *DingCache) testHeaderBlock(blockIndex int64) (bool, error) {
+func (c *DingCache) HasBlock(blockIndex int64) (bool, error) {
 	c.headerLock.RLock()
 	defer c.headerLock.RUnlock()
 	return c.header.BlockMask.Test(blockIndex)
-}
-
-// HasBlock 检查块是否存在
-func (c *DingCache) HasBlock(blockIndex int64) (bool, error) {
-	return c.testHeaderBlock(blockIndex)
 }
 
 // ReadBlock 读取块数据，该操作会预先缓存prefetchBlocks个块数据，避免每次读取时对文件做操作。
@@ -281,24 +176,19 @@ func (c *DingCache) ReadBlock(blockIndex int64) ([]byte, error) {
 		return nil, errors.New("Invalid block index.")
 	}
 	key := c.getBlockKey(blockIndex)
-	if config.SysConfig.Cache.Enabled {
+	if config.SysConfig.EnableReadBlockCache() {
 		if blockData, ok := cache.FileBlockCache.Get(key); ok {
 			// 若当前为最后一个块，则移除最近的16个块
 			if blockIndex == c.getBlockNumber()-1 {
-				var cacheFlag bool
 				for i := config.SysConfig.GetPrefetchBlocks(); i >= 0; i-- {
 					no := blockIndex - i
 					if no >= 0 {
 						oldKey := c.getBlockKey(no)
 						cache.FileBlockCache.Delete(oldKey)
-						cacheFlag = true
 					}
 				}
-				if cacheFlag {
-					cache.FileBlockCache.Wait()
-				}
 			}
-			return blockData, nil
+			return blockData.([]byte), nil
 		}
 	}
 	hasBlock, err := c.HasBlock(blockIndex)
@@ -308,7 +198,7 @@ func (c *DingCache) ReadBlock(blockIndex int64) ([]byte, error) {
 	if !hasBlock {
 		return nil, nil
 	}
-	offset := c.getHeaderSize() + blockIndex*c.getBlockSize()
+	offset := c.getHeaderSize() + blockIndex*c.GetBlockSize()
 	f, err := os.OpenFile(c.path, os.O_RDONLY, 0644)
 	if err != nil {
 		return nil, err
@@ -317,11 +207,11 @@ func (c *DingCache) ReadBlock(blockIndex int64) ([]byte, error) {
 	if _, err := f.Seek(offset, 0); err != nil {
 		return nil, err
 	}
-	rawBlock := make([]byte, c.getBlockSize()) // 读取当前块（blockIndex）的数据
+	rawBlock := make([]byte, c.GetBlockSize()) // 读取当前块（blockIndex）的数据
 	if _, err := f.Read(rawBlock); err != nil {
 		return nil, err
 	}
-	if config.SysConfig.Cache.Enabled {
+	if config.SysConfig.EnableReadBlockCache() {
 		c.readBlockAndCache(f, blockIndex)
 	}
 	block := c.padBlock(rawBlock)
@@ -329,7 +219,6 @@ func (c *DingCache) ReadBlock(blockIndex int64) ([]byte, error) {
 }
 
 func (c *DingCache) readBlockAndCache(f *os.File, blockIndex int64) {
-	var cacheFlag bool
 	memoryUsedPercent := config.SystemInfo.MemoryUsedPercent
 	if memoryUsedPercent != 0 && memoryUsedPercent >= config.SysConfig.GetPrefetchMemoryUsedThreshold() {
 		return
@@ -347,7 +236,7 @@ func (c *DingCache) readBlockAndCache(f *os.File, blockIndex int64) {
 		}
 		if hasNextBlock {
 			key := c.getBlockKey(newOffsetBlock)
-			prefetchRawBlock := make([]byte, c.getBlockSize())
+			prefetchRawBlock := make([]byte, c.GetBlockSize())
 			if _, err := f.Read(prefetchRawBlock); err != nil {
 				zap.S().Errorf("read err. newOffsetBlock:%d, %v", newOffsetBlock, err)
 				break
@@ -360,19 +249,15 @@ func (c *DingCache) readBlockAndCache(f *os.File, blockIndex int64) {
 				oldKey := c.getBlockKey(newOffsetBlock)
 				cache.FileBlockCache.Delete(oldKey)
 			}
-			cacheFlag = true
 		} else {
 			break
 		}
-	}
-	if cacheFlag {
-		cache.FileBlockCache.Wait()
 	}
 }
 
 // padBlock 填充块数据
 func (c *DingCache) padBlock(rawBlock []byte) []byte {
-	blockSize := c.getBlockSize()
+	blockSize := c.GetBlockSize()
 	if int64(len(rawBlock)) < blockSize {
 		return append(rawBlock, bytes.Repeat([]byte{0}, int(blockSize)-len(rawBlock))...)
 	}
@@ -386,10 +271,10 @@ func (c *DingCache) WriteBlock(blockIndex int64, blockBytes []byte) error {
 	if blockIndex >= c.getBlockNumber() {
 		return errors.New("invalid block index")
 	}
-	if int64(len(blockBytes)) != c.getBlockSize() {
+	if int64(len(blockBytes)) != c.GetBlockSize() {
 		return errors.New("block size does not match the cache's block size")
 	}
-	offset := c.getHeaderSize() + blockIndex*c.getBlockSize()
+	offset := c.getHeaderSize() + blockIndex*c.GetBlockSize()
 	f, err := os.OpenFile(c.path, os.O_RDWR, 0644)
 	if err != nil {
 		return err
@@ -398,8 +283,8 @@ func (c *DingCache) WriteBlock(blockIndex int64, blockBytes []byte) error {
 	if _, err := f.Seek(offset, 0); err != nil {
 		return err
 	}
-	if (blockIndex+1)*c.getBlockSize() > c.GetFileSize() {
-		realBlockBytes := blockBytes[:c.GetFileSize()-blockIndex*c.getBlockSize()]
+	if (blockIndex+1)*c.GetBlockSize() > c.GetFileSize() {
+		realBlockBytes := blockBytes[:c.GetFileSize()-blockIndex*c.GetBlockSize()]
 		if _, err = f.Write(realBlockBytes); err != nil {
 			return err
 		}
@@ -425,7 +310,7 @@ func (c *DingCache) Resize(fileSize int64) error {
 	if !c.isOpen {
 		return errors.New("this file has been closed")
 	}
-	bs := c.getBlockSize()
+	bs := c.GetBlockSize()
 	newBlockNum := (fileSize + bs - 1) / bs
 	c.fileLock.Lock()
 	defer c.fileLock.Unlock()
@@ -479,4 +364,12 @@ func (c *DingCache) resizeHeader(blockNum, fileSize int64) error {
 func (c *DingCache) getBlockKey(blockIndex int64) string {
 	simpleKey := fmt.Sprintf("%s/%d", c.path, blockIndex)
 	return util.Md5(simpleKey)
+}
+
+// get_block_info 函数
+func GetBlockInfo(pos, blockSize, fileSize int64) (int64, int64, int64) {
+	curBlock := pos / blockSize
+	blockStartPos := curBlock * blockSize
+	blockEndPos := min((curBlock+1)*blockSize, fileSize)
+	return curBlock, blockStartPos, blockEndPos
 }

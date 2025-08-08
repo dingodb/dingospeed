@@ -8,6 +8,8 @@ type SystemInfo struct {
 	HfNetLoc          string  `json:"hfNetLoc"`
 	CollectTime       int64   `json:"-"`
 	MemoryUsedPercent float64 `json:"-"`
+	ProxyIsAvailable  bool    `json:"proxyIsAvailable"`
+	DynamicProxy      string  `json:"dynamicProxy"`
 }
 
 func (s *SystemInfo) SetMemoryUsed(collectTime int64, usedPercent float64) {

@@ -1,0 +1,68 @@
+syntax = "proto3";
+package manager;
+
+import "google/protobuf/empty.proto";
+
+option go_package = ".;manager";
+
+// 用户服务定义
+service Manager {
+    // 启动注册方法
+    rpc Register (RegisterRequest) returns (RegisterResponse) {};
+    // 心跳方法
+    rpc Heartbeat (HeartbeatRequest) returns (google.protobuf.Empty);
+    // 下载文件开始时，触发调度
+    rpc SchedulerFile (SchedulerFileRequest) returns (SchedulerFileResponse);
+    // 文件下载结束，信息上报
+    rpc ReportFileProcess (FileProcessRequest) returns (google.protobuf.Empty);
+
+}
+
+
+// 注册请求
+message RegisterRequest {
+    string instanceId = 1;
+    string host = 2;
+    int32 port = 3;
+    bool  online = 4;
+}
+
+// 注册响应
+message RegisterResponse {
+    int32 id = 1;
+    bool success = 2;
+}
+
+// 心跳请求
+message HeartbeatRequest {
+    int32 id = 1;
+}
+
+message SchedulerFileRequest {
+    string dataType = 1;
+    string org = 2;
+    string repo = 3;
+    string name = 4;
+    string etag = 5;
+    string instanceId = 6;
+    int64 startPos = 7;
+    int64 endPos = 8;
+    int64 fileSize = 9;
+}
+
+// 注册响应
+message SchedulerFileResponse {
+    int32 schedulerType = 1;
+    int64 processId = 2;
+    string host = 3;
+    int32 port = 4;
+    string masterInstanceId = 5;
+    int64 maxOffset = 6;
+}
+
+message FileProcessRequest{
+    int64 processId = 1;
+    int64 staPos = 2;
+    int64 endPos = 3;
+    int32 status = 4;
+}

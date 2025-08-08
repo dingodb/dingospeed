@@ -8,6 +8,7 @@ package main
 
 import (
 	"dingospeed/internal/dao"
+	"dingospeed/internal/data"
 	"dingospeed/internal/handler"
 	"dingospeed/internal/router"
 	"dingospeed/internal/server"
@@ -24,7 +25,10 @@ import (
 
 func wireApp(configConfig *config.Config) (*app.App, func(), error) {
 	echo := server.NewEngine()
-	fileDao := dao.NewFileDao()
+	schedulerDao := dao.NewSchedulerDao()
+	downloaderDao := dao.NewDownloaderDao(schedulerDao)
+	baseData := data.NewBaseData()
+	fileDao := dao.NewFileDao(downloaderDao, baseData)
 	fileService := service.NewFileService(fileDao)
 	sysService := service.NewSysService()
 	fileHandler := handler.NewFileHandler(fileService, sysService)
@@ -34,7 +38,9 @@ func wireApp(configConfig *config.Config) (*app.App, func(), error) {
 	sysHandler := handler.NewSysHandler(sysService)
 	httpRouter := router.NewHttpRouter(echo, fileHandler, metaHandler, sysHandler)
 	httpServer := server.NewServer(configConfig, echo, httpRouter)
-	appApp := newApp(httpServer)
+	schedulerService := service.NewSchedulerService(schedulerDao)
+	schedulerServer := server.NewSchedulerServer(schedulerService)
+	appApp := newApp(httpServer, schedulerServer)
 	return appApp, func() {
 	}, nil
 }

@@ -14,6 +14,8 @@
 
 package consts
 
+import "time"
+
 var RepoTypesMapping = map[string]RepoType{
 	"models":   RepoTypeModel,
 	"spaces":   RepoTypeSpace,
@@ -45,6 +47,33 @@ const PromSource = "source"
 const PromOrgRepo = "orgRepo"
 
 const (
-	VersionOrigin   = 0
-	VersionSnapshot = 1
+	VersionOrigin           = 0
+	VersionSnapshot         = 1
+	SchedulerModeStandalone = "standalone"
+	SchedulerModeCluster    = "cluster"
+)
+
+var RpcRequestTimeout = time.Duration(3) * time.Second
+
+const (
+	Huggingface        = "huggingface"
+	Hfmirror           = "hf-mirror"
+	RequestSourceInner = "inner"
+)
+
+const (
+	SchedulerNo  = 1
+	SchedulerYes = 2
+)
+
+const (
+	StatusDownloading   = 1
+	StatusDownloadBreak = 2
+	StatusDownloaded    = 3
+
+	KeyProcessId        = "processId"
+	KeyMasterInstanceId = "masterInstanceId"
+
+	TaskTypeCache  = "cache"
+	TaskTypeRemote = "remote"
 )

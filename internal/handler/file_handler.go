@@ -16,8 +16,10 @@ package handler
 
 import (
 	"fmt"
+	"net/http"
 	"net/url"
 
+	"dingospeed/internal/model"
 	"dingospeed/internal/service"
 	"dingospeed/pkg/config"
 	"dingospeed/pkg/consts"
@@ -42,33 +44,60 @@ func NewFileHandler(fileService *service.FileService, sysService *service.SysSer
 }
 
 func (handler *FileHandler) HeadFileHandler1(c echo.Context) error {
-	repoType, org, repo, commit, filePath, err := paramProcess(c, 1)
+	repoType, orgRepo, commit, filePath, err := paramProcess(c, 1)
 	if err != nil {
 		zap.S().Error("解码出错:%v", err)
 		return util.ErrorRequestParam(c)
 	}
-	return handler.fileService.FileHeadCommon(c, repoType, org, repo, commit, filePath)
+	return handler.fileService.FileHeadCommon(c, repoType, orgRepo, commit, filePath)
 }
 
 func (handler *FileHandler) HeadFileHandler2(c echo.Context) error {
-	repoType, org, repo, commit, filePath, err := paramProcess(c, 2)
+	repoType, orgRepo, commit, filePath, err := paramProcess(c, 2)
 	if err != nil {
 		zap.S().Error("解码出错:%v", err)
 		return util.ErrorRequestParam(c)
 	}
-	return handler.fileService.FileHeadCommon(c, repoType, org, repo, commit, filePath)
+	return handler.fileService.FileHeadCommon(c, repoType, orgRepo, commit, filePath)
 }
 
 func (handler *FileHandler) HeadFileHandler3(c echo.Context) error {
-	repoType, org, repo, commit, filePath, err := paramProcess(c, 3)
+	repoType, orgRepo, commit, filePath, err := paramProcess(c, 3)
 	if err != nil {
 		zap.S().Error("解码出错:%v", err)
 		return util.ErrorRequestParam(c)
 	}
-	return handler.fileService.FileHeadCommon(c, repoType, org, repo, commit, filePath)
+	return handler.fileService.FileHeadCommon(c, repoType, orgRepo, commit, filePath)
 }
 
-func paramProcess(c echo.Context, processMode int) (string, string, string, string, string, error) {
+func (handler *FileHandler) GetFileHandler1(c echo.Context) error {
+	repoType, orgRepo, commit, filePath, err := paramProcess(c, 1)
+	if err != nil {
+		zap.S().Error("解码出错:%v", err)
+		return util.ErrorRequestParam(c)
+	}
+	return handler.fileGetCommon(c, repoType, orgRepo, commit, filePath)
+}
+
+func (handler *FileHandler) GetFileHandler2(c echo.Context) error {
+	repoType, orgRepo, commit, filePath, err := paramProcess(c, 2)
+	if err != nil {
+		zap.S().Error("解码出错:%v", err)
+		return util.ErrorRequestParam(c)
+	}
+	return handler.fileGetCommon(c, repoType, orgRepo, commit, filePath)
+}
+
+func (handler *FileHandler) GetFileHandler3(c echo.Context) error {
+	repoType, orgRepo, commit, filePath, err := paramProcess(c, 3)
+	if err != nil {
+		zap.S().Error("解码出错:%v", err)
+		return util.ErrorRequestParam(c)
+	}
+	return handler.fileGetCommon(c, repoType, orgRepo, commit, filePath)
+}
+
+func paramProcess(c echo.Context, processMode int) (string, string, string, string, error) {
 	var (
 		repoType string
 		org      string
@@ -102,41 +131,23 @@ func paramProcess(c echo.Context, processMode int) (string, string, string, stri
 	} else {
 		panic("param process error.")
 	}
+	orgRepo := util.GetOrgRepo(org, repo)
+	c.Set(consts.PromOrgRepo, orgRepo)
+
+	if _, ok := consts.RepoTypesMapping[repoType]; !ok {
+		zap.S().Errorf("FileGetCommon repoType:%s is not exist RepoTypesMapping", repoType)
+		return repoType, orgRepo, commit, filePath, fmt.Errorf("repoType:%s is invalid", repoType)
+	}
+	if org == "" && repo == "" {
+		zap.S().Errorf("FileGetCommon or and repo is null")
+		return repoType, orgRepo, commit, filePath, fmt.Errorf("FileGetCommon or and repo is null")
+	}
 	filePath, err := url.QueryUnescape(filePath)
-	return repoType, org, repo, commit, filePath, err
+	return repoType, orgRepo, commit, filePath, err
 }
 
-func (handler *FileHandler) GetFileHandler1(c echo.Context) error {
-	repoType, org, repo, commit, filePath, err := paramProcess(c, 1)
-	if err != nil {
-		zap.S().Error("解码出错:%v", err)
-		return util.ErrorRequestParam(c)
-	}
-	return handler.fileGetCommon(c, repoType, org, repo, commit, filePath)
-}
-
-func (handler *FileHandler) GetFileHandler2(c echo.Context) error {
-	repoType, org, repo, commit, filePath, err := paramProcess(c, 2)
-	if err != nil {
-		zap.S().Error("解码出错:%v", err)
-		return util.ErrorRequestParam(c)
-	}
-	return handler.fileGetCommon(c, repoType, org, repo, commit, filePath)
-}
-
-func (handler *FileHandler) GetFileHandler3(c echo.Context) error {
-	repoType, org, repo, commit, filePath, err := paramProcess(c, 3)
-	if err != nil {
-		zap.S().Error("解码出错:%v", err)
-		return util.ErrorRequestParam(c)
-	}
-	return handler.fileGetCommon(c, repoType, org, repo, commit, filePath)
-}
-
-func (handler *FileHandler) fileGetCommon(c echo.Context, repoType, org, repo, commit, filePath string) error {
+func (handler *FileHandler) fileGetCommon(c echo.Context, repoType, orgRepo, commit, filePath string) error {
 	if config.SysConfig.EnableMetric() {
-		orgRepo := fmt.Sprintf("%s/%s", org, repo)
-		c.Set(consts.PromOrgRepo, orgRepo)
 		labels := prometheus.Labels{}
 		labels[repoType] = orgRepo
 		source := util.Itoa(c.Get(consts.PromSource))
@@ -148,7 +159,7 @@ func (handler *FileHandler) fileGetCommon(c echo.Context, repoType, org, repo, c
 				prom.RequestDataSetCnt.With(labels).Inc()
 			}
 		}
-		err := handler.fileService.FileGetCommon(c, repoType, org, repo, commit, filePath)
+		err := handler.fileService.FileGetCommon(c, repoType, orgRepo, commit, filePath)
 		if _, ok := consts.RepoTypesMapping[repoType]; ok {
 			labels["source"] = source
 			if repoType == "models" {
@@ -159,6 +170,20 @@ func (handler *FileHandler) fileGetCommon(c echo.Context, repoType, org, repo, c
 		}
 		return err
 	} else {
-		return handler.fileService.FileGetCommon(c, repoType, org, repo, commit, filePath)
+		return handler.fileService.FileGetCommon(c, repoType, orgRepo, commit, filePath)
 	}
+}
+
+func (handler *FileHandler) GetPathInfoHandler(c echo.Context) error {
+	query := new(model.PathInfoQuery)
+	if err := c.Bind(query); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "无效的 JSON 数据",
+		})
+	}
+	info, err := handler.fileService.GetPathInfo(query)
+	if err != nil {
+		return util.ErrorProxyError(c)
+	}
+	return util.ResponseData(c, info)
 }

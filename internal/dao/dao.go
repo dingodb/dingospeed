@@ -16,4 +16,4 @@ package dao
 
 import "github.com/google/wire"
 
-var DaoProvider = wire.NewSet(NewFileDao, NewMetaDao)
+var DaoProvider = wire.NewSet(NewFileDao, NewMetaDao, NewSchedulerDao, NewDownloaderDao)

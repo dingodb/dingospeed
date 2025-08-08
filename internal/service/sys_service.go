@@ -2,7 +2,6 @@ package service
 
 import (
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -27,7 +26,7 @@ func NewSysService() *SysService {
 	sysSvc := &SysService{}
 	once.Do(
 		func() {
-			if config.SysConfig.Cache.Enabled {
+			if config.SysConfig.EnableReadBlockCache() {
 				go sysSvc.MemoryUsed()
 			}
 
@@ -163,10 +162,8 @@ var successMsg = "，当前代理已恢复连通性"
 var failMsg = "，当前代理无法连接，请检查网络或代理设置"
 
 const (
-	proxyTestTimeout  = 5 * time.Second
-	dialTimeout       = 3 * time.Second
-	successStatusCode = 200
-	failureStatusCode = 400
+	proxyTestTimeout = 5 * time.Second
+	dialTimeout      = 3 * time.Second
 )
 
 // testProxyConnectivity 测试代理服务器的连接连通性
@@ -182,7 +179,7 @@ func testProxyConnectivity() {
 	testClient := createTestClient(proxyURL)
 
 	// 执行代理测试请求
-	req, err := http.NewRequest("GET", "https://www.google.com", nil)
+	req, err := http.NewRequest("HEAD", "https://www.google.com", nil)
 	if err != nil {
 		handleProxyTestError(err, "请求创建失败", proxyURL)
 		return
@@ -222,7 +219,6 @@ func handleProxyTestError(err error, errorMsg string, proxyURL *url.URL) {
 		util.ProxyIsAvailable = false
 		util.SendData(config.SysConfig.GetHttpProxyName() + failMsg)
 	}
-	// zap.S().Warnf("代理测试%s: %v, 代理地址: %s", errorMsg, err, proxyURL.String())
 }
 
 // handleProxyTestResponse 处理代理测试响应
@@ -233,15 +229,10 @@ func handleProxyTestResponse(client *http.Client, req *http.Request, proxyURL *u
 		return
 	}
 	defer resp.Body.Close()
-
-	// 读取响应体（防止连接池问题）
-	_, _ = io.ReadAll(resp.Body)
-
-	if resp.StatusCode >= successStatusCode && resp.StatusCode < failureStatusCode {
+	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusBadRequest {
 		handleProxyTestSuccess(proxyURL)
 		return
 	}
-
 	handleProxyTestFailure(resp.StatusCode, proxyURL)
 }
 

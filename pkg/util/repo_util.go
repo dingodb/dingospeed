@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
 
@@ -33,6 +34,20 @@ func GetOrgRepo(org, repo string) string {
 		return repo
 	} else {
 		return fmt.Sprintf("%s/%s", org, repo)
+	}
+}
+func GetMetaRepoKey(repo, commit string) string {
+	return fmt.Sprintf("meta/%s/%s", repo, commit)
+}
+
+func SplitOrgRepo(orgRepo string) (string, string) {
+	splits := strings.Split(orgRepo, "/")
+	if len(splits) == 0 {
+		return "", ""
+	} else if len(splits) == 1 {
+		return splits[0], ""
+	} else {
+		return splits[0], splits[1]
 	}
 }
 

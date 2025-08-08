@@ -40,9 +40,9 @@ func init() {
 	flag.Parse()
 }
 
-func newApp(s *server.HTTPServer) *app.App {
+func newApp(s *server.HTTPServer, schedulerServer *server.SchedulerServer) *app.App {
 	app := app.New(app.ID(id), app.Name(Name), app.Version(Version),
-		app.Server(s))
+		app.Server(s, schedulerServer))
 	return app
 }
 

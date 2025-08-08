@@ -56,6 +56,9 @@ func (r *HttpRouter) initRouter() {
 	r.echo.GET("/:orgOrRepoType/:repo/resolve/:commit/:filePath", r.fileHandler.GetFileHandler2)
 	r.echo.GET("/:repo/resolve/:commit/:filePath", r.fileHandler.GetFileHandler3)
 
+	// scheduler
+	r.echo.POST("/api/getPathInfo", r.fileHandler.GetPathInfoHandler)
+
 	// 模型
 	r.echo.HEAD("/api/:repoType/:org/:repo/revision/:commit", r.metaHandler.MetaProxyCommonHandler)
 	r.echo.GET("/api/:repoType/:org/:repo/revision/:commit", r.metaHandler.MetaProxyCommonHandler)
