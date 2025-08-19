@@ -218,7 +218,7 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 		n                                 int
 	)
 	for i := 0; i < attempts; {
-		if err = util.GetStream(r.Domain, r.Uri, headers, config.SysConfig.GetReqTimeOut(), func(resp *http.Response) error {
+		if err = util.GetStream(r.Domain, r.Uri, headers, func(resp *http.Response) error {
 			contentEncoding = resp.Header.Get("content-encoding")
 			contentLengthStr = resp.Header.Get("content-length")
 			for {

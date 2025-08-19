@@ -310,6 +310,7 @@ func (c *Config) SetDefaults() {
 	if c.DiskClean.CollectTimePeriod == 0 {
 		c.DiskClean.CollectTimePeriod = 1
 	}
+
 }
 
 func Scan(path string) (*Config, error) {
@@ -328,7 +329,9 @@ func Scan(path string) (*Config, error) {
 	if c.Download.RemoteFileRangeSize%c.Download.BlockSize != 0 {
 		return nil, myerr.New("RemoteFileRangeSize must be a multiple of BlockSize")
 	}
-
+	if c.DynamicProxy.Enabled && c.DynamicProxy.HttpProxy == "" {
+		return nil, myerr.New("HttpProxy must be specified when enable is true")
+	}
 	validate := validator.New()
 	err = validate.Struct(&c)
 	if err != nil {

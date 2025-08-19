@@ -491,7 +491,7 @@ func remoteRequestMeta(repoType, org, repo, commit, authorization string) (*comm
 		headers["authorization"] = fmt.Sprintf("Bearer %s", authorization)
 	}
 	return RetryRequest(func() (*common.Response, error) {
-		return util.Get(reqUrl, headers, time.Duration(10)*time.Second)
+		return util.Get(reqUrl, headers)
 	})
 }
 

@@ -17,7 +17,6 @@ package service
 import (
 	"fmt"
 	"net/http"
-	"time"
 
 	"dingospeed/internal/dao"
 	"dingospeed/pkg/common"
@@ -196,7 +195,7 @@ func (m *MetaService) RepoRefs(c echo.Context, repoType, org, repo string) error
 func (m *MetaService) ForwardToNewSite(c echo.Context) error {
 	req := c.Request()
 	zap.S().Infof("ForwardToNewSite url:%s", req.URL.Path)
-	resp, err := m.metaDao.ForwardRefs(req, 30*time.Second)
+	resp, err := m.metaDao.ForwardRefs(req)
 	if err != nil {
 		zap.S().Errorf("forward request refs err.%v", err)
 		return util.ErrorProxyError(c)

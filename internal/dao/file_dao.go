@@ -127,9 +127,9 @@ func (f *FileDao) RemoteRequestMeta(method, repoType, orgRepo, commit, authoriza
 	}
 	return util.RetryRequest(func() (*common.Response, error) {
 		if method == consts.RequestTypeHead {
-			return util.Head(reqUri, headers, config.SysConfig.GetReqTimeOut())
+			return util.Head(reqUri, headers)
 		} else if method == consts.RequestTypeGet {
-			return util.Get(reqUri, headers, config.SysConfig.GetReqTimeOut())
+			return util.Get(reqUri, headers)
 		} else {
 			return nil, fmt.Errorf("request method err")
 		}

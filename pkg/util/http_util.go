@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"dingospeed/pkg/common"
@@ -34,7 +35,13 @@ import (
 	"go.uber.org/zap"
 )
 
-var ProxyIsAvailable = true
+var (
+	ProxyIsAvailable = true
+	simpleClient     *http.Client
+	proxyClient      *http.Client
+	simpleOnce       sync.Once
+	proxyOnce        sync.Once
+)
 
 func RetryRequest(f func() (*common.Response, error)) (*common.Response, error) {
 	var resp *common.Response
@@ -51,52 +58,57 @@ func RetryRequest(f func() (*common.Response, error)) (*common.Response, error) 
 	return resp, err
 }
 
-func NewHTTPClient(timeout time.Duration) (*http.Client, error) {
-	client := &http.Client{Timeout: timeout}
-	return client, nil
+func NewHTTPClient() (*http.Client, error) {
+	simpleOnce.Do(
+		func() {
+			simpleClient = &http.Client{Timeout: config.SysConfig.GetReqTimeOut()}
+		})
+	return simpleClient, nil
 }
 
-func NewHTTPClientWithProxy(timeout time.Duration) (*http.Client, error) {
-	client := &http.Client{Timeout: timeout}
-	proxyURL, err := url.Parse(config.SysConfig.GetHttpProxy())
-	if err != nil {
-		return nil, fmt.Errorf("代理地址解析失败: %v", err)
-	}
-	transport := &http.Transport{
-		Proxy: http.ProxyURL(proxyURL),
-		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ForceAttemptHTTP2:     false,
-		ResponseHeaderTimeout: 10 * time.Second,
-		IdleConnTimeout:       90 * time.Second,
-	}
-
-	client.Transport = transport
-	zap.S().Warnf("已启用HTTP代理: %s", config.SysConfig.GetHttpProxy())
-	return client, nil
+func NewHTTPClientWithProxy() (*http.Client, error) {
+	proxyOnce.Do(func() {
+		proxyClient = &http.Client{Timeout: config.SysConfig.GetReqTimeOut()}
+		proxyURL, err := url.Parse(config.SysConfig.GetHttpProxy())
+		if err != nil {
+			zap.S().Errorf("代理地址解析失败: %v", err)
+			return
+		}
+		transport := &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ForceAttemptHTTP2:     false,
+			ResponseHeaderTimeout: 10 * time.Second,
+			IdleConnTimeout:       90 * time.Second,
+		}
+		proxyClient.Transport = transport
+	})
+	return proxyClient, nil
 }
 
-func constructClient(timeout time.Duration) (string, *http.Client, error) {
+func constructClient() (string, *http.Client, error) {
 	var (
 		domain string
 		client *http.Client
 		err    error
 	)
+	// 代理不可用，且允许代理切换到备用，使用直联。
 	if !ProxyIsAvailable && config.SysConfig.DynamicProxy.Enabled {
 		domain = config.SysConfig.GetBpHFURLBase()
-		client, err = NewHTTPClient(timeout)
+		client, err = NewHTTPClient()
 	} else {
 		domain = config.SysConfig.GetHFURLBase()
-		client, err = NewHTTPClientWithProxy(timeout)
+		client, err = NewHTTPClientWithProxy()
 	}
 	return domain, client, err
 }
 
-func Head(requestUri string, headers map[string]string, timeout time.Duration) (*common.Response, error) {
-	domain, client, err := constructClient(timeout)
+func Head(requestUri string, headers map[string]string) (*common.Response, error) {
+	domain, client, err := constructClient()
 	if err != nil {
 		return nil, fmt.Errorf("construct http client err: %v", err)
 	}
@@ -133,8 +145,8 @@ func doHead(client *http.Client, targetURL string, headers map[string]string) (*
 	}, nil
 }
 
-func Get(requestUri string, headers map[string]string, timeout time.Duration) (*common.Response, error) {
-	domain, client, err := constructClient(timeout)
+func Get(requestUri string, headers map[string]string) (*common.Response, error) {
+	domain, client, err := constructClient()
 	if err != nil {
 		return nil, fmt.Errorf("construct http client err: %v", err)
 	}
@@ -180,25 +192,25 @@ func doGet(client *http.Client, targetURL string, headers map[string]string) (*c
 	}, nil
 }
 
-func GetStream(domain, uri string, headers map[string]string, timeout time.Duration, f func(r *http.Response) error) error {
+func GetStream(domain, uri string, headers map[string]string, f func(r *http.Response) error) error {
 	var (
 		client *http.Client
 		err    error
 	)
 	if IsInnerDomain(domain) {
-		client, err = NewHTTPClient(timeout)
+		client, err = NewHTTPClient()
 		headers[consts.RequestSourceInner] = Itoa(1)
 	} else {
-		domain, client, err = constructClient(timeout)
+		domain, client, err = constructClient()
 	}
 	if err != nil {
 		return fmt.Errorf("construct http client err: %v", err)
 	}
 	requestURL := fmt.Sprintf("%s%s", domain, uri)
-	return doGetStream(client, requestURL, headers, timeout, f)
+	return doGetStream(client, requestURL, headers, f)
 }
 
-func doGetStream(client *http.Client, targetURL string, headers map[string]string, timeout time.Duration, f func(r *http.Response) error) error {
+func doGetStream(client *http.Client, targetURL string, headers map[string]string, f func(r *http.Response) error) error {
 	escapedURL := strings.ReplaceAll(targetURL, "#", "%23")
 	req, err := http.NewRequest("GET", escapedURL, nil)
 	if err != nil {
@@ -220,7 +232,7 @@ func doGetStream(client *http.Client, targetURL string, headers map[string]strin
 }
 
 func Post(requestUri string, contentType string, data []byte, headers map[string]string) (*common.Response, error) {
-	domain, client, err := constructClient(config.SysConfig.GetReqTimeOut())
+	domain, client, err := constructClient()
 	if err != nil {
 		return nil, fmt.Errorf("construct http client err: %v", err)
 	}
@@ -305,8 +317,8 @@ func ResponseStream(c echo.Context, fileName string, headers map[string]string, 
 	}
 }
 
-func ForwardRequest(originalReq *http.Request, timeout time.Duration) (*common.Response, error) {
-	domain, client, err := constructClient(timeout)
+func ForwardRequest(originalReq *http.Request) (*common.Response, error) {
+	domain, client, err := constructClient()
 	if err != nil {
 		return nil, fmt.Errorf("construct http client err: %v", err)
 	}
