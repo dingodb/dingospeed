@@ -166,12 +166,19 @@ const (
 	dialTimeout      = 3 * time.Second
 )
 
+// 新增：跟踪连续失败次数和是否已发送失败消息
+var (
+	continuousFailCount int
+	hasSentFailureMsg   bool
+)
+
 // testProxyConnectivity 测试代理服务器的连接连通性
 func testProxyConnectivity() {
 	proxyURL, err := url.Parse(config.SysConfig.GetHttpProxy())
 	if err != nil {
 		util.ProxyIsAvailable = false
 		zap.S().Warnf("代理URL解析失败: %v, 代理地址: %s", err, config.SysConfig.GetHttpProxy())
+		handleContinuousFailure(proxyURL) // 解析失败也算一次失败
 		return
 	}
 
@@ -208,7 +215,6 @@ func createTestClient(proxyURL *url.URL) *http.Client {
 // setTestRequestHeaders 设置测试请求的标准头
 func setTestRequestHeaders(req *http.Request) {
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; proxy-test/1.0)")
-	// 可添加更多标准请求头
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
 }
@@ -217,8 +223,8 @@ func setTestRequestHeaders(req *http.Request) {
 func handleProxyTestError(err error, errorMsg string, proxyURL *url.URL) {
 	if util.ProxyIsAvailable {
 		util.ProxyIsAvailable = false
-		util.SendData(config.SysConfig.GetHttpProxyName() + failMsg)
 	}
+	handleContinuousFailure(proxyURL) // 处理连续失败计数
 }
 
 // handleProxyTestResponse 处理代理测试响应
@@ -229,18 +235,24 @@ func handleProxyTestResponse(client *http.Client, req *http.Request, proxyURL *u
 		return
 	}
 	defer resp.Body.Close()
+
 	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusBadRequest {
 		handleProxyTestSuccess(proxyURL)
 		return
 	}
+
 	handleProxyTestFailure(resp.StatusCode, proxyURL)
 }
 
 // handleProxyTestSuccess 处理代理测试成功
 func handleProxyTestSuccess(proxyURL *url.URL) {
+	// 成功时重置失败计数器和标记
+	continuousFailCount = 0
+	hasSentFailureMsg = false
+
 	if !util.ProxyIsAvailable {
 		util.ProxyIsAvailable = true
-		util.SendData(config.SysConfig.GetHttpProxyName() + successMsg)
+		util.SendData(config.SysConfig.GetHttpProxyName() + successMsg) // 成功立即发消息
 	}
 	zap.S().Infof("代理请求测试成功: %s", proxyURL.String())
 }
@@ -249,5 +261,19 @@ func handleProxyTestSuccess(proxyURL *url.URL) {
 func handleProxyTestFailure(statusCode int, proxyURL *url.URL) {
 	util.ProxyIsAvailable = false
 	zap.S().Warnf("代理测试返回非成功状态码: %d, 代理地址: %s", statusCode, proxyURL.String())
-	util.SendData(config.SysConfig.GetHttpProxyName() + failMsg)
+	handleContinuousFailure(proxyURL) // 处理连续失败计数
+}
+
+// 新增：处理连续失败计数逻辑
+func handleContinuousFailure(proxyURL *url.URL) {
+	// 每次失败累加计数器
+	continuousFailCount++
+	zap.S().Debugf("代理连续失败次数: %d, 代理地址: %s", continuousFailCount, proxyURL.String())
+
+	// 当连续失败达到5次且未发送过失败消息时，发送通知
+	if continuousFailCount >= config.SysConfig.GetMaxContinuousFails() && !hasSentFailureMsg {
+		util.SendData(config.SysConfig.GetHttpProxyName() + failMsg)
+		hasSentFailureMsg = true // 标记已发送，避免重复发送
+		zap.S().Warnf("代理连续失败%d次，已发送通知: %s", config.SysConfig.GetMaxContinuousFails(), proxyURL.String())
+	}
 }

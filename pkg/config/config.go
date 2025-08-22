@@ -136,10 +136,11 @@ type DiskClean struct {
 }
 
 type DynamicProxy struct {
-	Enabled       bool   `json:"enabled" yaml:"enabled"`
-	HttpProxy     string `json:"httpProxy" yaml:"httpProxy"`
-	HttpProxyName string `json:"httpProxyName" yaml:"httpProxyName"`
-	TimePeriod    int    `json:"timePeriod" yaml:"timePeriod"`
+	Enabled            bool   `json:"enabled" yaml:"enabled"`
+	HttpProxy          string `json:"httpProxy" yaml:"httpProxy"`
+	HttpProxyName      string `json:"httpProxyName" yaml:"httpProxyName"`
+	TimePeriod         int    `json:"timePeriod" yaml:"timePeriod"`
+	MaxContinuousFails int    `json:"maxContinuousFails" yaml:"maxContinuousFails"`
 }
 
 func (c *Config) GetHFURLBase() string {
@@ -265,6 +266,11 @@ func (c *Config) GetHttpProxyName() string {
 func (c *Config) GetDynamicProxyTimePeriod() time.Duration {
 	return time.Duration(c.DynamicProxy.TimePeriod) * time.Second
 }
+
+func (c *Config) GetMaxContinuousFails() int {
+	return c.DynamicProxy.MaxContinuousFails
+}
+
 func (c *Config) IsCluster() bool {
 	return c.GetSchedulerModel() == consts.SchedulerModeCluster
 }
