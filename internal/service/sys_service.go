@@ -7,10 +7,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
+	"dingospeed/internal/dao"
 	"dingospeed/pkg/config"
+	"dingospeed/pkg/proto/manager"
 	"dingospeed/pkg/util"
 
 	"github.com/shirou/gopsutil/mem"
@@ -20,10 +23,14 @@ import (
 var once sync.Once
 
 type SysService struct {
+	Client       manager.ManagerClient
+	schedulerDao *dao.SchedulerDao
 }
 
-func NewSysService() *SysService {
-	sysSvc := &SysService{}
+func NewSysService(schedulerDao *dao.SchedulerDao) *SysService {
+	sysSvc := &SysService{
+		schedulerDao: schedulerDao,
+	}
 	once.Do(
 		func() {
 			if config.SysConfig.EnableReadBlockCache() {
@@ -58,19 +65,19 @@ func (s SysService) MemoryUsed() {
 	}
 }
 
-func (s SysService) cycleCheckDiskUsage() {
+func (s *SysService) cycleCheckDiskUsage() {
 	ticker := time.NewTicker(config.SysConfig.GetDiskCollectTimePeriod())
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
-			checkDiskUsage()
+			checkDiskUsage(s)
 		}
 	}
 }
 
 // 检查磁盘使用情况
-func checkDiskUsage() {
+func checkDiskUsage(sysService *SysService) {
 	if !config.SysConfig.Online() {
 		return
 	}
@@ -78,7 +85,8 @@ func checkDiskUsage() {
 		return
 	}
 
-	currentSize, err := util.GetFolderSize(config.SysConfig.Repos())
+	baseRepoPath := config.SysConfig.Repos()
+	currentSize, err := util.GetFolderSize(baseRepoPath)
 	if err != nil {
 		zap.S().Errorf("Error getting folder size: %v", err)
 		return
@@ -96,7 +104,6 @@ func checkDiskUsage() {
 	zap.S().Infof("Cleaning...")
 
 	filesPath := filepath.Join(config.SysConfig.Repos(), "files")
-
 	var allFiles []util.FileWithPath
 	switch config.SysConfig.CacheCleanStrategy() {
 	case "LRU":
@@ -122,12 +129,19 @@ func checkDiskUsage() {
 		return
 	}
 
+	instanceID := config.SysConfig.GetInstanceID()
 	for _, file := range allFiles {
 		if currentSize < limitSize {
 			break
 		}
 		filePath := file.Path
 		fileSize := file.Info.Size()
+
+		time.Sleep(10 * time.Second)
+		if sysService.Client != nil {
+			deleteRecordByFilePath(sysService, baseRepoPath, filePath, instanceID)
+		}
+
 		err := os.Remove(filePath)
 		if err != nil {
 			zap.S().Errorf("Error removing file %s: %v\n", filePath, err)
@@ -144,6 +158,44 @@ func checkDiskUsage() {
 	}
 	currentSizeH = util.ConvertBytesToHumanReadable(currentSize)
 	zap.S().Infof("Cleaning finished. Limit: %s, Current: %s.\n", limitSizeH, currentSizeH)
+}
+
+func deleteRecordByFilePath(sysService *SysService, baseRepoPath, filePath, instanceID string) {
+	relPath, err := filepath.Rel(baseRepoPath, filePath)
+	if err != nil {
+		zap.S().Errorf("Failed to get relative path for %s: %v", filePath, err)
+		return
+	}
+
+	parts := strings.Split(relPath, string(filepath.Separator))
+	req := &manager.DeleteByEtagsAndFieldsRequest{
+		InstanceID: instanceID, // 设置实例ID
+	}
+
+	if len(parts) >= 6 && parts[0] == "files" && (parts[1] == "datasets" || parts[1] == "models") {
+		req.Datatype = parts[1]
+		req.Org = parts[2]
+		req.Repo = parts[3]
+
+		if parts[4] == "blobs" {
+			req.Etag = parts[5]
+			zap.S().Debugf("Deleting record by etag: %s (path type: %s, org: %s, repo: %s) for file %s",
+				req.Etag, req.Datatype, req.Org, req.Repo, filePath)
+		} else if parts[4] == "resolve" {
+			req.Name = parts[len(parts)-1]
+			zap.S().Debugf("Deleting record by fields - datatype: %s, org: %s, repo: %s, name: %s",
+				req.Datatype, req.Org, req.Repo, req.Name)
+		} else {
+			zap.S().Warnf("Unrecognized subpath: %s in path %s", parts[4], filePath)
+			return
+		}
+	} else {
+		zap.S().Warnf("Unrecognized file path structure: %s, cannot determine delete parameters", filePath)
+		return
+	}
+
+	sysService.schedulerDao.Client = sysService.Client
+	sysService.schedulerDao.DeleteByEtagsAndFields(req)
 }
 
 func (s SysService) cycleTestProxyConnectivity() {

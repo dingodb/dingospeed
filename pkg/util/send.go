@@ -7,10 +7,10 @@ import (
 	"io"
 	"net/http"
 
+	"dingospeed/pkg/config"
+
 	"go.uber.org/zap"
 )
-
-var webhook = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=73662ac1-1055-48a7-8c89-37964b5f4fdc"
 
 func SendData(content string) {
 	msg := Message{
@@ -55,7 +55,7 @@ func sendMessage(msg Message) error {
 	}
 
 	// 创建请求
-	req, err := http.NewRequest("POST", webhook, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", config.SysConfig.GetWebhook(), bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("创建请求失败: %v", err)
 	}

@@ -30,7 +30,7 @@ func wireApp(configConfig *config.Config) (*app.App, func(), error) {
 	baseData := data.NewBaseData()
 	fileDao := dao.NewFileDao(downloaderDao, baseData)
 	fileService := service.NewFileService(fileDao)
-	sysService := service.NewSysService()
+	sysService := service.NewSysService(schedulerDao)
 	fileHandler := handler.NewFileHandler(fileService, sysService)
 	metaDao := dao.NewMetaDao(fileDao)
 	metaService := service.NewMetaService(fileDao, metaDao)
@@ -39,7 +39,7 @@ func wireApp(configConfig *config.Config) (*app.App, func(), error) {
 	httpRouter := router.NewHttpRouter(echo, fileHandler, metaHandler, sysHandler)
 	httpServer := server.NewServer(configConfig, echo, httpRouter)
 	schedulerService := service.NewSchedulerService(schedulerDao)
-	schedulerServer := server.NewSchedulerServer(schedulerService)
+	schedulerServer := server.NewSchedulerServer(schedulerService, sysService)
 	appApp := newApp(httpServer, schedulerServer)
 	return appApp, func() {
 	}, nil

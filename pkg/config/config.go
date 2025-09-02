@@ -133,6 +133,7 @@ type DiskClean struct {
 	CacheSizeLimit     int64  `json:"cacheSizeLimit" yaml:"cacheSizeLimit"`
 	CacheCleanStrategy string `json:"cacheCleanStrategy" yaml:"cacheCleanStrategy"`
 	CollectTimePeriod  int    `json:"collectTimePeriod" yaml:"collectTimePeriod" validate:"min=1,max=600"` // 周期采集内存使用量，单位秒
+	InstanceID         string `json:"instanceID" yaml:"instanceID"`
 }
 
 type DynamicProxy struct {
@@ -141,6 +142,7 @@ type DynamicProxy struct {
 	HttpProxyName      string `json:"httpProxyName" yaml:"httpProxyName"`
 	TimePeriod         int    `json:"timePeriod" yaml:"timePeriod"`
 	MaxContinuousFails int    `json:"maxContinuousFails" yaml:"maxContinuousFails"`
+	Webhook            string `json:"webhook " yaml:"webhook"`
 }
 
 func (c *Config) GetHFURLBase() string {
@@ -255,6 +257,10 @@ func (c *Config) CacheCleanStrategy() string {
 	return c.DiskClean.CacheCleanStrategy
 }
 
+func (c *Config) GetInstanceID() string {
+	return c.DiskClean.InstanceID
+}
+
 func (c *Config) GetHttpProxy() string {
 	return c.DynamicProxy.HttpProxy
 }
@@ -269,6 +275,10 @@ func (c *Config) GetDynamicProxyTimePeriod() time.Duration {
 
 func (c *Config) GetMaxContinuousFails() int {
 	return c.DynamicProxy.MaxContinuousFails
+}
+
+func (c *Config) GetWebhook() string {
+	return c.DynamicProxy.Webhook
 }
 
 func (c *Config) IsCluster() bool {

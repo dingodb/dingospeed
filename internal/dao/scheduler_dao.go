@@ -57,3 +57,13 @@ func (s *SchedulerDao) ReportFileProcess(request *manager.FileProcessRequest) {
 		return
 	}
 }
+
+func (s *SchedulerDao) DeleteByEtagsAndFields(request *manager.DeleteByEtagsAndFieldsRequest) {
+	ctx, cancel := context.WithTimeout(context.Background(), consts.RpcRequestTimeout)
+	defer cancel()
+	_, err := s.Client.DeleteByEtagsAndFields(ctx, request)
+	if err != nil {
+		zap.S().Errorf("DeleteByEtagsAndFields fail.%v", ctx)
+		return
+	}
+}

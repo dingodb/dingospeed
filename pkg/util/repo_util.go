@@ -16,9 +16,11 @@ package util
 
 import (
 	"encoding/gob"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"syscall"
@@ -27,6 +29,7 @@ import (
 	"dingospeed/pkg/common"
 
 	"github.com/bytedance/sonic"
+	"golang.org/x/sys/unix"
 )
 
 func GetOrgRepo(org, repo string) string {
@@ -269,18 +272,70 @@ func SplitFileToSegment(fileSize int64, blockSize int64) (int, []*common.Segment
 	return index, segments
 }
 
-func GetFolderSize(path string) (int64, error) {
-	var size int64
-	err := filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+func GetFolderSize(folderPath string) (int64, error) {
+	var totalPhysicalSize int64
+	err := filepath.Walk(folderPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return err
+			if errors.Is(err, os.ErrPermission) {
+				fmt.Printf("警告：无权限访问 %s，跳过\n", path)
+				return nil
+			}
+			return fmt.Errorf("walk %s: %w", path, err)
 		}
-		if !info.IsDir() {
-			size += info.Size()
+
+		if !info.Mode().IsRegular() {
+			return nil
 		}
+
+		filePhysicalSize, err := getFilePhysicalSize(info, path)
+		if err != nil {
+			return fmt.Errorf("get physical size for %s: %w", path, err)
+		}
+
+		totalPhysicalSize += filePhysicalSize
 		return nil
 	})
-	return size, err
+
+	if err != nil {
+		return 0, fmt.Errorf("walk folder %s: %w", folderPath, err)
+	}
+
+	return totalPhysicalSize, nil
+}
+
+func getFilePhysicalSize(info os.FileInfo, path string) (int64, error) {
+	switch runtime.GOOS {
+	case "linux":
+		return getLinuxFilePhysicalSize(info)
+	case "darwin":
+		return getDarwinFilePhysicalSize(info, path)
+	default:
+		return 0, fmt.Errorf("不支持的操作系统：%s", runtime.GOOS)
+	}
+}
+
+func getLinuxFilePhysicalSize(info os.FileInfo) (int64, error) {
+	statT, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, fmt.Errorf("无法转换为 syscall.Stat_t，实际类型：%T", info.Sys())
+	}
+
+	return statT.Blocks * 512, nil
+}
+
+func getDarwinFilePhysicalSize(info os.FileInfo, path string) (int64, error) {
+	if statUnix, ok := info.Sys().(*unix.Stat_t); ok {
+		return statUnix.Blocks * 512, nil
+	}
+
+	if statSyscall, ok := info.Sys().(*syscall.Stat_t); ok {
+		return statSyscall.Blocks * 512, nil
+	}
+
+	return 0, fmt.Errorf(
+		"无法转换为 unix.Stat_t 或 syscall.Stat_t，文件：%s，实际类型：%T",
+		path, info.Sys(),
+	)
 }
 
 // FileWithPath 自定义结构体，用于存储文件信息和对应的路径

@@ -18,11 +18,13 @@ import (
 type SchedulerServer struct {
 	conn             *grpc.ClientConn
 	schedulerService *service.SchedulerService
+	sysService       *service.SysService
 }
 
-func NewSchedulerServer(schedulerService *service.SchedulerService) *SchedulerServer {
+func NewSchedulerServer(schedulerService *service.SchedulerService, sysService *service.SysService) *SchedulerServer {
 	return &SchedulerServer{
 		schedulerService: schedulerService,
+		sysService:       sysService,
 	}
 }
 
@@ -40,6 +42,7 @@ func (s *SchedulerServer) Start(ctx context.Context) error {
 	s.conn = conn
 	client := manager.NewManagerClient(conn)
 	s.schedulerService.Client = client
+	s.sysService.Client = client
 	s.schedulerService.Ctx = ctx
 	s.schedulerService.Register()
 	return nil

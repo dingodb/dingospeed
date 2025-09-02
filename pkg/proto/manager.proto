@@ -15,7 +15,8 @@ service Manager {
     rpc SchedulerFile (SchedulerFileRequest) returns (SchedulerFileResponse);
     // 文件下载结束，信息上报
     rpc ReportFileProcess (FileProcessRequest) returns (google.protobuf.Empty);
-
+    // 文件删除，同步删除记录
+    rpc DeleteByEtagsAndFields (DeleteByEtagsAndFieldsRequest) returns (google.protobuf.Empty);
 }
 
 
@@ -66,3 +67,13 @@ message FileProcessRequest{
     int64 endPos = 3;
     int32 status = 4;
 }
+
+message DeleteByEtagsAndFieldsRequest{
+    string etag = 1;
+    string datatype = 2;
+    string org = 3;
+    string repo = 4;
+    string name = 5;
+    string instanceID = 6;
+}
+
