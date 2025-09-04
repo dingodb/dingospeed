@@ -16,10 +16,11 @@ package dao
 
 import (
 	"fmt"
-	"net/http"
 
 	"dingospeed/pkg/common"
 	"dingospeed/pkg/util"
+
+	"github.com/labstack/echo/v4"
 )
 
 type MetaDao struct {
@@ -44,7 +45,7 @@ func (m *MetaDao) RepoRefs(repoType string, orgRepo string, authorization string
 	return resp, err
 }
 
-func (m *MetaDao) ForwardRefs(originalReq *http.Request) (*common.Response, error) {
+func (m *MetaDao) ForwardRefs(originalReq echo.Context) (*common.Response, error) {
 	resp, err := util.RetryRequest(func() (*common.Response, error) {
 		return util.ForwardRequest(originalReq)
 	})

@@ -215,16 +215,16 @@ func (c *Config) GetRemoteFileRangeWaitTime() time.Duration {
 
 func (c *Config) GetDefaultExpiration() time.Duration {
 	if c.Cache.DefaultExpiration == 0 {
-		c.Cache.DefaultExpiration = 5
+		c.Cache.DefaultExpiration = 30
 	}
-	return time.Duration(c.Cache.DefaultExpiration) * time.Second
+	return time.Duration(c.Cache.DefaultExpiration) * time.Minute
 }
 
 func (c *Config) GetCleanupInterval() time.Duration {
 	if c.Cache.CleanupInterval == 0 {
-		c.Cache.CleanupInterval = 10
+		c.Cache.CleanupInterval = 40
 	}
-	return time.Duration(c.Cache.CleanupInterval) * time.Second
+	return time.Duration(c.Cache.CleanupInterval) * time.Minute
 }
 
 func (c *Config) EnableReadBlockCache() bool {

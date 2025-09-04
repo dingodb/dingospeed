@@ -96,6 +96,12 @@ func (d *DownloaderDao) constructTask(startPos, endPos int64, isInnerRequest boo
 		goto localTask
 	}
 	existPosition, curPos = analysisFilePosition(taskParam.DingFile, startPos, endPos)
+	// if config.SysConfig.IsCluster() && existPosition {
+	// 	// 同步check本地仓库和数据库的偏移量，若数据库滞后，则需更新该数据。
+	// 	if err := d.SyncFileProcess(taskParam.DataType, taskParam.OrgRepo, taskParam.FileName, taskParam.Etag, curPos, endPos, taskParam.FileSize); err != nil {
+	// 		zap.S().Errorf("SyncFileProcess err.%v", err)
+	// 	}
+	// }
 	if !isInnerRequest && config.SysConfig.IsCluster() && !existPosition {
 		if response, err := d.getRequestDomainScheduler(taskParam.DataType, taskParam.OrgRepo, taskParam.FileName, taskParam.Etag, curPos, endPos, taskParam.FileSize); err != nil {
 			zap.S().Errorf("getRequestDomainScheduler err.%v", err)
@@ -135,6 +141,26 @@ localTask:
 	taskParam.Domain = config.SysConfig.GetHFURLBase()
 	tasks = getContiguousRanges(startPos, endPos, taskParam)
 	return tasks
+}
+
+func (d *DownloaderDao) SyncFileProcess(dataType, orgRepo, fileName, etag string, startPos, endPos, fileSize int64) error {
+	org, repo := util.SplitOrgRepo(orgRepo)
+	err := d.schedulerDao.SyncFileProcess(&manager.SchedulerFileRequest{
+		DataType:   dataType,
+		Org:        org,
+		Repo:       repo,
+		Name:       fileName,
+		Etag:       etag,
+		InstanceId: config.SysConfig.Scheduler.Discovery.InstanceId,
+		StartPos:   startPos,
+		EndPos:     endPos,
+		FileSize:   fileSize,
+	})
+	if err != nil {
+		zap.S().Errorf("SyncFileProcess err.%v", err)
+		return err
+	}
+	return nil
 }
 
 func (d *DownloaderDao) getRequestDomainScheduler(dataType, orgRepo, fileName, etag string, startPos, endPos, fileSize int64) (*manager.SchedulerFileResponse, error) {

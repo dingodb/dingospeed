@@ -317,17 +317,27 @@ func ResponseStream(c echo.Context, fileName string, headers map[string]string, 
 	}
 }
 
-func ForwardRequest(originalReq *http.Request) (*common.Response, error) {
+func ForwardRequest(originalReq echo.Context) (*common.Response, error) {
 	domain, client, err := constructClient()
 	if err != nil {
 		return nil, fmt.Errorf("construct http client err: %v", err)
 	}
-	targetURL := fmt.Sprintf("%s%s", domain, originalReq.URL.Path)
-	proxyReq, err := http.NewRequest(originalReq.Method, targetURL, originalReq.Body)
+	targetURL, err := url.Parse(domain)
+	if err != nil {
+		return nil, fmt.Errorf("url.Parse err: %v", err)
+	}
+	forwardPath := targetURL.Path + originalReq.Request().URL.Path
+	forwardURL := &url.URL{
+		Scheme:   targetURL.Scheme,
+		Host:     targetURL.Host,
+		Path:     forwardPath,
+		RawQuery: originalReq.Request().URL.RawQuery,
+	}
+	proxyReq, err := http.NewRequest(originalReq.Request().Method, forwardURL.String(), originalReq.Request().Body)
 	if err != nil {
 		return nil, fmt.Errorf("创建转发请求失败: %v", err)
 	}
-	for key, values := range originalReq.Header {
+	for key, values := range originalReq.Request().Header {
 		for _, value := range values {
 			proxyReq.Header.Add(key, value)
 		}

@@ -24,6 +24,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"dingospeed/internal/data"
@@ -39,6 +40,10 @@ import (
 	"go.uber.org/zap"
 )
 
+var (
+	pathinfoTime = 30 * time.Second
+)
+
 type CommitHfSha struct {
 	Sha string `json:"sha"`
 }
@@ -46,6 +51,7 @@ type CommitHfSha struct {
 type FileDao struct {
 	downloaderDao *DownloaderDao
 	baseData      *data.BaseData
+	mu            sync.Mutex
 }
 
 func NewFileDao(downloaderDao *DownloaderDao, baseData *data.BaseData) *FileDao {
@@ -67,7 +73,8 @@ func (f *FileDao) CheckCommitHf(repoType, orgRepo, commit, authorization string)
 
 func (f *FileDao) GetFileCommitSha(c echo.Context, repoType, orgRepo, commit string) (string, error) {
 	authorization := c.Request().Header.Get("authorization")
-	if v, ok := f.baseData.Cache.Get(util.GetMetaRepoKey(orgRepo, commit)); ok {
+	key := util.GetMetaRepoKey(orgRepo, commit)
+	if v, ok := f.baseData.Cache.Get(key); ok {
 		return v.(string), nil
 	}
 	var (
@@ -82,7 +89,8 @@ func (f *FileDao) GetFileCommitSha(c echo.Context, repoType, orgRepo, commit str
 			} else {
 				commitSha = sha
 			}
-			f.baseData.Cache.SetDefault(util.GetMetaRepoKey(orgRepo, commit), commitSha)
+			f.baseData.Cache.Set(key, commitSha, config.SysConfig.GetDefaultExpiration())
+			f.baseData.Cache.Set(util.GetMetaRepoKey(orgRepo, commitSha), commitSha, config.SysConfig.GetDefaultExpiration())
 			return commitSha, nil
 		}
 	}
@@ -91,7 +99,8 @@ func (f *FileDao) GetFileCommitSha(c echo.Context, repoType, orgRepo, commit str
 		zap.S().Errorf(" getFileCommitSha GetCommitHfOffline err.%v", err)
 		return "", myerr.NewAppendCode(http.StatusNotFound, fmt.Sprintf("%s is not found", orgRepo))
 	}
-	f.baseData.Cache.SetDefault(util.GetMetaRepoKey(orgRepo, commit), commitSha)
+	f.baseData.Cache.Set(key, commitSha, config.SysConfig.GetDefaultExpiration())
+	f.baseData.Cache.Set(util.GetMetaRepoKey(orgRepo, commitSha), commitSha, config.SysConfig.GetDefaultExpiration())
 	return commitSha, nil
 }
 
@@ -265,7 +274,7 @@ func (f *FileDao) constructBlobsAndFileFile(c echo.Context, blobsFile, filesPath
 					util.ReName(filesPath, blobsFile)
 				}
 				if err = util.CreateSymlinkIfNotExists(blobsFile, filesPath); err != nil {
-					zap.S().Errorf("filesPath:%s is not link", filesPath)
+					zap.S().Errorf("filesPath:%s is not link.%v", filesPath, err)
 					err = util.ErrorProxyError(c)
 					return
 				}
@@ -274,12 +283,12 @@ func (f *FileDao) constructBlobsAndFileFile(c echo.Context, blobsFile, filesPath
 	} else {
 		err = util.CreateFileIfNotExist(blobsFile)
 		if err != nil {
-			zap.S().Errorf("create filesPath:%s err", filesPath)
+			zap.S().Errorf("create filesPath:%s err.%v", filesPath, err)
 			err = util.ErrorProxyError(c)
 			return err
 		}
 		if err = util.CreateSymlinkIfNotExists(blobsFile, filesPath); err != nil {
-			zap.S().Errorf("filesPath:%s is not link", filesPath)
+			zap.S().Errorf("filesPath:%s is not link.%v", filesPath, err)
 			err = util.ErrorProxyError(c)
 			return
 		}
@@ -362,10 +371,10 @@ func (f *FileDao) GetPathsInfo(repoType, orgRepo, commit, authorization string, 
 }
 
 func (f *FileDao) pathsInfoProxy(targetUri, authorization string, filePaths []string) (*common.Response, error) {
-	data := map[string]interface{}{
+	reqData := map[string]interface{}{
 		"paths": filePaths,
 	}
-	jsonData, err := sonic.Marshal(data)
+	jsonData, err := sonic.Marshal(reqData)
 	if err != nil {
 		return nil, err
 	}
@@ -470,7 +479,26 @@ func (f *FileDao) WhoamiV2Generator(c echo.Context) error {
 	return nil
 }
 
+func (f *FileDao) getApiLock(apiPath string) *sync.RWMutex {
+	if val, ok := f.baseData.Cache.Get(apiPath); ok {
+		f.baseData.Cache.Set(apiPath, val, pathinfoTime)
+		return val.(*sync.RWMutex)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if val, ok := f.baseData.Cache.Get(apiPath); ok {
+		f.baseData.Cache.Set(apiPath, val, pathinfoTime)
+		return val.(*sync.RWMutex)
+	}
+	newLock := &sync.RWMutex{}
+	f.baseData.Cache.Set(apiPath, newLock, pathinfoTime)
+	return newLock
+}
+
 func (f *FileDao) WriteCacheRequest(apiPath string, statusCode int, headers map[string]string, content []byte) error {
+	lock := f.getApiLock(apiPath)
+	lock.Lock()
+	defer lock.Unlock()
 	cacheContent := common.CacheContent{
 		Version:    consts.VersionSnapshot,
 		StatusCode: statusCode,
@@ -481,6 +509,9 @@ func (f *FileDao) WriteCacheRequest(apiPath string, statusCode int, headers map[
 }
 
 func (f *FileDao) ReadCacheRequest(apiPath string) (*common.CacheContent, error) {
+	lock := f.getApiLock(apiPath)
+	lock.RLock()
+	defer lock.RUnlock()
 	cacheContent := common.CacheContent{}
 	bytes, err := util.ReadFileToBytes(apiPath)
 	if err != nil {

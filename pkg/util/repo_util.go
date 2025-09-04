@@ -23,6 +23,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -30,6 +31,10 @@ import (
 
 	"github.com/bytedance/sonic"
 	"golang.org/x/sys/unix"
+)
+
+var (
+	symlinkLock sync.Mutex
 )
 
 func GetOrgRepo(org, repo string) string {
@@ -202,6 +207,8 @@ func ReName(src, dst string) {
 }
 
 func CreateSymlinkIfNotExists(src, dst string) error {
+	symlinkLock.Lock()
+	defer symlinkLock.Unlock()
 	_, err := os.Lstat(dst)
 	if os.IsNotExist(err) {
 		// 获取 dst 所在的目录

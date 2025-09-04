@@ -24,6 +24,7 @@ import (
 	"sync"
 
 	"dingospeed/internal/data"
+	"dingospeed/pkg/common"
 	"dingospeed/pkg/config"
 	"dingospeed/pkg/consts"
 	"dingospeed/pkg/prom"
@@ -218,38 +219,44 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 		n                                 int
 	)
 	for i := 0; i < attempts; {
-		if err = util.GetStream(r.Domain, r.Uri, headers, func(resp *http.Response) error {
-			contentEncoding = resp.Header.Get("content-encoding")
-			contentLengthStr = resp.Header.Get("content-length")
-			for {
-				select {
-				case <-r.Context.Done():
-					zap.S().Warnf("getFileRangeFromRemote Context.Done err :%s", r.FileName)
-					return nil
-				default:
-					chunk := make([]byte, config.SysConfig.Download.RespChunkSize)
-					n, err = resp.Body.Read(chunk)
-					if n > 0 {
-						if contentEncoding != "" { // 数据有编码，先收集，后面解码
-							rawData = append(rawData, chunk[:n]...)
-						} else {
-							select {
-							case contentChan <- chunk[:n]:
-							case <-r.Context.Done():
+		if _, err = util.RetryRequest(func() (*common.Response, error) {
+			err = util.GetStream(r.Domain, r.Uri, headers, func(resp *http.Response) error {
+				contentEncoding = resp.Header.Get("content-encoding")
+				contentLengthStr = resp.Header.Get("content-length")
+				for {
+					select {
+					case <-r.Context.Done():
+						zap.S().Warnf("getFileRangeFromRemote Context.Done err :%s", r.FileName)
+						return nil
+					default:
+						chunk := make([]byte, config.SysConfig.Download.RespChunkSize)
+						n, err = resp.Body.Read(chunk)
+						if n > 0 {
+							if contentEncoding != "" { // 数据有编码，先收集，后面解码
+								rawData = append(rawData, chunk[:n]...)
+							} else {
+								select {
+								case contentChan <- chunk[:n]:
+								case <-r.Context.Done():
+									return nil
+								}
+							}
+							chunkByteLen += n // 原始数量
+						}
+						if err != nil {
+							if err == io.EOF {
 								return nil
 							}
+							zap.S().Errorf("file:%s, taskNo:%d, statusCode:%d, req remote err.%v", r.FileName, r.TaskNo, resp.StatusCode, err)
+							if chunkByteLen > 0 {
+								headers["range"] = fmt.Sprintf("bytes=%d-%d", startPos+int64(chunkByteLen), endPos-1)
+							}
+							return err
 						}
-						chunkByteLen += n // 原始数量
-					}
-					if err != nil {
-						if err == io.EOF {
-							return nil
-						}
-						zap.S().Errorf("file:%s, taskNo:%d, statusCode:%d, req remote err.%v", r.FileName, r.TaskNo, resp.StatusCode, err)
-						return err
 					}
 				}
-			}
+			})
+			return nil, err
 		}); err != nil {
 			zap.S().Warnf("GetStream err.%v", err)
 			if config.SysConfig.IsCluster() && util.IsInnerDomain(r.Domain) {

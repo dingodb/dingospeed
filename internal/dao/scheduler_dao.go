@@ -37,7 +37,11 @@ func (s *SchedulerDao) Register() (*manager.RegisterResponse, error) {
 func (s *SchedulerDao) Heartbeat() error {
 	ctx, cancel := context.WithTimeout(context.Background(), consts.RpcRequestTimeout)
 	defer cancel()
-	_, err := s.Client.Heartbeat(ctx, &manager.HeartbeatRequest{Id: config.SysConfig.Id})
+	req := &manager.HeartbeatRequest{
+		Id:         config.SysConfig.Id,
+		InstanceId: config.SysConfig.Scheduler.Discovery.InstanceId,
+		Online:     config.SysConfig.Server.Online}
+	_, err := s.Client.Heartbeat(ctx, req)
 	return err
 }
 
@@ -46,6 +50,13 @@ func (s *SchedulerDao) SchedulerFile(req *manager.SchedulerFileRequest) (*manage
 	defer cancel()
 	resp, err := s.Client.SchedulerFile(ctx, req)
 	return resp, err
+}
+
+func (s *SchedulerDao) SyncFileProcess(req *manager.SchedulerFileRequest) error {
+	ctx, cancel := context.WithTimeout(context.Background(), consts.RpcRequestTimeout)
+	defer cancel()
+	_, err := s.Client.SyncFileProcess(ctx, req)
+	return err
 }
 
 func (s *SchedulerDao) ReportFileProcess(request *manager.FileProcessRequest) {
