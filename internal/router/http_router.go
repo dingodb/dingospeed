@@ -68,4 +68,6 @@ func (r *HttpRouter) initRouter() {
 	r.echo.GET("/api/whoami-v2", r.metaHandler.WhoamiV2Handler)
 	r.echo.GET("/repos", r.metaHandler.ReposHandler)
 	r.echo.Any("/*", r.metaHandler.ForwardToNewSiteHandler)
+
+	r.echo.GET("/api/:dataType/:org/:repo/:etag/:fileSize", r.fileHandler.GetFileOffset)
 }

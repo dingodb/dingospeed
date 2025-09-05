@@ -17,11 +17,11 @@ server:
 
 scheduler:
     mode: cluster    #运行的两种模式：standalone&cluster,default:standalone
-    addr: 127.0.0.1:19091   # 调度器地址 10.230.204.102:19091
+    addr: 10.230.204.102:19091   # 调度器地址 10.230.204.102:19091
     minimumFileSize: 0          # 文件参与调度最小值，单位字节
     discovery:
-        instanceId: sj
-        host: 127.0.0.1
+        instanceId: zl
+        host: 10.230.204.102
         port: 8091
         heartbeatPeriod: 5          # 心跳周期，单位秒
 
@@ -58,11 +58,10 @@ tokenBucketLimit:
     handlerCapacity: 50   #提交处理任务的超时时间
 
 diskClean:
-    enabled: true
-    cacheSizeLimit: 1073741824  #38T 41781441855488
+    enabled: false
+    cacheSizeLimit: 41781441855488  #38T 41781441855488
     cacheCleanStrategy: "LRU"  #LRU,FIFO,LARGE_FIRST
     collectTimePeriod: 1  #定期检测磁盘使用量时间周期，单位小时（H）
-    instanceID: mas  # 唯一标识符
 
 dynamicProxy:
     enabled: true

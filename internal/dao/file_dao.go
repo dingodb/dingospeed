@@ -246,6 +246,11 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, orgRepo, commit, fi
 	}
 }
 
+func GetAnalysisFilePosition(dingFile *downloader.DingCache, startPos, endPos int64) int64 {
+	_, offset := analysisFilePosition(dingFile, startPos, endPos)
+	return offset
+}
+
 func (f *FileDao) constructBlobsAndFileFile(c echo.Context, blobsFile, filesPath string) (err error) {
 	if err = util.MakeDirs(blobsFile); err != nil {
 		zap.S().Errorf("create %s dir err.%v", blobsFile, err)

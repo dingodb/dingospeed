@@ -66,18 +66,21 @@ func (s SysService) MemoryUsed() {
 }
 
 func (s *SysService) cycleCheckDiskUsage() {
+	time.Sleep(10 * time.Second)
+	s.schedulerDao.Client = s.Client
+
 	ticker := time.NewTicker(config.SysConfig.GetDiskCollectTimePeriod())
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
-			checkDiskUsage(s)
+			s.checkDiskUsage()
 		}
 	}
 }
 
 // 检查磁盘使用情况
-func checkDiskUsage(sysService *SysService) {
+func (s *SysService) checkDiskUsage() {
 	if !config.SysConfig.Online() {
 		return
 	}
@@ -129,7 +132,7 @@ func checkDiskUsage(sysService *SysService) {
 		return
 	}
 
-	instanceID := config.SysConfig.GetInstanceID()
+	instanceID := config.SysConfig.Scheduler.Discovery.InstanceId
 	for _, file := range allFiles {
 		if currentSize < limitSize {
 			break
@@ -137,9 +140,8 @@ func checkDiskUsage(sysService *SysService) {
 		filePath := file.Path
 		fileSize := file.Info.Size()
 
-		time.Sleep(10 * time.Second)
-		if sysService.Client != nil {
-			deleteRecordByFilePath(sysService, baseRepoPath, filePath, instanceID)
+		if s.Client != nil {
+			s.deleteRecordByFilePath(baseRepoPath, filePath, instanceID)
 		}
 
 		err := os.Remove(filePath)
@@ -160,7 +162,7 @@ func checkDiskUsage(sysService *SysService) {
 	zap.S().Infof("Cleaning finished. Limit: %s, Current: %s.\n", limitSizeH, currentSizeH)
 }
 
-func deleteRecordByFilePath(sysService *SysService, baseRepoPath, filePath, instanceID string) {
+func (s *SysService) deleteRecordByFilePath(baseRepoPath, filePath, instanceID string) {
 	relPath, err := filepath.Rel(baseRepoPath, filePath)
 	if err != nil {
 		zap.S().Errorf("Failed to get relative path for %s: %v", filePath, err)
@@ -194,8 +196,7 @@ func deleteRecordByFilePath(sysService *SysService, baseRepoPath, filePath, inst
 		return
 	}
 
-	sysService.schedulerDao.Client = sysService.Client
-	sysService.schedulerDao.DeleteByEtagsAndFields(req)
+	s.schedulerDao.DeleteByEtagsAndFields(req)
 }
 
 func (s SysService) cycleTestProxyConnectivity() {

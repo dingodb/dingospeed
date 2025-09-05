@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	"dingospeed/internal/model"
 	"dingospeed/internal/service"
@@ -186,4 +187,17 @@ func (handler *FileHandler) GetPathInfoHandler(c echo.Context) error {
 		return util.ErrorProxyError(c)
 	}
 	return util.ResponseData(c, info)
+}
+
+func (handler *FileHandler) GetFileOffset(c echo.Context) error {
+	dataType := c.Param("dataType")
+	org := c.Param("org")
+	repo := c.Param("repo")
+	etag := c.Param("etag")
+	fileSizeStr := c.Param("fileSize")
+
+	fileSize, _ := strconv.ParseInt(fileSizeStr, 10, 64)
+
+	offset := handler.fileService.GetFileOffset(c, dataType, org, repo, etag, fileSize)
+	return util.ResponseData(c, offset)
 }

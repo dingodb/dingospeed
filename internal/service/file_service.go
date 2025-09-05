@@ -15,9 +15,13 @@
 package service
 
 import (
+	"fmt"
+
 	"dingospeed/internal/dao"
+	"dingospeed/internal/downloader"
 	"dingospeed/internal/model"
 	"dingospeed/pkg/common"
+	"dingospeed/pkg/config"
 	"dingospeed/pkg/consts"
 	myerr "dingospeed/pkg/error"
 	"dingospeed/pkg/util"
@@ -61,4 +65,16 @@ func (f *FileService) FileGetCommon(c echo.Context, repoType, orgRepo, commit, f
 
 func (f *FileService) GetPathInfo(query *model.PathInfoQuery) ([]common.PathsInfo, error) {
 	return f.fileDao.GetPathsInfo(query.Datatype, util.GetOrgRepo(query.Org, query.Repo), query.Revision, query.Token, query.FileNames)
+}
+
+func (f *FileService) GetFileOffset(c echo.Context, dataType string, org string, repo string, etag string, fileSize int64) int64 {
+	dingCacheManager := downloader.GetInstance()
+	orgRepo := util.GetOrgRepo(org, repo)
+	blobsDir := fmt.Sprintf("%s/files/%s/%s/blobs", config.SysConfig.Repos(), dataType, orgRepo)
+	blobsFile := fmt.Sprintf("%s/%s", blobsDir, etag)
+	dingFile, _ := dingCacheManager.GetDingFile(blobsFile, fileSize)
+	defer dingCacheManager.ReleasedDingFile(blobsFile)
+	curPos := dao.GetAnalysisFilePosition(dingFile, 0, fileSize)
+
+	return curPos
 }
