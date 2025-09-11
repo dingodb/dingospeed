@@ -80,6 +80,7 @@ func (r *RemoteFileTask) DoTask() {
 			close(r.Queue)
 			wg.Done()
 		}()
+		var interval int64 = 1
 		for {
 			select {
 			case chunk, ok := <-contentChan:
@@ -130,7 +131,12 @@ func (r *RemoteFileTask) DoTask() {
 									zap.S().Errorf("writeBlock err.%v", err)
 								}
 								zap.S().Debugf("from:%s, %s/%s, taskNo:%d, block：%d(%d)write done, range：%d-%d.", r.Domain, r.OrgRepo, r.FileName, r.TaskNo, lastBlock, blockNumber, lastBlockStartPos, lastBlockEndPos)
-								data.ReportFileProcess(r.Context, lastReportPos, lastBlockEndPos, consts.StatusDownloading)
+								if interval == config.SysConfig.GetSyncProcessInterval() {
+									data.ReportFileProcess(r.Context, lastReportPos, lastBlockEndPos, consts.StatusDownloading)
+									interval = 1
+								} else {
+									interval++
+								}
 								lastReportPos = lastBlockEndPos
 							}
 						}

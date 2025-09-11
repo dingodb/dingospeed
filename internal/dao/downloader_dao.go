@@ -92,7 +92,7 @@ func (d *DownloaderDao) constructTask(startPos, endPos int64, isInnerRequest boo
 		existPosition bool
 		curPos        int64
 	)
-	if taskParam.FileSize <= config.SysConfig.Scheduler.MinimumFileSize {
+	if taskParam.FileSize <= config.SysConfig.GetMinimumFileSize() {
 		goto localTask
 	}
 	existPosition, curPos = analysisFilePosition(taskParam.DingFile, startPos, endPos)

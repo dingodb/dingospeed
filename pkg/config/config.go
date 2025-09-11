@@ -98,10 +98,15 @@ type ReadBlock struct {
 }
 
 type Scheduler struct {
-	Mode            string    `json:"mode" yaml:"mode"`
-	Addr            string    `json:"addr" yaml:"addr"`
-	MinimumFileSize int64     `json:"minimumFileSize" yaml:"minimumFileSize"`
-	Discovery       Discovery `json:"discovery" yaml:"discovery"`
+	Mode      string    `json:"mode" yaml:"mode"`
+	Addr      string    `json:"addr" yaml:"addr"`
+	Strategy  Strategy  `json:"strategy" yaml:"strategy"`
+	Discovery Discovery `json:"discovery" yaml:"discovery"`
+}
+
+type Strategy struct {
+	MinimumFileSize     int64 `json:"minimumFileSize" yaml:"minimumFileSize"`
+	SyncProcessInterval int64 `json:"syncProcessInterval" yaml:"syncProcessInterval"`
 }
 
 type Discovery struct {
@@ -156,6 +161,17 @@ func (c *Config) GetHFURL() (*url.URL, error) {
 		return nil, err
 	}
 	return targetURL, nil
+}
+
+func (c *Config) GetMinimumFileSize() int64 {
+	return c.Scheduler.Strategy.MinimumFileSize
+}
+
+func (c *Config) GetSyncProcessInterval() int64 {
+	if c.Scheduler.Strategy.SyncProcessInterval < 1 {
+		c.Scheduler.Strategy.SyncProcessInterval = 1
+	}
+	return c.Scheduler.Strategy.SyncProcessInterval
 }
 
 func (c *Config) GetBpHFURLBase() string {
