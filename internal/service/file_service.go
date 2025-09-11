@@ -68,12 +68,19 @@ func (f *FileService) GetPathInfo(query *model.PathInfoQuery) ([]common.PathsInf
 }
 
 func (f *FileService) GetFileOffset(c echo.Context, dataType string, org string, repo string, etag string, fileSize int64) int64 {
-	dingCacheManager := downloader.GetInstance()
 	orgRepo := util.GetOrgRepo(org, repo)
 	blobsDir := fmt.Sprintf("%s/files/%s/%s/blobs", config.SysConfig.Repos(), dataType, orgRepo)
 	blobsFile := fmt.Sprintf("%s/%s", blobsDir, etag)
-	dingFile, _ := dingCacheManager.GetDingFile(blobsFile, fileSize)
-	defer dingCacheManager.ReleasedDingFile(blobsFile)
+	dingFile, err := downloader.NewDingCache(blobsFile, config.SysConfig.Download.BlockSize)
+	if err != nil {
+		zap.S().Errorf("NewDingCache err.%v", err)
+		return 0
+	}
+
+	if dingFile == nil {
+		zap.S().Errorf("GetDingFile err.dingFile is nil,blobsFile:%s", blobsFile)
+		return 0
+	}
 	curPos := dao.GetAnalysisFilePosition(dingFile, 0, fileSize)
 
 	return curPos
