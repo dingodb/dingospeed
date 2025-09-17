@@ -163,7 +163,10 @@ func (r *RemoteFileTask) DoTask() {
 		}
 		lastBlock = curBlock
 	}
-	if int64(len(rawBlock)) == r.DingFile.GetBlockSize() {
+	// 一个空文件，或文件刚好为blocksize的整数倍，直接标记为完成
+	if len(rawBlock) == 0 {
+		data.ReportFileProcess(r.Context, lastReportPos, curPos, consts.StatusDownloaded)
+	} else if int64(len(rawBlock)) == r.DingFile.GetBlockSize() {
 		hasBlockBool, err := r.DingFile.HasBlock(lastBlock)
 		if err != nil {
 			zap.S().Errorf("HasBlock err.%v", err)

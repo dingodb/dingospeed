@@ -225,7 +225,6 @@ var (
 	hasSentFailureMsg   bool
 )
 
-// testProxyConnectivity 测试代理服务器的连接连通性
 func testProxyConnectivity() {
 	proxyURL, err := url.Parse(config.SysConfig.GetHttpProxy())
 	if err != nil {

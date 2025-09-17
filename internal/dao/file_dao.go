@@ -85,6 +85,7 @@ func (f *FileDao) GetFileCommitSha(c echo.Context, repoType, orgRepo, commit str
 		code, sha, err := f.getCommitHfRemote(repoType, orgRepo, commit, authorization)
 		if err == nil {
 			if code != http.StatusOK && code != http.StatusTemporaryRedirect {
+				zap.S().Errorf(" getFileCommitSha getCommitHfRemote code:%d", code)
 				return "", myerr.NewAppendCode(code, "code is invalid.")
 			} else {
 				commitSha = sha

@@ -69,5 +69,6 @@ func (r *HttpRouter) initRouter() {
 	r.echo.GET("/repos", r.metaHandler.ReposHandler)
 	r.echo.Any("/*", r.metaHandler.ForwardToNewSiteHandler)
 
-	r.echo.GET("/api/:dataType/:org/:repo/:etag/:fileSize", r.fileHandler.GetFileOffset)
+	// 内部使用
+	r.echo.GET("/api/fileOffset/:dataType/:org/:repo/:etag/:fileSize", r.fileHandler.GetFileOffset)
 }
