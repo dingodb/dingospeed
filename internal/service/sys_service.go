@@ -40,8 +40,6 @@ func NewSysService(schedulerDao *dao.SchedulerDao) *SysService {
 			if config.SysConfig.DiskClean.Enabled {
 				go sysSvc.cycleCheckDiskUsage()
 			}
-
-			testProxyConnectivity()
 			if config.SysConfig.DynamicProxy.Enabled {
 				go sysSvc.cycleTestProxyConnectivity()
 			}
@@ -210,17 +208,11 @@ func (s SysService) cycleTestProxyConnectivity() {
 	}
 }
 
-// 测试代理连通性
-var successMsg = "，当前代理已恢复连通性"
-var failMsg = "，当前代理无法连接，请检查网络或代理设置"
-
-const (
-	proxyTestTimeout = 5 * time.Second
-	dialTimeout      = 3 * time.Second
-)
-
-// 新增：跟踪连续失败次数和是否已发送失败消息
 var (
+	successMsg          = "，当前代理已恢复连通性"
+	failMsg             = "，当前代理无法连接，请检查网络或代理设置"
+	proxyTestTimeout    = 5 * time.Second
+	dialTimeout         = 3 * time.Second
 	continuousFailCount int
 	hasSentFailureMsg   bool
 )
@@ -228,24 +220,17 @@ var (
 func testProxyConnectivity() {
 	proxyURL, err := url.Parse(config.SysConfig.GetHttpProxy())
 	if err != nil {
-		util.ProxyIsAvailable = false
-		zap.S().Warnf("代理URL解析失败: %v, 代理地址: %s", err, config.SysConfig.GetHttpProxy())
-		handleContinuousFailure(proxyURL) // 解析失败也算一次失败
+		zap.S().Errorf("代理URL解析失败: %v, 代理地址: %s", err, config.SysConfig.GetHttpProxy())
 		return
 	}
-
-	// 创建优化的HTTP客户端
 	testClient := createTestClient(proxyURL)
-
-	// 执行代理测试请求
 	req, err := http.NewRequest("HEAD", "https://www.google.com", nil)
 	if err != nil {
-		handleProxyTestError(err, "请求创建失败", proxyURL)
+		zap.S().Errorf("请求创建失败.%v", err)
 		return
 	}
 	// 设置标准化请求头
 	setTestRequestHeaders(req)
-
 	// 执行请求并处理响应
 	handleProxyTestResponse(testClient, req, proxyURL)
 }
@@ -273,60 +258,34 @@ func setTestRequestHeaders(req *http.Request) {
 	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
 }
 
-// handleProxyTestError 统一处理代理测试错误
-func handleProxyTestError(err error, errorMsg string, proxyURL *url.URL) {
-	if util.ProxyIsAvailable {
-		util.ProxyIsAvailable = false
-	}
-	handleContinuousFailure(proxyURL) // 处理连续失败计数
-}
-
-// handleProxyTestResponse 处理代理测试响应
 func handleProxyTestResponse(client *http.Client, req *http.Request, proxyURL *url.URL) {
 	resp, err := client.Do(req)
 	if err != nil {
-		handleProxyTestError(err, "代理请求执行失败", proxyURL)
+		handleContinuousFailure(http.StatusInternalServerError)
 		return
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusBadRequest {
-		handleProxyTestSuccess(proxyURL)
+		handleProxyTestSuccess()
 		return
 	}
-
-	handleProxyTestFailure(resp.StatusCode, proxyURL)
+	handleContinuousFailure(resp.StatusCode)
 }
 
-// handleProxyTestSuccess 处理代理测试成功
-func handleProxyTestSuccess(proxyURL *url.URL) {
-	// 成功时重置失败计数器和标记
+func handleProxyTestSuccess() {
 	continuousFailCount = 0
 	hasSentFailureMsg = false
-
 	if !util.ProxyIsAvailable {
 		util.ProxyIsAvailable = true
 		util.SendData(config.SysConfig.GetHttpProxyName() + successMsg) // 成功立即发消息
 	}
 }
 
-// handleProxyTestFailure 处理代理测试失败
-func handleProxyTestFailure(statusCode int, proxyURL *url.URL) {
-	util.ProxyIsAvailable = false
-	zap.S().Warnf("代理测试返回非成功状态码: %d, 代理地址: %s", statusCode, proxyURL.String())
-	handleContinuousFailure(proxyURL) // 处理连续失败计数
-}
-
-// 新增：处理连续失败计数逻辑
-func handleContinuousFailure(proxyURL *url.URL) {
-	// 每次失败累加计数器
+func handleContinuousFailure(statusCode int) {
 	continuousFailCount++
-	// zap.S().Debugf("代理连续失败次数: %d, 代理地址: %s", continuousFailCount, proxyURL.String())
-
-	// 当连续失败达到5次且未发送过失败消息时，发送通知
 	if continuousFailCount >= config.SysConfig.GetMaxContinuousFails() && !hasSentFailureMsg {
+		util.ProxyIsAvailable = false
 		util.SendData(config.SysConfig.GetHttpProxyName() + failMsg)
 		hasSentFailureMsg = true // 标记已发送，避免重复发送
-		// zap.S().Warnf("代理连续失败%d次，已发送通知: %s", config.SysConfig.GetMaxContinuousFails(), proxyURL.String())
 	}
 }

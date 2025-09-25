@@ -18,10 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"net/http"
-	"net/url"
-	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -417,71 +414,28 @@ func (f *FileDao) FileChunkGet(c echo.Context, taskParam *downloader.TaskParam, 
 }
 
 func (f *FileDao) WhoamiV2Generator(c echo.Context) error {
-	newHeaders := make(http.Header)
-	for k, vv := range c.Request().Header {
+	newHeaders := make(map[string]string, 0)
+	for k := range c.Request().Header {
+		v := c.Request().Header.Get(k)
 		lowerKey := strings.ToLower(k)
 		if lowerKey == "host" {
 			continue
 		}
-		newHeaders[lowerKey] = vv
+		newHeaders[lowerKey] = v
 	}
-
-	targetURL, err := url.Parse(config.SysConfig.GetHFURLBase())
+	resp, err := util.Get("/api/whoami-v2", newHeaders)
 	if err != nil {
-		zap.L().Error("Failed to parse base URL", zap.Error(err))
-		return echo.NewHTTPError(http.StatusInternalServerError, "Internal Server Error")
+		zap.S().Errorf("WhoamiV2Generator err.%v", err)
+		return err
 	}
-	targetURL.Path = path.Join(targetURL.Path, "/api/whoami-v2")
-
-	// targetURL := "https://huggingface.co/api/whoami-v2"
-	zap.S().Debugf("exec WhoamiV2Generator:targetURL:%s,host:%s", targetURL.String(), config.SysConfig.GetHfNetLoc())
-	// Creating a proxy request
-	req, err := http.NewRequest("GET", targetURL.String(), nil)
-	if err != nil {
-		zap.L().Error("Failed to create request", zap.Error(err))
-		return echo.NewHTTPError(http.StatusInternalServerError, "Internal Server Error")
+	extractHeaders := resp.ExtractHeaders(resp.Headers)
+	for k, vv := range extractHeaders {
+		c.Response().Header().Add(k, vv)
 	}
-	req.Header = newHeaders
-	// req.Host = "huggingface.co"
-	req.Host = config.SysConfig.GetHfNetLoc()
-
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		zap.L().Error("Failed to forward request", zap.Error(err))
-		return echo.NewHTTPError(http.StatusBadGateway, "Bad Gateway")
-	}
-	defer resp.Body.Close()
-
-	// Processing Response Headers
-	responseHeaders := make(http.Header)
-	for k, vv := range resp.Header {
-		lowerKey := strings.ToLower(k)
-		if lowerKey == "content-encoding" || lowerKey == "content-length" {
-			continue
-		}
-		for _, v := range vv {
-			responseHeaders.Add(lowerKey, v)
-		}
-	}
-
-	// Setting the response header
-	for k, vv := range responseHeaders {
-		for _, v := range vv {
-			c.Response().Header().Add(k, v)
-		}
-	}
-
 	c.Response().WriteHeader(resp.StatusCode)
-
-	// Streaming response content
-	_, err = io.Copy(c.Response().Writer, resp.Body)
-	if err != nil {
-		zap.L().Error("Failed to stream response", zap.Error(err))
+	if _, err := c.Response().Write(resp.Body); err != nil {
+		zap.S().Errorf("响应内容回传失败.%v", err)
 	}
-
 	return nil
 }
 

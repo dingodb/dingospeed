@@ -7,7 +7,7 @@ server:
     metrics: false
     online: true #true表示本地找不到，去hfNetLoc地址查找并下载模型数据，false表示本地如果没有，直接返回没有
     repos: ./repos
-    hfNetLoc: hf-mirror.com   # huggingface.co
+    hfNetLoc: huggingface.co   # huggingface.co
     bpHfNetLoc: hf-mirror.com #hf-mirror.com
     hfScheme: https
     ssl:
