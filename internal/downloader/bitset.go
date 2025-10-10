@@ -21,12 +21,12 @@ import (
 
 // Bitset 结构体表示一个位集合
 type Bitset struct {
-	size int64
+	size uint64
 	bits []byte
 }
 
 // NewBitset 创建一个新的 Bitset 对象
-func NewBitset(size int64) *Bitset {
+func NewBitset(size uint64) *Bitset {
 	return &Bitset{
 		size: size,
 		bits: make([]byte, (size+7)/8),
@@ -34,7 +34,7 @@ func NewBitset(size int64) *Bitset {
 }
 
 // Set 将指定索引的位设置为 1
-func (b *Bitset) Set(index int64) error {
+func (b *Bitset) Set(index uint64) error {
 	if index < 0 || index >= b.size {
 		return errors.New("Index out of range")
 	}
@@ -45,7 +45,7 @@ func (b *Bitset) Set(index int64) error {
 }
 
 // Clear 将指定索引的位设置为 0
-func (b *Bitset) Clear(index int64) error {
+func (b *Bitset) Clear(index uint64) error {
 	if index < 0 || index >= b.size {
 		return errors.New("Index out of range")
 	}
@@ -56,7 +56,7 @@ func (b *Bitset) Clear(index int64) error {
 }
 
 // Test 检查指定索引的位的值
-func (b *Bitset) Test(index int64) (bool, error) {
+func (b *Bitset) Test(index uint64) (bool, error) {
 	if index < 0 || index >= b.size {
 		return false, errors.New("Index out of range")
 	}

@@ -13,18 +13,18 @@ var magicNumber = [4]byte{'O', 'L', 'A', 'H'}
 // DingCacheHeader 结构体表示 Olah 缓存文件的头部
 type DingCacheHeader struct {
 	MagicNumber   [4]byte
-	Version       int64
-	BlockSize     int64
-	FileSize      int64
-	BlockMaskSize int64
-	BlockNumber   int64
+	Version       uint64
+	BlockSize     uint64
+	FileSize      uint64
+	BlockMaskSize uint64
+	BlockNumber   uint64
 	BlockMask     *Bitset
 }
 
 // NewDingCacheHeader 创建一个新的 DingCacheHeader 对象
-func NewDingCacheHeader(version, blockSize, fileSize int64) *DingCacheHeader {
+func NewDingCacheHeader(version, blockSize, fileSize uint64) *DingCacheHeader {
 	blockNumber := (fileSize + blockSize - 1) / blockSize
-	blockMask := NewBitset(int64(DEFAULT_BLOCK_MASK_MAX))
+	blockMask := NewBitset(DEFAULT_BLOCK_MASK_MAX)
 	return &DingCacheHeader{
 		MagicNumber:   magicNumber,
 		Version:       version,
@@ -62,6 +62,9 @@ func (h *DingCacheHeader) Read(f *os.File) error {
 	}
 	if err := binary.Read(f, binary.LittleEndian, &h.BlockMaskSize); err != nil {
 		return err
+	}
+	if h.BlockSize == 0 {
+		return errors.New("BlockSize cannot be 0")
 	}
 	h.BlockNumber = (h.FileSize + h.BlockSize - 1) / h.BlockSize
 	h.BlockMask = NewBitset(h.BlockMaskSize)

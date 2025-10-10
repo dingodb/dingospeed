@@ -220,7 +220,7 @@ func analysisFilePosition(dingFile *downloader.DingCache, startPos, endPos int64
 		return true, endPos
 	}
 	if startPos < 0 || endPos <= startPos || endPos > dingFile.GetFileSize() {
-		zap.S().Errorf("Invalid startPos or endPos: startPos=%d, endPos=%d", startPos, endPos)
+		zap.S().Errorf("Invalid startPos or endPos: path=%s, startPos=%d, endPos=%d", dingFile.GetPath(), startPos, endPos)
 		return false, startPos
 	}
 	startBlock := startPos / dingFile.GetBlockSize()

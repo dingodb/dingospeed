@@ -71,6 +71,10 @@ func (f *FileService) GetFileOffset(c echo.Context, dataType string, org string,
 	orgRepo := util.GetOrgRepo(org, repo)
 	blobsDir := fmt.Sprintf("%s/files/%s/%s/blobs", config.SysConfig.Repos(), dataType, orgRepo)
 	blobsFile := fmt.Sprintf("%s/%s", blobsDir, etag)
+	exists := util.FileExists(blobsFile)
+	if !exists {
+		return 0
+	}
 	dingFile, err := downloader.NewDingCache(blobsFile, config.SysConfig.Download.BlockSize)
 	if err != nil {
 		zap.S().Errorf("NewDingCache err.%v", err)

@@ -31,7 +31,7 @@ import (
 const (
 	CURRENT_OLAH_CACHE_VERSION = 8
 	// DEFAULT_BLOCK_MASK_MAX     = 30
-	DEFAULT_BLOCK_MASK_MAX = 1024 * 1024
+	DEFAULT_BLOCK_MASK_MAX uint64 = 1024 * 1024
 
 	cost = 1
 )
@@ -73,7 +73,7 @@ func (c *DingCache) Open(path string, blockSize int64) error {
 		defer f.Close()
 		c.header = &DingCacheHeader{}
 		if err = c.header.Read(f); err != nil {
-			c.header = NewDingCacheHeader(CURRENT_OLAH_CACHE_VERSION, blockSize, 0)
+			c.header = NewDingCacheHeader(CURRENT_OLAH_CACHE_VERSION, uint64(blockSize), 0)
 			if err = c.header.Write(f); err != nil {
 				return err
 			}
@@ -86,7 +86,7 @@ func (c *DingCache) Open(path string, blockSize int64) error {
 			return err
 		}
 		defer f.Close()
-		c.header = NewDingCacheHeader(CURRENT_OLAH_CACHE_VERSION, blockSize, 0)
+		c.header = NewDingCacheHeader(CURRENT_OLAH_CACHE_VERSION, uint64(blockSize), 0)
 		if err = c.header.Write(f); err != nil {
 			return err
 		}
@@ -126,25 +126,29 @@ func (c *DingCache) flushHeader() error {
 	return c.header.Write(f)
 }
 
+func (c *DingCache) GetPath() string {
+	return c.path
+}
+
 // getFileSize 返回文件大小
 func (c *DingCache) GetFileSize() int64 {
 	c.headerLock.RLock()
 	defer c.headerLock.RUnlock()
-	return c.header.FileSize
+	return int64(c.header.FileSize)
 }
 
 // getBlockNumber 返回块数
 func (c *DingCache) getBlockNumber() int64 {
 	c.headerLock.RLock()
 	defer c.headerLock.RUnlock()
-	return c.header.BlockNumber
+	return int64(c.header.BlockNumber)
 }
 
 // GetBlockSize 返回块大小
 func (c *DingCache) GetBlockSize() int64 {
 	c.headerLock.RLock()
 	defer c.headerLock.RUnlock()
-	return c.header.BlockSize
+	return int64(c.header.BlockSize)
 }
 
 // getHeaderSize 返回头部大小
@@ -157,13 +161,13 @@ func (c *DingCache) getHeaderSize() int64 {
 func (c *DingCache) setHeaderBlock(blockIndex int64) error {
 	// c.headerLock.Lock()
 	// defer c.headerLock.Unlock()
-	return c.header.BlockMask.Set(blockIndex)
+	return c.header.BlockMask.Set(uint64(blockIndex))
 }
 
 func (c *DingCache) HasBlock(blockIndex int64) (bool, error) {
 	c.headerLock.RLock()
 	defer c.headerLock.RUnlock()
-	return c.header.BlockMask.Test(blockIndex)
+	return c.header.BlockMask.Test(uint64(blockIndex))
 }
 
 // ReadBlock 读取块数据，该操作会预先缓存prefetchBlocks个块数据，避免每次读取时对文件做操作。
@@ -356,8 +360,8 @@ func (c *DingCache) resizeFileSize(fileSize int64) error {
 func (c *DingCache) resizeHeader(blockNum, fileSize int64) error {
 	c.headerLock.RLock()
 	defer c.headerLock.RUnlock()
-	c.header.BlockNumber = blockNum
-	c.header.FileSize = fileSize
+	c.header.BlockNumber = uint64(blockNum)
+	c.header.FileSize = uint64(fileSize)
 	return c.header.ValidHeader()
 }
 

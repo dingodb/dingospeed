@@ -4,7 +4,7 @@ server:
     port: 8091
     pprof: true
     pprofPort: 6060
-    metrics: false
+    metrics: true
     online: true #true表示本地找不到，去hfNetLoc地址查找并下载模型数据，false表示本地如果没有，直接返回没有
     repos: ./repos
     hfNetLoc: huggingface.co   # huggingface.co
