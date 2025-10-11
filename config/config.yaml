@@ -20,12 +20,13 @@ scheduler:
     addr: 127.0.0.1:19091   # 调度器地址 10.230.204.102:19091
     strategy:
         minimumFileSize: 0          # 文件参与调度最小值，单位字节
-        syncProcessInterval: 3      # 同步下载进度的间隔，默认是1个块同步1次。
+        syncProcessInterval: 100      # 同步下载进度的间隔，默认是1个块同步1次。
     discovery:
-        instanceId: hd-01
+        instanceId: hd-02
         host: 127.0.0.1
         port: 8091
         heartbeatPeriod: 5          # 心跳周期，单位秒
+    publicDomain: http://hfmirror.mas.zetyun.cn:8082
 
 download:
     blockSize: 8388608           #默认文件块大小为8MB（8388608），单位字节，1048576（1MB）
@@ -66,7 +67,7 @@ diskClean:
     collectTimePeriod: 1  #定期检测磁盘使用量时间周期，单位小时（H）
 
 dynamicProxy:
-    enabled: true
+    enabled: false
     httpProxy: http://127.0.0.1:7890
     httpProxyName: "马鞍山服务器"
     timePeriod: 60 #定期检测代理是否可用时间周期，单位秒（S）

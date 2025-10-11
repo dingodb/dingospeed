@@ -1,6 +1,6 @@
 GOHOSTOS:=$(shell go env GOHOSTOS)
 GOPATH:=$(shell go env GOPATH)
-VERSION=$(shell git describe --tags --always)
+VERSION=$(shell git describe --tags --always --dirty)
 PACKAGES=$(shell go list ./... | grep -v /vendor/)
 CURRENTTIME=$(shell date +"%Y%m%d%H%M%S")
 

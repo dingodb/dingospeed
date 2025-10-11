@@ -104,6 +104,13 @@ func ErrorProxyError(ctx echo.Context) error {
 	return Response(ctx, http.StatusInternalServerError, headers, nil)
 }
 
+func ResponseError(ctx echo.Context, err error) error {
+	content := map[string]string{
+		"error": err.Error(),
+	}
+	return ctx.JSON(http.StatusInternalServerError, content)
+}
+
 func ErrorMethodError(ctx echo.Context) error {
 	content := map[string]string{
 		"error": "request method error",

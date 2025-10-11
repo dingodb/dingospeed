@@ -98,10 +98,11 @@ type ReadBlock struct {
 }
 
 type Scheduler struct {
-	Mode      string    `json:"mode" yaml:"mode"`
-	Addr      string    `json:"addr" yaml:"addr"`
-	Strategy  Strategy  `json:"strategy" yaml:"strategy"`
-	Discovery Discovery `json:"discovery" yaml:"discovery"`
+	Mode         string    `json:"mode" yaml:"mode"`
+	Addr         string    `json:"addr" yaml:"addr"`
+	Strategy     Strategy  `json:"strategy" yaml:"strategy"`
+	Discovery    Discovery `json:"discovery" yaml:"discovery"`
+	PublicDomain string    `json:"publicDomain" yaml:"publicDomain"`
 }
 
 type Strategy struct {

@@ -46,18 +46,18 @@ func (r *HttpRouter) initRouter() {
 	if config.SysConfig.EnableMetric() {
 		r.echo.GET("/metrics", echo.WrapHandler(promhttp.Handler()))
 	}
-
+	r.routerForSpeed()
+	// 内部使用
+	r.routerForScheduelr()
+}
+func (r *HttpRouter) routerForSpeed() { // alayanew
 	// 单个文件
 	r.echo.HEAD("/:repoType/:org/:repo/resolve/:commit/:filePath", r.fileHandler.HeadFileHandler1)
 	r.echo.HEAD("/:orgOrRepoType/:repo/resolve/:commit/:filePath", r.fileHandler.HeadFileHandler2)
 	r.echo.HEAD("/:repo/resolve/:commit/:filePath", r.fileHandler.HeadFileHandler3)
-
 	r.echo.GET("/:repoType/:org/:repo/resolve/:commit/:filePath", r.fileHandler.GetFileHandler1)
 	r.echo.GET("/:orgOrRepoType/:repo/resolve/:commit/:filePath", r.fileHandler.GetFileHandler2)
 	r.echo.GET("/:repo/resolve/:commit/:filePath", r.fileHandler.GetFileHandler3)
-
-	// scheduler
-	r.echo.POST("/api/getPathInfo", r.fileHandler.GetPathInfoHandler)
 
 	// 模型
 	r.echo.HEAD("/api/:repoType/:org/:repo/revision/:commit", r.metaHandler.MetaProxyCommonHandler)
@@ -68,7 +68,12 @@ func (r *HttpRouter) initRouter() {
 	r.echo.GET("/api/whoami-v2", r.metaHandler.WhoamiV2Handler)
 	r.echo.GET("/repos", r.metaHandler.ReposHandler)
 	r.echo.Any("/*", r.metaHandler.ForwardToNewSiteHandler)
+}
 
-	// 内部使用
+func (r *HttpRouter) routerForScheduelr() { // alayanew
+	r.echo.GET("/api/:repoType/:org/:repo/files/:commit/", r.metaHandler.RepositoryFilesHandler)
+	r.echo.GET("/api/:repoType/:org/:repo/files/:commit/:filePath", r.metaHandler.RepositoryFilesHandler)
+
+	r.echo.POST("/api/getPathInfo", r.fileHandler.GetPathInfoHandler)
 	r.echo.GET("/api/fileOffset/:dataType/:org/:repo/:etag/:fileSize", r.fileHandler.GetFileOffset)
 }

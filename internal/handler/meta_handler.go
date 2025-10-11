@@ -72,3 +72,26 @@ func (handler *MetaHandler) RepoRefsHandler(c echo.Context) error {
 func (handler *MetaHandler) ForwardToNewSiteHandler(c echo.Context) error {
 	return handler.metaService.ForwardToNewSite(c)
 }
+
+func (handler *MetaHandler) RepositoryFilesHandler(c echo.Context) error {
+	repoType := c.Param("repoType")
+	org := c.Param("org")
+	repo := c.Param("repo")
+	commit := c.Param("commit")
+	filePath := c.Param("filePath")
+	orgRepo := util.GetOrgRepo(org, repo)
+	c.Set(consts.PromOrgRepo, orgRepo)
+	if _, ok := consts.RepoTypesMapping[repoType]; !ok {
+		zap.S().Errorf("MetaProxyCommon repoType:%s is not exist RepoTypesMapping", repoType)
+		return util.ErrorPageNotFound(c)
+	}
+	if org == "" && repo == "" {
+		zap.S().Errorf("MetaProxyCommon org and repo is null")
+		return util.ErrorRepoNotFound(c)
+	}
+	files, err := handler.metaService.RepositoryFiles(repoType, orgRepo, commit, filePath)
+	if err != nil {
+		return util.ResponseError(c, err)
+	}
+	return util.ResponseData(c, files)
+}
