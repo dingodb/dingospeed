@@ -16,6 +16,7 @@ package dao
 
 import (
 	"fmt"
+	"net/http"
 
 	"dingospeed/pkg/common"
 	"dingospeed/pkg/util"
@@ -45,9 +46,6 @@ func (m *MetaDao) RepoRefs(repoType string, orgRepo string, authorization string
 	return resp, err
 }
 
-func (m *MetaDao) ForwardRefs(originalReq echo.Context) (*common.Response, error) {
-	resp, err := util.RetryRequest(func() (*common.Response, error) {
-		return util.ForwardRequest(originalReq)
-	})
-	return resp, err
+func (m *MetaDao) ForwardRefs(originalReq echo.Context) (*http.Response, error) {
+	return util.ForwardRequest(originalReq)
 }

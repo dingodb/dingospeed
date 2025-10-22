@@ -317,7 +317,7 @@ func ResponseStream(c echo.Context, fileName string, headers map[string]string, 
 	}
 }
 
-func ForwardRequest(originalReq echo.Context) (*common.Response, error) {
+func ForwardRequest(originalReq echo.Context) (*http.Response, error) {
 	domain, client, err := constructClient()
 	if err != nil {
 		return nil, fmt.Errorf("construct http client err: %v", err)
@@ -347,25 +347,7 @@ func ForwardRequest(originalReq echo.Context) (*common.Response, error) {
 		zap.S().Warnf("转发请求失败: %s, 错误: %v", targetURL, err)
 		return nil, fmt.Errorf("执行转发请求失败: %v", err)
 	}
-	defer func() {
-		if r := recover(); r != nil {
-			zap.S().Errorf("关闭响应体资源时出现异常: %v", r)
-		}
-		resp.Body.Close()
-	}()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("读取响应体失败: %v", err)
-	}
-	respHeaders := make(map[string]interface{})
-	for key, values := range resp.Header {
-		respHeaders[key] = values
-	}
-	return &common.Response{
-		StatusCode: resp.StatusCode,
-		Headers:    respHeaders,
-		Body:       body,
-	}, nil
+	return resp, nil
 }
 
 func IsInnerDomain(url string) bool {

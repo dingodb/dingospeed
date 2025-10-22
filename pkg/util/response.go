@@ -129,9 +129,9 @@ func ErrorTooManyRequest(ctx echo.Context) error {
 	return Response(ctx, http.StatusTooManyRequests, nil, content)
 }
 
-func ResponseHeaders(ctx echo.Context, headers map[string]string) error {
+func ResponseHeaders(ctx echo.Context, code int, headers map[string]string) error {
 	fullHeaders(ctx, headers)
-	return ctx.JSON(http.StatusOK, nil)
+	return ctx.JSON(code, nil)
 }
 
 func Response(ctx echo.Context, httpStatus int, headers map[string]string, data interface{}) error {

@@ -222,7 +222,7 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, orgRepo, commit, fi
 		return err
 	}
 	if method == consts.RequestTypeHead {
-		return util.ResponseHeaders(c, respHeaders)
+		return util.ResponseHeaders(c, http.StatusOK, respHeaders)
 	} else if method == consts.RequestTypeGet {
 		preheat := c.Request().Header.Get("preheat")
 		preheatFlag := preheat != ""

@@ -64,7 +64,7 @@ func (r *HttpRouter) routerForSpeed() { // alayanew
 	r.echo.GET("/api/:repoType/:org/:repo/revision/:commit", r.metaHandler.MetaProxyCommonHandler)
 
 	// refs
-	r.echo.GET("/api/:repoType/:org/:repo/refs", r.metaHandler.RepoRefsHandler)
+	// r.echo.GET("/api/:repoType/:org/:repo/refs", r.metaHandler.RepoRefsHandler)  修复转发响应码，走统一转发。
 	r.echo.GET("/api/whoami-v2", r.metaHandler.WhoamiV2Handler)
 	r.echo.GET("/repos", r.metaHandler.ReposHandler)
 	r.echo.Any("/*", r.metaHandler.ForwardToNewSiteHandler)

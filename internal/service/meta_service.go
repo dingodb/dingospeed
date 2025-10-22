@@ -15,7 +15,9 @@
 package service
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 
@@ -80,19 +82,22 @@ func (m *MetaService) MetaProxyCommon(c echo.Context, repoType, orgRepo, commit,
 	}
 	if cacheContent != nil {
 		if method == consts.RequestTypeHead {
-			return util.ResponseHeaders(c, cacheContent.Headers)
+			return util.ResponseHeaders(c, cacheContent.StatusCode, cacheContent.Headers)
 		}
-		var bodyStreamChan = make(chan []byte, consts.RespChanSize)
-		bodyStreamChan <- cacheContent.OriginContent
-		close(bodyStreamChan)
-		err = util.ResponseStream(c, orgRepo, cacheContent.Headers, bodyStreamChan)
+		response := c.Response()
+		for k, v := range cacheContent.Headers {
+			response.Header()[k] = []string{v}
+		}
+		response.WriteHeader(cacheContent.StatusCode)
+		src := bytes.NewReader(cacheContent.OriginContent)
+		_, err = io.Copy(response, src)
 		if err != nil {
-			return err
+			return util.ErrorProxyError(c)
 		}
+		return nil
 	} else {
 		return util.ErrorProxyError(c)
 	}
-	return nil
 }
 
 func (m *MetaService) requestAndSaveMeta(c echo.Context, repoType, orgRepo, commit, commitSha, method string) (*common.CacheContent, error) {
@@ -202,16 +207,17 @@ func (m *MetaService) ForwardToNewSite(c echo.Context) error {
 		zap.S().Errorf("forward request refs err.%v", err)
 		return util.ErrorProxyError(c)
 	}
-	extractHeaders := resp.ExtractHeaders(resp.Headers)
-	cacheContent := &common.CacheContent{
-		Headers:       extractHeaders,
-		OriginContent: resp.Body,
+	defer resp.Body.Close()
+	response := c.Response()
+	for k, v := range resp.Header {
+		response.Header()[k] = v
 	}
-
-	var bodyStreamChan = make(chan []byte, consts.RespChanSize)
-	bodyStreamChan <- cacheContent.OriginContent
-	close(bodyStreamChan)
-	return util.ResponseStream(c, c.Request().URL.Path, cacheContent.Headers, bodyStreamChan)
+	response.WriteHeader(resp.StatusCode)
+	_, err = io.Copy(response, resp.Body)
+	if err != nil {
+		return util.ErrorProxyError(c)
+	}
+	return nil
 }
 
 func (m *MetaService) RepositoryFiles(repoType, orgRepo, commit, filePath string) ([]*FileDescribe, error) {

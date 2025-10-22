@@ -52,7 +52,6 @@ type Response struct {
 	StatusCode int
 	Headers    map[string]interface{}
 	Body       []byte
-	BodyChan   chan []byte
 }
 
 func (r Response) GetKey(key string) string {
