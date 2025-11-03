@@ -42,6 +42,8 @@ type CommitHfSha struct {
 	} `json:"siblings"`
 }
 
+// ./repair --repoPath=/mnt/dingofs-backup/dingospeed/data/repos/repos --repoType=models  --token= --org=ACE-Step
+
 func main() {
 	flag.StringVar(&repoPathParam, "repoPath", "./repos", "仓库路径")
 	flag.StringVar(&repoTypeParam, "repoType", "models", "类型")

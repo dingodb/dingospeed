@@ -18,6 +18,7 @@ type AppInfo interface {
 	Name() string
 	Version() string
 	StartTime() string
+	Ctx() context.Context
 }
 
 type App struct {
@@ -51,6 +52,8 @@ func (a *App) Name() string { return a.opts.name }
 func (a *App) Version() string { return a.opts.version }
 
 func (a *App) StartTime() string { return a.opts.startTime }
+
+func (a *App) Ctx() context.Context { return a.ctx }
 
 func (a *App) Stop() (err error) {
 	if a.cancel != nil {

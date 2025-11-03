@@ -1,13 +1,13 @@
 server:
     mode: debug
-    host: 0.0.0.0
+    host: 127.0.0.1
     port: 8091
     pprof: true
     pprofPort: 6060
     metrics: true
     online: true #true表示本地找不到，去hfNetLoc地址查找并下载模型数据，false表示本地如果没有，直接返回没有
     repos: ./repos
-    hfNetLoc: huggingface.co   # huggingface.co
+    hfNetLoc: hf-mirror.com   # huggingface.co
     bpHfNetLoc: hf-mirror.com #hf-mirror.com
     hfScheme: https
     ssl:
@@ -22,7 +22,7 @@ scheduler:
         minimumFileSize: 0          # 文件参与调度最小值，单位字节
         syncProcessInterval: 100      # 同步下载进度的间隔，默认是1个块同步1次。
     discovery:
-        instanceId: hd-02
+        instanceId: xn-03
         host: 127.0.0.1
         port: 8091
         heartbeatPeriod: 5          # 心跳周期，单位秒
@@ -47,6 +47,7 @@ cache:
         prefetchMemoryUsedThreshold: 90  #当内存使用量达到该值，将不会预读取，不缓存数据块
         prefetchBlocks: 16           #离线下载时，预先读取块的数量
         prefetchBlockTTL: 30         #离线下载时，预先读取块的存活时间，单位秒（S）
+    mountModelDir: /Users/zhaoli/Downloads
 
 retry:
     delay: 1       #重试间隔时间，单位秒，默认为1
@@ -68,7 +69,7 @@ diskClean:
 
 dynamicProxy:
     enabled: false
-    httpProxy: http://127.0.0.1:7890
+    httpProxy:    #http://127.0.0.1:7890
     httpProxyName: "马鞍山服务器"
     timePeriod: 60 #定期检测代理是否可用时间周期，单位秒（S）
     maxContinuousFails: 5 #连续失败次数超过该值，则认为代理不可用

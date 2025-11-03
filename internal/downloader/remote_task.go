@@ -66,6 +66,7 @@ func (r *RemoteFileTask) DoTask() {
 	go func() {
 		defer wg.Done()
 		if err := r.getFileRangeFromRemote(rangeStartPos, rangeEndPos, contentChan); err != nil {
+			zap.S().Errorf("getFileRangeFromRemote err.%v", err)
 			r.Cancel()
 		} else {
 			close(contentChan)
@@ -94,7 +95,7 @@ func (r *RemoteFileTask) DoTask() {
 						case r.Queue <- chunk:
 						case <-r.Context.Done():
 							zap.S().Warnf("send chunk err:%s/%s, task %d, ctx done, DoTask exit.", r.OrgRepo, r.FileName, r.TaskNo)
-							data.ReportFileProcess(r.Context, 0, 0, consts.StatusDownloadBreak)
+							data.ReportFileProcess(r.Context, r.constructFileProcessParam(lastReportPos, lastBlockEndPos, consts.StatusDownloadBreak))
 							return
 						}
 					}
@@ -132,12 +133,12 @@ func (r *RemoteFileTask) DoTask() {
 								}
 								zap.S().Debugf("from:%s, %s/%s, taskNo:%d, block：%d(%d)write done, range：%d-%d.", r.Domain, r.OrgRepo, r.FileName, r.TaskNo, lastBlock, blockNumber, lastBlockStartPos, lastBlockEndPos)
 								if interval == config.SysConfig.GetSyncProcessInterval() {
-									data.ReportFileProcess(r.Context, lastReportPos, lastBlockEndPos, consts.StatusDownloading)
+									data.ReportFileProcess(r.Context, r.constructFileProcessParam(lastReportPos, lastBlockEndPos, consts.StatusDownloading))
+									lastReportPos = lastBlockEndPos
 									interval = 1
 								} else {
 									interval++
 								}
-								lastReportPos = lastBlockEndPos
 							}
 						}
 						nextBlock := streamCacheBytes[splitPos:] // 下一个块的数据
@@ -148,7 +149,7 @@ func (r *RemoteFileTask) DoTask() {
 				}
 			case <-r.Context.Done():
 				zap.S().Warnf("file:%s/%s taskNo:%d ctx done, DoTask exit.", r.OrgRepo, r.FileName, r.TaskNo)
-				data.ReportFileProcess(r.Context, 0, 0, consts.StatusDownloadBreak)
+				data.ReportFileProcess(r.Context, r.constructFileProcessParam(lastReportPos, lastBlockEndPos, consts.StatusDownloadBreak))
 				return
 			}
 		}
@@ -165,7 +166,7 @@ func (r *RemoteFileTask) DoTask() {
 	}
 	// 一个空文件，或文件刚好为blocksize的整数倍，直接标记为完成
 	if len(rawBlock) == 0 {
-		data.ReportFileProcess(r.Context, lastReportPos, curPos, consts.StatusDownloaded)
+		data.ReportFileProcess(r.Context, r.constructFileProcessParam(lastReportPos, curPos, consts.StatusDownloaded))
 	} else if int64(len(rawBlock)) == r.DingFile.GetBlockSize() {
 		hasBlockBool, err := r.DingFile.HasBlock(lastBlock)
 		if err != nil {
@@ -177,14 +178,26 @@ func (r *RemoteFileTask) DoTask() {
 				zap.S().Errorf("last writeBlock err.%v", err)
 			}
 			zap.S().Debugf("from:%s, %s/%s, taskNo:%d, last block：%d(%d)write done, range：%d-%d.", r.Domain, r.OrgRepo, r.FileName, r.TaskNo, lastBlock, blockNumber, lastBlockStartPos, lastBlockEndPos)
-			data.ReportFileProcess(r.Context, lastReportPos, curPos, consts.StatusDownloaded)
+			data.ReportFileProcess(r.Context, r.constructFileProcessParam(lastReportPos, curPos, consts.StatusDownloaded))
 		}
 	}
 	if curPos != rangeEndPos {
 		zap.S().Warnf("file:%s, taskNo:%d, remote range (%d) is different from sent size (%d).", r.FileName, r.TaskNo, rangeEndPos-rangeStartPos, curPos-rangeStartPos)
 	}
 	zap.S().Infof("end remote dotask:%s/%s, taskNo:%d, size:%d, domain:%s, startPos:%d, endPos:%d", r.OrgRepo, r.FileName, r.TaskNo, r.TaskSize, r.Domain, rangeStartPos, rangeEndPos)
+}
 
+func (r *RemoteFileTask) constructFileProcessParam(startPos, endPos int64, status int32) *data.FileProcessParam {
+	return &data.FileProcessParam{
+		Datatype: r.DataType,
+		OrgRepo:  r.OrgRepo,
+		Name:     r.FileName,
+		Etag:     r.Etag,
+		FileSize: r.DingFile.GetFileSize(),
+		StartPos: startPos,
+		EndPos:   endPos,
+		Status:   status,
+	}
 }
 
 func (r *RemoteFileTask) OutResult() {
@@ -247,7 +260,7 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 								select {
 								case contentChan <- chunk[:n]:
 								case <-r.Context.Done():
-									return nil
+									return fmt.Errorf("form remote ctx done")
 								}
 							}
 							chunkByteLen += n // 原始数量
@@ -286,7 +299,7 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 		finalData, err := util.DecompressData(rawData, contentEncoding)
 		if err != nil {
 			zap.S().Errorf("DecompressData err.%v", err)
-			return nil
+			return err
 		}
 		contentChan <- finalData      // 返回解码后的数据流
 		chunkByteLen = len(finalData) // 将解码后的长度复制为原理的chunkBytes
@@ -295,19 +308,17 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 		contentLength, err := strconv.Atoi(contentLengthStr) // 原始数据长度
 		if err != nil {
 			zap.S().Errorf("contentLengthStr conv err.%s", contentLengthStr)
-			return nil
+			return err
 		}
 		if contentEncoding != "" {
 			contentLength = chunkByteLen
 		}
 		if endPos-startPos != int64(contentLength) {
-			zap.S().Errorf("file:%s, taskNo:%d,The content of the response is incomplete. Expected-%d. Accepted-%d", r.FileName, r.TaskNo, endPos-startPos, contentLength)
-			return nil
+			return fmt.Errorf("file:%s, taskNo:%d,The content of the response is incomplete. Expected-%d. Accepted-%d", r.FileName, r.TaskNo, endPos-startPos, contentLength)
 		}
 	}
 	if endPos-startPos != int64(chunkByteLen) {
-		zap.S().Warnf("file:%s, taskNo:%d,The block is incomplete. Expected-%d. Accepted-%d", r.FileName, r.TaskNo, endPos-startPos, chunkByteLen)
-		return nil
+		return fmt.Errorf("file:%s, taskNo:%d,The block is incomplete. Expected-%d. Accepted-%d", r.FileName, r.TaskNo, endPos-startPos, chunkByteLen)
 	}
 	return err
 }

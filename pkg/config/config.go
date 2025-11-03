@@ -86,6 +86,7 @@ type Cache struct {
 	DefaultExpiration int       `json:"defaultExpiration" yaml:"defaultExpiration" `
 	CleanupInterval   int       `json:"cleanupInterval" yaml:"cleanupInterval"`
 	ReadBlock         ReadBlock `json:"readBlock" yaml:"readBlock"`
+	MountModelDir     string    `json:"mountModelDir" yaml:"mountModelDir"`
 }
 
 type ReadBlock struct {
@@ -98,6 +99,7 @@ type ReadBlock struct {
 }
 
 type Scheduler struct {
+	OriginMode   string    `json:"-" yaml:"-"` // 记录原始状态
 	Mode         string    `json:"mode" yaml:"mode"`
 	Addr         string    `json:"addr" yaml:"addr"`
 	Strategy     Strategy  `json:"strategy" yaml:"strategy"`
@@ -232,14 +234,14 @@ func (c *Config) GetRemoteFileRangeWaitTime() time.Duration {
 
 func (c *Config) GetDefaultExpiration() time.Duration {
 	if c.Cache.DefaultExpiration == 0 {
-		c.Cache.DefaultExpiration = 30
+		c.Cache.DefaultExpiration = 60
 	}
 	return time.Duration(c.Cache.DefaultExpiration) * time.Minute
 }
 
 func (c *Config) GetCleanupInterval() time.Duration {
 	if c.Cache.CleanupInterval == 0 {
-		c.Cache.CleanupInterval = 40
+		c.Cache.CleanupInterval = 80
 	}
 	return time.Duration(c.Cache.CleanupInterval) * time.Minute
 }
@@ -314,6 +316,10 @@ func (c *Config) GetSchedulerModel() string {
 	return c.Scheduler.Mode
 }
 
+func (c *Config) GetOriginSchedulerModel() string {
+	return c.Scheduler.OriginMode
+}
+
 func (c *Config) SetDefaults() {
 	if c.Server.Port == 0 {
 		c.Server.Port = 8090
@@ -343,7 +349,7 @@ func (c *Config) SetDefaults() {
 	if c.DiskClean.CollectTimePeriod == 0 {
 		c.DiskClean.CollectTimePeriod = 1
 	}
-
+	c.Scheduler.OriginMode = c.Scheduler.Mode
 }
 
 func Scan(path string) (*Config, error) {

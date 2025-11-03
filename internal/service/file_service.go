@@ -15,13 +15,9 @@
 package service
 
 import (
-	"fmt"
-
 	"dingospeed/internal/dao"
-	"dingospeed/internal/downloader"
 	"dingospeed/internal/model"
 	"dingospeed/pkg/common"
-	"dingospeed/pkg/config"
 	"dingospeed/pkg/consts"
 	myerr "dingospeed/pkg/error"
 	"dingospeed/pkg/util"
@@ -41,7 +37,8 @@ func NewFileService(fileDao *dao.FileDao) *FileService {
 }
 
 func (f *FileService) FileHeadCommon(c echo.Context, repoType, orgRepo, commit, filePath string) error {
-	commitSha, err := f.fileDao.GetFileCommitSha(c, repoType, orgRepo, commit)
+	authorization := c.Request().Header.Get("authorization")
+	commitSha, err := f.fileDao.GetFileCommitSha(repoType, orgRepo, commit, authorization)
 	if err != nil {
 		if e, ok := err.(myerr.Error); ok {
 			return util.ErrorEntryUnknown(c, e.StatusCode(), e.Error())
@@ -53,7 +50,8 @@ func (f *FileService) FileHeadCommon(c echo.Context, repoType, orgRepo, commit, 
 
 func (f *FileService) FileGetCommon(c echo.Context, repoType, orgRepo, commit, filePath string) error {
 	zap.S().Infof("exec file get:%s/%s/%s/%s, remoteAdd:%s", repoType, orgRepo, commit, filePath, c.Request().RemoteAddr)
-	commitSha, err := f.fileDao.GetFileCommitSha(c, repoType, orgRepo, commit)
+	authorization := c.Request().Header.Get("authorization")
+	commitSha, err := f.fileDao.GetFileCommitSha(repoType, orgRepo, commit, authorization)
 	if err != nil {
 		if e, ok := err.(myerr.Error); ok {
 			return util.ErrorEntryUnknown(c, e.StatusCode(), e.Error())
@@ -67,25 +65,6 @@ func (f *FileService) GetPathInfo(query *model.PathInfoQuery) ([]common.PathsInf
 	return f.fileDao.GetPathsInfo(query.Datatype, util.GetOrgRepo(query.Org, query.Repo), query.Revision, query.Token, query.FileNames)
 }
 
-func (f *FileService) GetFileOffset(c echo.Context, dataType string, org string, repo string, etag string, fileSize int64) int64 {
-	orgRepo := util.GetOrgRepo(org, repo)
-	blobsDir := fmt.Sprintf("%s/files/%s/%s/blobs", config.SysConfig.Repos(), dataType, orgRepo)
-	blobsFile := fmt.Sprintf("%s/%s", blobsDir, etag)
-	exists := util.FileExists(blobsFile)
-	if !exists {
-		return 0
-	}
-	dingFile, err := downloader.NewDingCache(blobsFile, config.SysConfig.Download.BlockSize)
-	if err != nil {
-		zap.S().Errorf("NewDingCache err.%v", err)
-		return 0
-	}
-
-	if dingFile == nil {
-		zap.S().Errorf("GetDingFile err.dingFile is nil,blobsFile:%s", blobsFile)
-		return 0
-	}
-	curPos := dao.GetAnalysisFilePosition(dingFile, 0, fileSize)
-
-	return curPos
+func (f *FileService) GetFileOffset(dataType string, org string, repo string, etag string, fileSize int64) int64 {
+	return f.fileDao.GetFileOffset(dataType, org, repo, etag, fileSize)
 }

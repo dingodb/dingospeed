@@ -23,18 +23,21 @@ import (
 )
 
 type HttpRouter struct {
-	echo        *echo.Echo
-	fileHandler *handler.FileHandler
-	metaHandler *handler.MetaHandler
-	sysHandler  *handler.SysHandler
+	echo            *echo.Echo
+	fileHandler     *handler.FileHandler
+	metaHandler     *handler.MetaHandler
+	sysHandler      *handler.SysHandler
+	cacheJobHandler *handler.CacheJobHandler
 }
 
-func NewHttpRouter(echo *echo.Echo, fileHandler *handler.FileHandler, metaHandler *handler.MetaHandler, sysHandler *handler.SysHandler) *HttpRouter {
+func NewHttpRouter(echo *echo.Echo, fileHandler *handler.FileHandler, metaHandler *handler.MetaHandler,
+	sysHandler *handler.SysHandler, cacheJobHandler *handler.CacheJobHandler) *HttpRouter {
 	r := &HttpRouter{
-		echo:        echo,
-		fileHandler: fileHandler,
-		metaHandler: metaHandler,
-		sysHandler:  sysHandler,
+		echo:            echo,
+		fileHandler:     fileHandler,
+		metaHandler:     metaHandler,
+		sysHandler:      sysHandler,
+		cacheJobHandler: cacheJobHandler,
 	}
 	r.initRouter()
 	return r
@@ -48,10 +51,10 @@ func (r *HttpRouter) initRouter() {
 	}
 	r.routerForSpeed()
 	// 内部使用
-	r.routerForScheduelr()
+	r.routerForScheduler()
 }
 func (r *HttpRouter) routerForSpeed() { // alayanew
-	// 单个文件
+	// 单个文件下载
 	r.echo.HEAD("/:repoType/:org/:repo/resolve/:commit/:filePath", r.fileHandler.HeadFileHandler1)
 	r.echo.HEAD("/:orgOrRepoType/:repo/resolve/:commit/:filePath", r.fileHandler.HeadFileHandler2)
 	r.echo.HEAD("/:repo/resolve/:commit/:filePath", r.fileHandler.HeadFileHandler3)
@@ -59,9 +62,9 @@ func (r *HttpRouter) routerForSpeed() { // alayanew
 	r.echo.GET("/:orgOrRepoType/:repo/resolve/:commit/:filePath", r.fileHandler.GetFileHandler2)
 	r.echo.GET("/:repo/resolve/:commit/:filePath", r.fileHandler.GetFileHandler3)
 
-	// 模型
-	r.echo.HEAD("/api/:repoType/:org/:repo/revision/:commit", r.metaHandler.MetaProxyCommonHandler)
-	r.echo.GET("/api/:repoType/:org/:repo/revision/:commit", r.metaHandler.MetaProxyCommonHandler)
+	// 模型&数据集元数据
+	r.echo.HEAD("/api/:repoType/:org/:repo/revision/:commit", r.metaHandler.GetMetadataHandler)
+	r.echo.GET("/api/:repoType/:org/:repo/revision/:commit", r.metaHandler.GetMetadataHandler)
 
 	// refs
 	// r.echo.GET("/api/:repoType/:org/:repo/refs", r.metaHandler.RepoRefsHandler)  修复转发响应码，走统一转发。
@@ -70,10 +73,15 @@ func (r *HttpRouter) routerForSpeed() { // alayanew
 	r.echo.Any("/*", r.metaHandler.ForwardToNewSiteHandler)
 }
 
-func (r *HttpRouter) routerForScheduelr() { // alayanew
+func (r *HttpRouter) routerForScheduler() { // alayanew
 	r.echo.GET("/api/:repoType/:org/:repo/files/:commit/", r.metaHandler.RepositoryFilesHandler)
 	r.echo.GET("/api/:repoType/:org/:repo/files/:commit/:filePath", r.metaHandler.RepositoryFilesHandler)
 
 	r.echo.POST("/api/getPathInfo", r.fileHandler.GetPathInfoHandler)
 	r.echo.GET("/api/fileOffset/:dataType/:org/:repo/:etag/:fileSize", r.fileHandler.GetFileOffset)
+
+	// 缓存
+	r.echo.POST("/api/cacheJob/create", r.cacheJobHandler.CreateCacheJobHandler)
+	r.echo.POST("/api/cacheJob/stop", r.cacheJobHandler.StopCacheJobHandler)
+	r.echo.POST("/api/cacheJob/resume", r.cacheJobHandler.ResumeCacheJobHandler)
 }

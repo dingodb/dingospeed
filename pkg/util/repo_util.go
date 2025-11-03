@@ -44,9 +44,6 @@ func GetOrgRepo(org, repo string) string {
 		return fmt.Sprintf("%s/%s", org, repo)
 	}
 }
-func GetMetaRepoKey(repo, commit string) string {
-	return fmt.Sprintf("meta/%s/%s", repo, commit)
-}
 
 func SplitOrgRepo(orgRepo string) (string, string) {
 	splits := strings.Split(orgRepo, "/")

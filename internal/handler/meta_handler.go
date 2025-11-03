@@ -15,6 +15,7 @@
 package handler
 
 import (
+	"net/http"
 	"strings"
 
 	"dingospeed/internal/service"
@@ -35,7 +36,7 @@ func NewMetaHandler(fileService *service.MetaService) *MetaHandler {
 	}
 }
 
-func (handler *MetaHandler) MetaProxyCommonHandler(c echo.Context) error {
+func (handler *MetaHandler) GetMetadataHandler(c echo.Context) error {
 	repoType := c.Param("repoType")
 	org := c.Param("org")
 	repo := c.Param("repo")
@@ -44,14 +45,31 @@ func (handler *MetaHandler) MetaProxyCommonHandler(c echo.Context) error {
 	orgRepo := util.GetOrgRepo(org, repo)
 	c.Set(consts.PromOrgRepo, orgRepo)
 	if _, ok := consts.RepoTypesMapping[repoType]; !ok {
-		zap.S().Errorf("MetaProxyCommon repoType:%s is not exist RepoTypesMapping", repoType)
+		zap.S().Errorf("repoType:%s is not exist RepoTypesMapping", repoType)
 		return util.ErrorPageNotFound(c)
 	}
 	if org == "" && repo == "" {
-		zap.S().Errorf("MetaProxyCommon org and repo is null")
+		zap.S().Errorf("org and repo is null")
 		return util.ErrorRepoNotFound(c)
 	}
-	return handler.metaService.MetaProxyCommon(c, repoType, orgRepo, commit, method)
+	authorization := c.Request().Header.Get("authorization")
+	cacheContent, err := handler.metaService.GetMetadata(repoType, orgRepo, commit, method, authorization)
+	if err != nil {
+		return util.ErrorProxyError(c)
+	}
+	if cacheContent != nil {
+		if method == consts.RequestTypeHead {
+			return util.ResponseHeaders(c, http.StatusOK, cacheContent.Headers)
+		}
+		var bodyStreamChan = make(chan []byte, consts.RespChanSize)
+		bodyStreamChan <- cacheContent.OriginContent
+		close(bodyStreamChan)
+		err = util.ResponseStream(c, orgRepo, cacheContent.Headers, bodyStreamChan)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (handler *MetaHandler) WhoamiV2Handler(c echo.Context) error {

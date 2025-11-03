@@ -195,9 +195,7 @@ func (handler *FileHandler) GetFileOffset(c echo.Context) error {
 	repo := c.Param("repo")
 	etag := c.Param("etag")
 	fileSizeStr := c.Param("fileSize")
-
 	fileSize, _ := strconv.ParseInt(fileSizeStr, 10, 64)
-
-	offset := handler.fileService.GetFileOffset(c, dataType, org, repo, etag, fileSize)
+	offset := handler.fileService.GetFileOffset(dataType, org, repo, etag, fileSize)
 	return util.ResponseData(c, offset)
 }

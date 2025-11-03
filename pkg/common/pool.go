@@ -22,7 +22,13 @@ import (
 
 // Task 定义任务类型
 type Task interface {
+	GetTaskNo() int
 	DoTask()
+	GetCancelFun() context.CancelFunc
+}
+
+type DownloadTask interface {
+	Task
 	OutResult()
 	GetResponseChan() chan []byte
 	SetTaskSize(taskSize int)
@@ -31,22 +37,26 @@ type Task interface {
 // Pool 协程池结构体
 type Pool struct {
 	taskChan chan Task
-	wg       sync.WaitGroup
+	taskMap  *SafeMap[int, Task]
+	persist  bool
 	size     int
+	wg       sync.WaitGroup
 }
 
 // NewPool 创建新协程池
-func NewPool(size int) *Pool {
+func NewPool(size int, persist bool) *Pool {
 	p := &Pool{
 		taskChan: make(chan Task),
+		persist:  persist,
 		size:     size,
 	}
-
+	if persist {
+		p.taskMap = NewSafeMap[int, Task]()
+	}
 	for i := 0; i < size; i++ {
 		p.wg.Add(1)
 		go p.worker()
 	}
-
 	return p
 }
 
@@ -60,14 +70,24 @@ func (p *Pool) worker() {
 				return
 			}
 			task.DoTask()
+			if p.persist {
+				p.taskMap.Delete(task.GetTaskNo())
+			}
 		}
 	}
+}
+
+func (p *Pool) GetTask(taskNo int) (Task, bool) {
+	return p.taskMap.Get(taskNo)
 }
 
 // Submit 提交任务
 func (p *Pool) Submit(ctx context.Context, task Task) error {
 	select {
 	case p.taskChan <- task:
+		if p.persist {
+			p.taskMap.Set(task.GetTaskNo(), task)
+		}
 		return nil
 	case <-ctx.Done():
 		return errors.New("submit task fail")
@@ -78,4 +98,7 @@ func (p *Pool) Submit(ctx context.Context, task Task) error {
 func (p *Pool) Close() {
 	close(p.taskChan)
 	p.wg.Wait()
+	if p.persist {
+		p.taskMap.DeleteAll()
+	}
 }

@@ -46,11 +46,14 @@ func (sm *SafeMap[K, V]) Delete(key K) {
 	delete(sm.m, key)
 }
 
+func (sm *SafeMap[K, V]) DeleteAll() {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.m = make(map[K]V)
+}
+
 func (sm *SafeMap[K, V]) Len() int {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	return len(sm.m)
-}
-
-func (f *SafeMap[K, V]) Wait() {
 }

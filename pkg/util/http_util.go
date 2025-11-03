@@ -69,6 +69,9 @@ func NewHTTPClient() (*http.Client, error) {
 func NewHTTPClientWithProxy() (*http.Client, error) {
 	proxyOnce.Do(func() {
 		proxyClient = &http.Client{Timeout: config.SysConfig.GetReqTimeOut()}
+		if config.SysConfig.GetHttpProxy() == "" {
+			return
+		}
 		proxyURL, err := url.Parse(config.SysConfig.GetHttpProxy())
 		if err != nil {
 			zap.S().Errorf("代理地址解析失败: %v", err)

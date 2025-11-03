@@ -148,3 +148,13 @@ func fullHeaders(c echo.Context, headers map[string]string) {
 		c.Response().Header().Set(k, v)
 	}
 }
+
+type Body struct {
+	Msg  string      `json:"msg"`
+	Data interface{} `json:"data"`
+}
+
+type PageData struct {
+	Total int64       `json:"total"`
+	List  interface{} `json:"list"`
+}

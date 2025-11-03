@@ -15,7 +15,6 @@
 package data
 
 import (
-	"dingospeed/pkg/common"
 	"dingospeed/pkg/config"
 
 	"github.com/google/wire"
@@ -46,6 +45,7 @@ func initGlobal(gCache *cache.Cache) {
 		}
 	}
 	if config.SysConfig.IsCluster() {
-		fileProcessChan = make(chan common.FileProcess, 100)
+		fileProcessChan = make(chan *FileProcessParam, 100)
+		localProcessChan = make(chan *FileProcessParam, 100)
 	}
 }

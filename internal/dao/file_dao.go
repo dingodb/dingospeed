@@ -19,10 +19,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
-	"path/filepath"
 	"strings"
-	"sync"
-	"time"
 
 	"dingospeed/internal/data"
 	"dingospeed/internal/downloader"
@@ -37,22 +34,22 @@ import (
 	"go.uber.org/zap"
 )
 
-var (
-	pathinfoTime = 30 * time.Second
-)
-
 type CommitHfSha struct {
-	Sha string `json:"sha"`
+	Sha      string `json:"sha"`
+	Siblings []struct {
+		Rfilename string `json:"rfilename"`
+	} `json:"siblings"`
+	UsedStorage int64 `json:"usedStorage"`
 }
 
 type FileDao struct {
 	downloaderDao *DownloaderDao
 	baseData      *data.BaseData
-	mu            sync.Mutex
+	lockDao       *LockDao
 }
 
-func NewFileDao(downloaderDao *DownloaderDao, baseData *data.BaseData) *FileDao {
-	return &FileDao{downloaderDao: downloaderDao, baseData: baseData}
+func NewFileDao(downloaderDao *DownloaderDao, baseData *data.BaseData, lockDao *LockDao) *FileDao {
+	return &FileDao{downloaderDao: downloaderDao, baseData: baseData, lockDao: lockDao}
 }
 
 func (f *FileDao) CheckCommitHf(repoType, orgRepo, commit, authorization string) (int, error) {
@@ -68,9 +65,8 @@ func (f *FileDao) CheckCommitHf(repoType, orgRepo, commit, authorization string)
 	return resp.StatusCode, myerr.New("request commit err")
 }
 
-func (f *FileDao) GetFileCommitSha(c echo.Context, repoType, orgRepo, commit string) (string, error) {
-	authorization := c.Request().Header.Get("authorization")
-	key := util.GetMetaRepoKey(orgRepo, commit)
+func (f *FileDao) GetFileCommitSha(repoType, orgRepo, commit, authorization string) (string, error) {
+	key := GetMetaRepoKey(orgRepo, commit)
 	if v, ok := f.baseData.Cache.Get(key); ok {
 		return v.(string), nil
 	}
@@ -80,25 +76,26 @@ func (f *FileDao) GetFileCommitSha(c echo.Context, repoType, orgRepo, commit str
 	)
 	if config.SysConfig.Online() {
 		code, sha, err := f.getCommitHfRemote(repoType, orgRepo, commit, authorization)
-		if err == nil {
-			if code != http.StatusOK && code != http.StatusTemporaryRedirect {
-				zap.S().Errorf(" getFileCommitSha getCommitHfRemote code:%d", code)
-				return "", myerr.NewAppendCode(code, "code is invalid.")
-			} else {
-				commitSha = sha
-			}
-			f.baseData.Cache.Set(key, commitSha, config.SysConfig.GetDefaultExpiration())
-			f.baseData.Cache.Set(util.GetMetaRepoKey(orgRepo, commitSha), commitSha, config.SysConfig.GetDefaultExpiration())
-			return commitSha, nil
+		if err != nil {
+			return "", myerr.NewAppendCode(code, fmt.Sprintf("request fail.%v", err))
 		}
+		if code != http.StatusOK && code != http.StatusTemporaryRedirect {
+			zap.S().Errorf("getFileCommitSha %s code:%d", orgRepo, code)
+			return "", myerr.NewAppendCode(code, fmt.Sprintf("%s code is invalid.", orgRepo))
+		} else {
+			commitSha = sha
+		}
+		f.baseData.Cache.Set(key, commitSha, config.SysConfig.GetDefaultExpiration())
+		f.baseData.Cache.Set(GetMetaRepoKey(orgRepo, commitSha), commitSha, config.SysConfig.GetDefaultExpiration())
+		return commitSha, nil
 	}
 	commitSha, err = f.GetCommitHfOffline(repoType, orgRepo, commit)
 	if err != nil {
-		zap.S().Errorf(" getFileCommitSha GetCommitHfOffline err.%v", err)
+		zap.S().Errorf("getFileCommitSha GetCommitHfOffline err.%v", err)
 		return "", myerr.NewAppendCode(http.StatusNotFound, fmt.Sprintf("%s is not found", orgRepo))
 	}
 	f.baseData.Cache.Set(key, commitSha, config.SysConfig.GetDefaultExpiration())
-	f.baseData.Cache.Set(util.GetMetaRepoKey(orgRepo, commitSha), commitSha, config.SysConfig.GetDefaultExpiration())
+	f.baseData.Cache.Set(GetMetaRepoKey(orgRepo, commitSha), commitSha, config.SysConfig.GetDefaultExpiration())
 	return commitSha, nil
 }
 
@@ -218,14 +215,12 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, orgRepo, commit, fi
 	blobsFile := fmt.Sprintf("%s/%s", blobsDir, etag)
 	filesDir := fmt.Sprintf("%s/files/%s/%s/resolve/%s", config.SysConfig.Repos(), repoType, orgRepo, commit)
 	filesPath := fmt.Sprintf("%s/%s", filesDir, fileName)
-	if err = f.constructBlobsAndFileFile(c, blobsFile, filesPath); err != nil {
-		return err
+	if err = f.ConstructBlobsAndFileFile(blobsFile, filesPath); err != nil {
+		return util.ErrorProxyError(c)
 	}
 	if method == consts.RequestTypeHead {
 		return util.ResponseHeaders(c, http.StatusOK, respHeaders)
 	} else if method == consts.RequestTypeGet {
-		preheat := c.Request().Header.Get("preheat")
-		preheatFlag := preheat != ""
 		taskParam := &downloader.TaskParam{
 			TaskNo:        0,
 			BlobsFile:     blobsFile,
@@ -236,7 +231,6 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, orgRepo, commit, fi
 			Uri:           hfUri,
 			DataType:      repoType,
 			Etag:          etag,
-			Preheat:       preheatFlag,
 		}
 		return f.FileChunkGet(c, taskParam, startPos, endPos, respHeaders)
 	} else {
@@ -249,37 +243,32 @@ func GetAnalysisFilePosition(dingFile *downloader.DingCache, startPos, endPos in
 	return offset
 }
 
-func (f *FileDao) constructBlobsAndFileFile(c echo.Context, blobsFile, filesPath string) (err error) {
+func (f *FileDao) ConstructBlobsAndFileFile(blobsFile, filesPath string) (err error) {
 	if err = util.MakeDirs(blobsFile); err != nil {
 		zap.S().Errorf("create %s dir err.%v", blobsFile, err)
-		err = util.ErrorProxyError(c)
-		return
+		return err
 	}
 	if err = util.MakeDirs(filesPath); err != nil {
 		zap.S().Errorf("create %s dir err.%v", filesPath, err)
-		err = util.ErrorProxyError(c)
-		return
+		return err
 	}
 	if exist := util.FileExists(filesPath); exist {
 		if b, localErr := util.IsSymlink(filesPath); localErr != nil {
 			zap.S().Errorf("IsSymlink %s err.%v", filesPath, localErr)
-			err = util.ErrorProxyError(c)
-			return
+			return err
 		} else {
 			if !b {
 				zap.S().Infof("old data transfer, from %s to %s", filesPath, blobsFile)
 				if blobFileExist := util.FileExists(blobsFile); blobFileExist {
 					if err = util.DeleteFile(filesPath); err != nil {
-						err = util.ErrorProxyError(c)
-						return
+						return err
 					}
 				} else {
 					util.ReName(filesPath, blobsFile)
 				}
 				if err = util.CreateSymlinkIfNotExists(blobsFile, filesPath); err != nil {
 					zap.S().Errorf("filesPath:%s is not link.%v", filesPath, err)
-					err = util.ErrorProxyError(c)
-					return
+					return err
 				}
 			}
 		}
@@ -287,13 +276,11 @@ func (f *FileDao) constructBlobsAndFileFile(c echo.Context, blobsFile, filesPath
 		err = util.CreateFileIfNotExist(blobsFile)
 		if err != nil {
 			zap.S().Errorf("create filesPath:%s err.%v", filesPath, err)
-			err = util.ErrorProxyError(c)
 			return err
 		}
 		if err = util.CreateSymlinkIfNotExists(blobsFile, filesPath); err != nil {
 			zap.S().Errorf("filesPath:%s is not link.%v", filesPath, err)
-			err = util.ErrorProxyError(c)
-			return
+			return err
 		}
 	}
 	return
@@ -413,50 +400,8 @@ func (f *FileDao) FileChunkGet(c echo.Context, taskParam *downloader.TaskParam, 
 	return nil
 }
 
-func (f *FileDao) WhoamiV2Generator(c echo.Context) error {
-	newHeaders := make(map[string]string, 0)
-	for k := range c.Request().Header {
-		v := c.Request().Header.Get(k)
-		lowerKey := strings.ToLower(k)
-		if lowerKey == "host" {
-			continue
-		}
-		newHeaders[lowerKey] = v
-	}
-	resp, err := util.Get("/api/whoami-v2", newHeaders)
-	if err != nil {
-		zap.S().Errorf("WhoamiV2Generator err.%v", err)
-		return err
-	}
-	extractHeaders := resp.ExtractHeaders(resp.Headers)
-	for k, vv := range extractHeaders {
-		c.Response().Header().Add(k, vv)
-	}
-	c.Response().WriteHeader(resp.StatusCode)
-	if _, err := c.Response().Write(resp.Body); err != nil {
-		zap.S().Errorf("响应内容回传失败.%v", err)
-	}
-	return nil
-}
-
-func (f *FileDao) getApiLock(apiPath string) *sync.RWMutex {
-	if val, ok := f.baseData.Cache.Get(apiPath); ok {
-		f.baseData.Cache.Set(apiPath, val, pathinfoTime)
-		return val.(*sync.RWMutex)
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if val, ok := f.baseData.Cache.Get(apiPath); ok {
-		f.baseData.Cache.Set(apiPath, val, pathinfoTime)
-		return val.(*sync.RWMutex)
-	}
-	newLock := &sync.RWMutex{}
-	f.baseData.Cache.Set(apiPath, newLock, pathinfoTime)
-	return newLock
-}
-
 func (f *FileDao) WriteCacheRequest(apiPath string, statusCode int, headers map[string]string, content []byte) error {
-	lock := f.getApiLock(apiPath)
+	lock := f.lockDao.getMetaFileLock(apiPath)
 	lock.Lock()
 	defer lock.Unlock()
 	cacheContent := common.CacheContent{
@@ -469,7 +414,7 @@ func (f *FileDao) WriteCacheRequest(apiPath string, statusCode int, headers map[
 }
 
 func (f *FileDao) ReadCacheRequest(apiPath string) (*common.CacheContent, error) {
-	lock := f.getApiLock(apiPath)
+	lock := f.lockDao.getMetaFileLock(apiPath)
 	lock.RLock()
 	defer lock.RUnlock()
 	cacheContent := common.CacheContent{}
@@ -488,23 +433,25 @@ func (f *FileDao) ReadCacheRequest(apiPath string) (*common.CacheContent, error)
 	return &cacheContent, nil
 }
 
-func (f *FileDao) ReposGenerator(c echo.Context) error {
-	reposPath := config.SysConfig.Repos()
-
-	datasets, _ := filepath.Glob(filepath.Join(reposPath, "api/datasets/*/*"))
-	datasetsRepos := util.ProcessPaths(datasets)
-
-	models, _ := filepath.Glob(filepath.Join(reposPath, "api/models/*/*"))
-	modelsRepos := util.ProcessPaths(models)
-
-	spaces, _ := filepath.Glob(filepath.Join(reposPath, "api/spaces/*/*"))
-	spacesRepos := util.ProcessPaths(spaces)
-
-	return c.Render(http.StatusOK, "repos.html", map[string]interface{}{
-		"datasets_repos": datasetsRepos,
-		"models_repos":   modelsRepos,
-		"spaces_repos":   spacesRepos,
-	})
+func (f *FileDao) GetFileOffset(dataType string, org string, repo string, etag string, fileSize int64) int64 {
+	orgRepo := util.GetOrgRepo(org, repo)
+	blobsDir := fmt.Sprintf("%s/files/%s/%s/blobs", config.SysConfig.Repos(), dataType, orgRepo)
+	blobsFile := fmt.Sprintf("%s/%s", blobsDir, etag)
+	exists := util.FileExists(blobsFile)
+	if !exists {
+		return 0
+	}
+	dingFile, err := downloader.NewDingCache(blobsFile, config.SysConfig.Download.BlockSize)
+	if err != nil {
+		zap.S().Errorf("NewDingCache err.%v", err)
+		return 0
+	}
+	if dingFile == nil {
+		zap.S().Errorf("GetDingFile err.dingFile is nil,blobsFile:%s", blobsFile)
+		return 0
+	}
+	curPos := GetAnalysisFilePosition(dingFile, 0, fileSize)
+	return curPos
 }
 
 func parseRangeParams(fileRange string, fileSize int64) (int64, int64) {

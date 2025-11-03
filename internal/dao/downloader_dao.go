@@ -85,9 +85,9 @@ func (d *DownloaderDao) FileDownload(startPos, endPos int64, isInnerRequest bool
 	wg.Wait() // 等待协程池所有远程下载任务执行完毕
 }
 
-func (d *DownloaderDao) constructTask(startPos, endPos int64, isInnerRequest bool, taskParam *downloader.TaskParam) []common.Task {
+func (d *DownloaderDao) constructTask(startPos, endPos int64, isInnerRequest bool, taskParam *downloader.TaskParam) []common.DownloadTask {
 	var (
-		tasks         []common.Task
+		tasks         []common.DownloadTask
 		ctx           = taskParam.Context
 		existPosition bool
 		curPos        int64
@@ -188,15 +188,15 @@ func getQueueSize(rangeStartPos, rangeEndPos int64) int64 {
 	return bufSize/config.SysConfig.Download.RespChunkSize + 1
 }
 
-func doTask(ctx context.Context, tasks []common.Task) {
+func doTask(ctx context.Context, tasks []common.DownloadTask) {
 	var pool *common.Pool
 	taskLen := len(tasks)
 	if taskLen == 0 {
 		return
 	} else if taskLen >= config.SysConfig.Download.GoroutineMaxNumPerFile {
-		pool = common.NewPool(config.SysConfig.Download.GoroutineMaxNumPerFile)
+		pool = common.NewPool(config.SysConfig.Download.GoroutineMaxNumPerFile, false)
 	} else {
-		pool = common.NewPool(taskLen)
+		pool = common.NewPool(taskLen, false)
 	}
 	defer pool.Close()
 	for i := 0; i < taskLen; i++ {
@@ -242,7 +242,7 @@ func analysisFilePosition(dingFile *downloader.DingCache, startPos, endPos int64
 
 // 将文件的偏移量分为cache和remote，对针对remote按照指定的RangeSize做切分
 
-func getContiguousRanges(startPos, endPos int64, taskParam *downloader.TaskParam) (tasks []common.Task) {
+func getContiguousRanges(startPos, endPos int64, taskParam *downloader.TaskParam) (tasks []common.DownloadTask) {
 	ctx := taskParam.Context
 	dingFile := taskParam.DingFile
 	if startPos == 0 && endPos == 0 {
@@ -302,9 +302,9 @@ func getContiguousRanges(startPos, endPos int64, taskParam *downloader.TaskParam
 	return
 }
 
-func splitRemoteRange(startPos, endPos int64, taskNo *int, taskParam *downloader.TaskParam) []common.Task {
+func splitRemoteRange(startPos, endPos int64, taskNo *int, taskParam *downloader.TaskParam) []common.DownloadTask {
 	rangeSize := config.SysConfig.Download.RemoteFileRangeSize
-	remoteTasks := make([]common.Task, 0)
+	remoteTasks := make([]common.DownloadTask, 0)
 	if rangeSize == 0 {
 		c := createRemoteTask(*taskNo, startPos, endPos, taskParam)
 		remoteTasks = append(remoteTasks, c)

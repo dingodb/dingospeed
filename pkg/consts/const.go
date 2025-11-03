@@ -67,6 +67,15 @@ const (
 )
 
 const (
+	CacheTypePreheat = 1
+	CacheTypeMount   = 2
+
+	StatusCacheJobIng      = 1
+	StatusCacheJobBreak    = 2
+	StatusCacheJobComplete = 3
+)
+
+const (
 	StatusDownloading   = 1
 	StatusDownloadBreak = 2
 	StatusDownloaded    = 3

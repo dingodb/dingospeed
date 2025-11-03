@@ -218,6 +218,9 @@ var (
 )
 
 func testProxyConnectivity() {
+	if config.SysConfig.GetHttpProxy() == "" {
+		return
+	}
 	proxyURL, err := url.Parse(config.SysConfig.GetHttpProxy())
 	if err != nil {
 		zap.S().Errorf("代理URL解析失败: %v, 代理地址: %s", err, config.SysConfig.GetHttpProxy())

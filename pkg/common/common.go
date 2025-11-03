@@ -104,10 +104,3 @@ type CacheContent struct {
 type ErrorResp struct {
 	Error string `json:"error"`
 }
-
-type FileProcess struct {
-	ProcessId int64
-	StartPos  int64
-	EndPos    int64
-	Status    int32
-}

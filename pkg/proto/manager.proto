@@ -21,6 +21,11 @@ service Manager {
     rpc ReportFileProcess (FileProcessRequest) returns (google.protobuf.Empty);
     // 文件删除，同步删除记录
     rpc DeleteByEtagsAndFields (DeleteByEtagsAndFieldsRequest) returns (google.protobuf.Empty);
+
+    // 更新预热状态
+    rpc CreateCacheJob (CreateCacheJobReq) returns (CreateCacheJobResp);
+    rpc UpdateCacheJobStatus (UpdateCacheJobStatusReq) returns (google.protobuf.Empty);
+
 }
 
 
@@ -83,3 +88,26 @@ message DeleteByEtagsAndFieldsRequest{
     string instanceID = 6;
 }
 
+message CreateCacheJobReq{
+    int32 type = 1;
+    string instanceId = 2;
+    string datatype = 3;
+    string org = 4;
+    string repo = 5;
+    string token = 6;
+    int64 usedStorage = 7;
+    string commit = 8;
+    int32 status = 9;
+}
+
+// 注册响应
+message CreateCacheJobResp {
+    int64 id = 1;
+}
+
+message UpdateCacheJobStatusReq{
+    int64 id = 1;
+    int32 status = 2;
+    string errorMsg = 3;
+    string instanceId = 4;
+}
