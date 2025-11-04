@@ -148,17 +148,21 @@ func NormalResponseData(ctx echo.Context, data interface{}) error {
 
 func ResponseError(ctx echo.Context, cause ...error) error {
 	msg := "操作失败"
+	code := http.StatusInternalServerError
 	if len(cause) > 0 {
 		c := cause[0]
 		var t myerr.Error
 		if errors.As(c, &t) {
+			if t.StatusCode() > 0 {
+				code = t.StatusCode()
+			}
 			msg = t.Error()
 		}
 	}
 	content := map[string]string{
 		"error": msg,
 	}
-	return ctx.JSON(http.StatusInternalServerError, content)
+	return ctx.JSON(code, content)
 }
 
 func fullHeaders(c echo.Context, headers map[string]string) {
