@@ -29,7 +29,8 @@ func GetLocalProcessChan() chan *FileProcessParam {
 type FileProcessParam struct {
 	ProcessId int64  `json:"processId"`
 	Datatype  string `json:"datatype"`
-	OrgRepo   string `json:"orgRepo"`
+	Org       string `json:"org"`
+	Repo      string `json:"repo"`
 	Name      string `json:"name"`
 	Etag      string `json:"etag"`
 	FileSize  int64  `json:"fileSize"`

@@ -23,8 +23,8 @@ const (
 	Manager_Register_FullMethodName               = "/manager.Manager/Register"
 	Manager_Heartbeat_FullMethodName              = "/manager.Manager/Heartbeat"
 	Manager_SchedulerFile_FullMethodName          = "/manager.Manager/SchedulerFile"
-	Manager_SyncFileProcess_FullMethodName        = "/manager.Manager/SyncFileProcess"
 	Manager_ReportFileProcess_FullMethodName      = "/manager.Manager/ReportFileProcess"
+	Manager_SyncFileProcess_FullMethodName        = "/manager.Manager/SyncFileProcess"
 	Manager_DeleteByEtagsAndFields_FullMethodName = "/manager.Manager/DeleteByEtagsAndFields"
 	Manager_CreateCacheJob_FullMethodName         = "/manager.Manager/CreateCacheJob"
 	Manager_UpdateCacheJobStatus_FullMethodName   = "/manager.Manager/UpdateCacheJobStatus"
@@ -42,13 +42,13 @@ type ManagerClient interface {
 	Heartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// 下载文件开始时，触发调度
 	SchedulerFile(ctx context.Context, in *SchedulerFileRequest, opts ...grpc.CallOption) (*SchedulerFileResponse, error)
-	// 下载文件开始时，触发调度
-	SyncFileProcess(ctx context.Context, in *SchedulerFileRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
-	// 文件下载结束，信息上报
+	// 文件下载中或结束时，信息上报
 	ReportFileProcess(ctx context.Context, in *FileProcessRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// 离线同步文件下载进度
+	SyncFileProcess(ctx context.Context, in *SyncFileProcessReq, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// 文件删除，同步删除记录
 	DeleteByEtagsAndFields(ctx context.Context, in *DeleteByEtagsAndFieldsRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
-	// 更新预热状态
+	// 缓存预热状态
 	CreateCacheJob(ctx context.Context, in *CreateCacheJobReq, opts ...grpc.CallOption) (*CreateCacheJobResp, error)
 	UpdateCacheJobStatus(ctx context.Context, in *UpdateCacheJobStatusReq, opts ...grpc.CallOption) (*emptypb.Empty, error)
 }
@@ -91,20 +91,20 @@ func (c *managerClient) SchedulerFile(ctx context.Context, in *SchedulerFileRequ
 	return out, nil
 }
 
-func (c *managerClient) SyncFileProcess(ctx context.Context, in *SchedulerFileRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+func (c *managerClient) ReportFileProcess(ctx context.Context, in *FileProcessRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
-	err := c.cc.Invoke(ctx, Manager_SyncFileProcess_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, Manager_ReportFileProcess_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *managerClient) ReportFileProcess(ctx context.Context, in *FileProcessRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+func (c *managerClient) SyncFileProcess(ctx context.Context, in *SyncFileProcessReq, opts ...grpc.CallOption) (*emptypb.Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
-	err := c.cc.Invoke(ctx, Manager_ReportFileProcess_FullMethodName, in, out, cOpts...)
+	err := c.cc.Invoke(ctx, Manager_SyncFileProcess_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -153,13 +153,13 @@ type ManagerServer interface {
 	Heartbeat(context.Context, *HeartbeatRequest) (*emptypb.Empty, error)
 	// 下载文件开始时，触发调度
 	SchedulerFile(context.Context, *SchedulerFileRequest) (*SchedulerFileResponse, error)
-	// 下载文件开始时，触发调度
-	SyncFileProcess(context.Context, *SchedulerFileRequest) (*emptypb.Empty, error)
-	// 文件下载结束，信息上报
+	// 文件下载中或结束时，信息上报
 	ReportFileProcess(context.Context, *FileProcessRequest) (*emptypb.Empty, error)
+	// 离线同步文件下载进度
+	SyncFileProcess(context.Context, *SyncFileProcessReq) (*emptypb.Empty, error)
 	// 文件删除，同步删除记录
 	DeleteByEtagsAndFields(context.Context, *DeleteByEtagsAndFieldsRequest) (*emptypb.Empty, error)
-	// 更新预热状态
+	// 缓存预热状态
 	CreateCacheJob(context.Context, *CreateCacheJobReq) (*CreateCacheJobResp, error)
 	UpdateCacheJobStatus(context.Context, *UpdateCacheJobStatusReq) (*emptypb.Empty, error)
 	mustEmbedUnimplementedManagerServer()
@@ -181,11 +181,11 @@ func (UnimplementedManagerServer) Heartbeat(context.Context, *HeartbeatRequest) 
 func (UnimplementedManagerServer) SchedulerFile(context.Context, *SchedulerFileRequest) (*SchedulerFileResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SchedulerFile not implemented")
 }
-func (UnimplementedManagerServer) SyncFileProcess(context.Context, *SchedulerFileRequest) (*emptypb.Empty, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SyncFileProcess not implemented")
-}
 func (UnimplementedManagerServer) ReportFileProcess(context.Context, *FileProcessRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ReportFileProcess not implemented")
+}
+func (UnimplementedManagerServer) SyncFileProcess(context.Context, *SyncFileProcessReq) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SyncFileProcess not implemented")
 }
 func (UnimplementedManagerServer) DeleteByEtagsAndFields(context.Context, *DeleteByEtagsAndFieldsRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteByEtagsAndFields not implemented")
@@ -271,24 +271,6 @@ func _Manager_SchedulerFile_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Manager_SyncFileProcess_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SchedulerFileRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ManagerServer).SyncFileProcess(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Manager_SyncFileProcess_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ManagerServer).SyncFileProcess(ctx, req.(*SchedulerFileRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _Manager_ReportFileProcess_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(FileProcessRequest)
 	if err := dec(in); err != nil {
@@ -303,6 +285,24 @@ func _Manager_ReportFileProcess_Handler(srv interface{}, ctx context.Context, de
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ManagerServer).ReportFileProcess(ctx, req.(*FileProcessRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Manager_SyncFileProcess_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SyncFileProcessReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ManagerServer).SyncFileProcess(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Manager_SyncFileProcess_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ManagerServer).SyncFileProcess(ctx, req.(*SyncFileProcessReq))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -381,12 +381,12 @@ var Manager_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Manager_SchedulerFile_Handler,
 		},
 		{
-			MethodName: "SyncFileProcess",
-			Handler:    _Manager_SyncFileProcess_Handler,
-		},
-		{
 			MethodName: "ReportFileProcess",
 			Handler:    _Manager_ReportFileProcess_Handler,
+		},
+		{
+			MethodName: "SyncFileProcess",
+			Handler:    _Manager_SyncFileProcess_Handler,
 		},
 		{
 			MethodName: "DeleteByEtagsAndFields",

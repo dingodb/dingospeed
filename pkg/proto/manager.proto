@@ -13,16 +13,14 @@ service Manager {
     rpc Heartbeat (HeartbeatRequest) returns (google.protobuf.Empty);
     // 下载文件开始时，触发调度
     rpc SchedulerFile (SchedulerFileRequest) returns (SchedulerFileResponse);
-
-    // 下载文件开始时，触发调度
-    rpc SyncFileProcess (SchedulerFileRequest) returns (google.protobuf.Empty);
-
-    // 文件下载结束，信息上报
+    // 文件下载中或结束时，信息上报
     rpc ReportFileProcess (FileProcessRequest) returns (google.protobuf.Empty);
+    // 离线同步文件下载进度
+    rpc SyncFileProcess (SyncFileProcessReq) returns (google.protobuf.Empty);
     // 文件删除，同步删除记录
     rpc DeleteByEtagsAndFields (DeleteByEtagsAndFieldsRequest) returns (google.protobuf.Empty);
 
-    // 更新预热状态
+    // 缓存预热状态
     rpc CreateCacheJob (CreateCacheJobReq) returns (CreateCacheJobResp);
     rpc UpdateCacheJobStatus (UpdateCacheJobStatusReq) returns (google.protobuf.Empty);
 
@@ -60,6 +58,24 @@ message SchedulerFileRequest {
     int64 startPos = 7;
     int64 endPos = 8;
     int64 fileSize = 9;
+}
+
+message SyncFileProcessReq {
+    repeated FileProcessEntry fileProcessEntries = 1;
+}
+
+message FileProcessEntry {
+    string dataType = 1;
+    string org = 2;
+    string repo = 3;
+    string name = 4;
+    string etag = 5;
+    string instanceId = 6;
+    int64 startPos = 7;
+    int64 endPos = 8;
+    int64 fileSize = 9;
+    int32 status = 10;
+    int64 processId = 11;
 }
 
 // 注册响应

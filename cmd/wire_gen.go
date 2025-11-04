@@ -32,7 +32,8 @@ func wireApp(configConfig *config.Config) (*app.App, func(), error) {
 	fileDao := dao.NewFileDao(downloaderDao, baseData, lockDao)
 	fileService := service.NewFileService(fileDao)
 	sysService := service.NewSysService(schedulerDao)
-	fileHandler := handler.NewFileHandler(fileService, sysService)
+	localProcessService := service.NewLocalProcessService(schedulerDao)
+	fileHandler := handler.NewFileHandler(fileService, sysService, localProcessService)
 	metaDao := dao.NewMetaDao(fileDao, lockDao, baseData)
 	metaService := service.NewMetaService(fileDao, metaDao)
 	metaHandler := handler.NewMetaHandler(metaService)
@@ -42,7 +43,6 @@ func wireApp(configConfig *config.Config) (*app.App, func(), error) {
 	httpRouter := router.NewHttpRouter(echo, fileHandler, metaHandler, sysHandler, cacheJobHandler)
 	httpServer := server.NewServer(configConfig, echo, httpRouter)
 	schedulerService := service.NewSchedulerService(schedulerDao)
-	localProcessService := service.NewLocalProcessService()
 	schedulerServer := server.NewSchedulerServer(schedulerService, sysService, localProcessService)
 	appApp := newApp(httpServer, schedulerServer)
 	return appApp, func() {

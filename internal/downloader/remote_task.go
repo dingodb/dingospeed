@@ -188,9 +188,11 @@ func (r *RemoteFileTask) DoTask() {
 }
 
 func (r *RemoteFileTask) constructFileProcessParam(startPos, endPos int64, status int32) *data.FileProcessParam {
+	org, repo := util.SplitOrgRepo(r.OrgRepo)
 	return &data.FileProcessParam{
 		Datatype: r.DataType,
-		OrgRepo:  r.OrgRepo,
+		Org:      org,
+		Repo:     repo,
 		Name:     r.FileName,
 		Etag:     r.Etag,
 		FileSize: r.DingFile.GetFileSize(),

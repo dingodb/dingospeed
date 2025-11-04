@@ -143,26 +143,6 @@ localTask:
 	return tasks
 }
 
-func (d *DownloaderDao) SyncFileProcess(dataType, orgRepo, fileName, etag string, startPos, endPos, fileSize int64) error {
-	org, repo := util.SplitOrgRepo(orgRepo)
-	err := d.schedulerDao.SyncFileProcess(&manager.SchedulerFileRequest{
-		DataType:   dataType,
-		Org:        org,
-		Repo:       repo,
-		Name:       fileName,
-		Etag:       etag,
-		InstanceId: config.SysConfig.Scheduler.Discovery.InstanceId,
-		StartPos:   startPos,
-		EndPos:     endPos,
-		FileSize:   fileSize,
-	})
-	if err != nil {
-		zap.S().Errorf("SyncFileProcess err.%v", err)
-		return err
-	}
-	return nil
-}
-
 func (d *DownloaderDao) getRequestDomainScheduler(dataType, orgRepo, fileName, etag string, startPos, endPos, fileSize int64) (*manager.SchedulerFileResponse, error) {
 	org, repo := util.SplitOrgRepo(orgRepo)
 	response, err := d.schedulerDao.SchedulerFile(&manager.SchedulerFileRequest{

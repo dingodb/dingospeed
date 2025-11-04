@@ -52,7 +52,7 @@ func (s *SchedulerDao) SchedulerFile(req *manager.SchedulerFileRequest) (*manage
 	return resp, err
 }
 
-func (s *SchedulerDao) SyncFileProcess(req *manager.SchedulerFileRequest) error {
+func (s *SchedulerDao) SyncFileProcess(req *manager.SyncFileProcessReq) error {
 	ctx, cancel := context.WithTimeout(context.Background(), consts.RpcRequestTimeout)
 	defer cancel()
 	_, err := s.Client.SyncFileProcess(ctx, req)

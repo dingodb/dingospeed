@@ -22,7 +22,7 @@ scheduler:
         minimumFileSize: 0          # 文件参与调度最小值，单位字节
         syncProcessInterval: 100      # 同步下载进度的间隔，默认是1个块同步1次。
     discovery:
-        instanceId: xn-03
+        instanceId: xn-zl
         host: 127.0.0.1
         port: 8091
         heartbeatPeriod: 5          # 心跳周期，单位秒

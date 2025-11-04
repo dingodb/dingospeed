@@ -49,10 +49,13 @@ func (r *HttpRouter) initRouter() {
 	if config.SysConfig.EnableMetric() {
 		r.echo.GET("/metrics", echo.WrapHandler(promhttp.Handler()))
 	}
-	r.routerForSpeed()
 	// 内部使用
 	r.routerForScheduler()
+	r.routerForCacheJob()
+
+	r.routerForSpeed()
 }
+
 func (r *HttpRouter) routerForSpeed() { // alayanew
 	// 单个文件下载
 	r.echo.HEAD("/:repoType/:org/:repo/resolve/:commit/:filePath", r.fileHandler.HeadFileHandler1)
@@ -79,8 +82,11 @@ func (r *HttpRouter) routerForScheduler() { // alayanew
 
 	r.echo.POST("/api/getPathInfo", r.fileHandler.GetPathInfoHandler)
 	r.echo.GET("/api/fileOffset/:dataType/:org/:repo/:etag/:fileSize", r.fileHandler.GetFileOffset)
+	r.echo.GET("/api/fileProcessSync", r.fileHandler.FileProcessSync)
 
-	// 缓存
+}
+
+func (r *HttpRouter) routerForCacheJob() { // alayanew
 	r.echo.POST("/api/cacheJob/create", r.cacheJobHandler.CreateCacheJobHandler)
 	r.echo.POST("/api/cacheJob/stop", r.cacheJobHandler.StopCacheJobHandler)
 	r.echo.POST("/api/cacheJob/resume", r.cacheJobHandler.ResumeCacheJobHandler)

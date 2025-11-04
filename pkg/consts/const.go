@@ -53,7 +53,7 @@ const (
 	SchedulerModeCluster    = "cluster"
 )
 
-var RpcRequestTimeout = time.Duration(3) * time.Second
+var RpcRequestTimeout = time.Duration(60) * time.Second
 
 const (
 	Huggingface        = "huggingface"

@@ -33,14 +33,16 @@ import (
 )
 
 type FileHandler struct {
-	fileService *service.FileService
-	sysService  *service.SysService
+	fileService         *service.FileService
+	sysService          *service.SysService
+	localProcessService *service.LocalProcessService
 }
 
-func NewFileHandler(fileService *service.FileService, sysService *service.SysService) *FileHandler {
+func NewFileHandler(fileService *service.FileService, sysService *service.SysService, localProcessService *service.LocalProcessService) *FileHandler {
 	return &FileHandler{
-		fileService: fileService,
-		sysService:  sysService,
+		fileService:         fileService,
+		sysService:          sysService,
+		localProcessService: localProcessService,
 	}
 }
 
@@ -198,4 +200,11 @@ func (handler *FileHandler) GetFileOffset(c echo.Context) error {
 	fileSize, _ := strconv.ParseInt(fileSizeStr, 10, 64)
 	offset := handler.fileService.GetFileOffset(dataType, org, repo, etag, fileSize)
 	return util.ResponseData(c, offset)
+}
+
+func (handler *FileHandler) FileProcessSync(c echo.Context) error {
+	if err := handler.localProcessService.FileProcessSync(); err != nil {
+		return util.ResponseError(c, err)
+	}
+	return util.ResponseData(c, nil)
 }
