@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"dingospeed/internal/dao"
 	"dingospeed/internal/model/query"
@@ -23,6 +24,7 @@ type CacheJobService struct {
 	downloaderDao *dao.DownloaderDao
 	schedulerDao  *dao.SchedulerDao
 	cachePool     *common.Pool
+	mu            sync.Mutex
 }
 
 func NewCacheJobService(fileDao *dao.FileDao, metaDao *dao.MetaDao, downloaderDao *dao.DownloaderDao, schedulerDao *dao.SchedulerDao) *CacheJobService {
@@ -36,6 +38,8 @@ func NewCacheJobService(fileDao *dao.FileDao, metaDao *dao.MetaDao, downloaderDa
 }
 
 func (p *CacheJobService) CreateCacheJob(c echo.Context, jobReq *query.CreateCacheJobReq) (int64, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	appInfo, _ := app.FromContext(c.Request().Context())
 	ctx, cancelFunc := context.WithCancel(appInfo.Ctx())
 	var task common.Task
@@ -98,6 +102,8 @@ func (p *CacheJobService) CreateCacheJob(c echo.Context, jobReq *query.CreateCac
 }
 
 func (p *CacheJobService) StopCacheJob(jobStatusReq *query.JobStatusReq) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if task, ok := p.cachePool.GetTask(int(jobStatusReq.Id)); ok {
 		cancelFun := task.GetCancelFun()
 		cancelFun()
@@ -108,6 +114,8 @@ func (p *CacheJobService) StopCacheJob(jobStatusReq *query.JobStatusReq) error {
 }
 
 func (p *CacheJobService) ResumeCacheJob(c echo.Context, resumeCacheJobReq *query.ResumeCacheJobReq) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	appInfo, _ := app.FromContext(c.Request().Context())
 	ctx, cancelFunc := context.WithCancel(appInfo.Ctx())
 	var task common.Task

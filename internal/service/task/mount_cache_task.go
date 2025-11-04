@@ -19,6 +19,7 @@ type MountCacheTask struct {
 }
 
 func (m *MountCacheTask) DoTask() {
+	m.UpdateCacheJobStatus(consts.StatusCacheJobIng, "")
 	orgRepo := fmt.Sprintf("%s/%s", m.Job.Org, m.Job.Repo)
 	var repoType string
 	if m.Job.Datatype == consts.RepoTypeModel.Value() {
@@ -31,9 +32,13 @@ func (m *MountCacheTask) DoTask() {
 	}
 	modelDirName := filepath.Base(orgRepo)
 	mountDir := config.SysConfig.Cache.MountModelDir
-	localDir := filepath.Join(mountDir, orgRepo)
+	localModelDir := filepath.Join(mountDir, orgRepo)
 
-	logDir := "./download_logs"
+	logDir := filepath.Join(config.SysConfig.Server.Repos, "download_logs")
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		zap.S().Errorf("创建目录失败: %v", err)
+		return
+	}
 	logFileName := fmt.Sprintf("%s_%s.log", modelDirName, time.Now().Format("20060102_150405"))
 	logFile := filepath.Join(logDir, logFileName)
 	logF, err := os.Create(logFile)
@@ -42,10 +47,9 @@ func (m *MountCacheTask) DoTask() {
 		return
 	}
 	defer logF.Close()
-
 	hfEndpoint := fmt.Sprintf("http://%s:%d", config.SysConfig.Server.Host, config.SysConfig.Server.Port)
 	cmd := exec.Command("huggingface-cli", "download", "--resume-download", "--repo-type",
-		repoType, orgRepo, "--local-dir", localDir)
+		repoType, orgRepo, "--local-dir", localModelDir)
 	cmd.Env = append(os.Environ(), fmt.Sprintf("HF_ENDPOINT=%s", hfEndpoint))
 	cmd.Stdout = logF
 	cmd.Stderr = logF
