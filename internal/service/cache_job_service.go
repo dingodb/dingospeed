@@ -35,30 +35,28 @@ func NewCacheJobService(fileDao *dao.FileDao, metaDao *dao.MetaDao, downloaderDa
 	}
 }
 
-func (p *CacheJobService) CreateCacheJob(c echo.Context, job *query.CacheJobQuery) (int64, error) {
+func (p *CacheJobService) CreateCacheJob(c echo.Context, jobReq *query.CreateCacheJobReq) (int64, error) {
 	appInfo, _ := app.FromContext(c.Request().Context())
 	ctx, cancelFunc := context.WithCancel(appInfo.Ctx())
 	var task common.Task
 	cacheTask := task2.CacheTask{
 		Ctx:          ctx,
-		Job:          job,
+		Job:          jobReq,
 		CancelFunc:   cancelFunc,
 		SchedulerDao: p.schedulerDao,
-		InstanceId:   job.InstanceId,
 	}
 	req := &manager.CreateCacheJobReq{
-		Type:       job.Type,
-		InstanceId: job.InstanceId,
-		Datatype:   job.Datatype,
-		Org:        job.Org,
-		Repo:       job.Repo,
-		Token:      job.Token,
+		Type:       jobReq.Type,
+		InstanceId: jobReq.InstanceId,
+		Datatype:   jobReq.Datatype,
+		Org:        jobReq.Org,
+		Repo:       jobReq.Repo,
 		Status:     consts.StatusCacheJobIng,
 	}
-	if job.Type == consts.CacheTypePreheat {
-		orgRepo := fmt.Sprintf("%s/%s", job.Org, job.Repo)
-		authorization := fmt.Sprintf("Bearer %s", job.Token)
-		metadata, err := p.metaDao.GetMetadata(job.Datatype, orgRepo, "main", "get", authorization)
+	if jobReq.Type == consts.CacheTypePreheat {
+		orgRepo := fmt.Sprintf("%s/%s", jobReq.Org, jobReq.Repo)
+		authorization := c.Request().Header.Get("Authorization")
+		metadata, err := p.metaDao.GetMetadata(jobReq.Datatype, orgRepo, "main", "get", authorization)
 		if err != nil {
 			return 0, err
 		}
@@ -84,12 +82,8 @@ func (p *CacheJobService) CreateCacheJob(c echo.Context, job *query.CacheJobQuer
 		if err := p.cachePool.Submit(ctx, task); err != nil {
 			return 0, err
 		}
-	} else if job.Type == consts.CacheTypeMount {
-		cacheJob, err := p.schedulerDao.CreateCacheJob(req)
-		if err != nil {
-			return 0, err
-		}
-		cacheTask.TaskNo = int(cacheJob.Id)
+	} else if jobReq.Type == consts.CacheTypeMount {
+		cacheTask.TaskNo = int(jobReq.RepositoryId)
 		task = &task2.MountCacheTask{
 			CacheTask: cacheTask,
 		}
@@ -98,37 +92,40 @@ func (p *CacheJobService) CreateCacheJob(c echo.Context, job *query.CacheJobQuer
 		}
 	} else {
 		defer cancelFunc()
-		return 0, fmt.Errorf("cache job type is err,%d", job.Type)
+		return 0, fmt.Errorf("cache job type is err,%d", jobReq.Type)
 	}
 	return int64(cacheTask.TaskNo), nil
 }
 
-func (p *CacheJobService) StopCacheJob(jobStatus *query.JobStatus) error {
-	if task, ok := p.cachePool.GetTask(int(jobStatus.Id)); ok {
+func (p *CacheJobService) StopCacheJob(jobStatusReq *query.JobStatusReq) error {
+	if task, ok := p.cachePool.GetTask(int(jobStatusReq.Id)); ok {
 		cancelFun := task.GetCancelFun()
 		cancelFun()
 	} else {
-		return fmt.Errorf("无法执行停止操作，没有相关任务。jobId:%d", jobStatus.Id)
+		return fmt.Errorf("无法执行停止操作，没有相关任务。jobId:%d", jobStatusReq.Id)
 	}
 	return nil
 }
 
-func (p *CacheJobService) ResumeCacheJob(c echo.Context, job *query.CacheJobQuery) error {
+func (p *CacheJobService) ResumeCacheJob(c echo.Context, resumeCacheJobReq *query.ResumeCacheJobReq) error {
 	appInfo, _ := app.FromContext(c.Request().Context())
 	ctx, cancelFunc := context.WithCancel(appInfo.Ctx())
 	var task common.Task
 	cacheTask := task2.CacheTask{
-		TaskNo:       int(job.Id),
-		Ctx:          ctx,
-		Job:          job,
+		TaskNo: int(resumeCacheJobReq.Id),
+		Ctx:    ctx,
+		Job: &query.CreateCacheJobReq{
+			InstanceId: resumeCacheJobReq.InstanceId, Type: resumeCacheJobReq.Type,
+			Org: resumeCacheJobReq.Org, Repo: resumeCacheJobReq.Repo,
+			Datatype: resumeCacheJobReq.Datatype,
+		},
 		CancelFunc:   cancelFunc,
 		SchedulerDao: p.schedulerDao,
-		InstanceId:   job.InstanceId,
 	}
-	if job.Type == consts.CacheTypePreheat {
-		orgRepo := fmt.Sprintf("%s/%s", job.Org, job.Repo)
-		authorization := fmt.Sprintf("Bearer %s", job.Token)
-		metadata, err := p.metaDao.GetMetadata(job.Datatype, orgRepo, "main", "get", authorization)
+	if resumeCacheJobReq.Type == consts.CacheTypePreheat {
+		orgRepo := fmt.Sprintf("%s/%s", resumeCacheJobReq.Org, resumeCacheJobReq.Repo)
+		authorization := c.Request().Header.Get("Authorization")
+		metadata, err := p.metaDao.GetMetadata(resumeCacheJobReq.Datatype, orgRepo, "main", "get", authorization)
 		if err != nil {
 			return err
 		}
@@ -137,6 +134,14 @@ func (p *CacheJobService) ResumeCacheJob(c echo.Context, job *query.CacheJobQuer
 			zap.S().Errorf("unmarshal content error:%v", err)
 			return err
 		}
+		// 将状态重置为进行中
+		p.schedulerDao.UpdateCacheJobStatus(&manager.UpdateCacheJobStatusReq{
+			Id:         resumeCacheJobReq.Id,
+			InstanceId: resumeCacheJobReq.InstanceId,
+			Status:     consts.StatusCacheJobIng,
+			Org:        resumeCacheJobReq.Org,
+			Repo:       resumeCacheJobReq.Repo,
+		})
 		task = &task2.PreheatCacheTask{
 			CacheTask:     cacheTask,
 			FileDao:       p.fileDao,

@@ -20,14 +20,15 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Manager_Register_FullMethodName               = "/manager.Manager/Register"
-	Manager_Heartbeat_FullMethodName              = "/manager.Manager/Heartbeat"
-	Manager_SchedulerFile_FullMethodName          = "/manager.Manager/SchedulerFile"
-	Manager_ReportFileProcess_FullMethodName      = "/manager.Manager/ReportFileProcess"
-	Manager_SyncFileProcess_FullMethodName        = "/manager.Manager/SyncFileProcess"
-	Manager_DeleteByEtagsAndFields_FullMethodName = "/manager.Manager/DeleteByEtagsAndFields"
-	Manager_CreateCacheJob_FullMethodName         = "/manager.Manager/CreateCacheJob"
-	Manager_UpdateCacheJobStatus_FullMethodName   = "/manager.Manager/UpdateCacheJobStatus"
+	Manager_Register_FullMethodName                    = "/manager.Manager/Register"
+	Manager_Heartbeat_FullMethodName                   = "/manager.Manager/Heartbeat"
+	Manager_SchedulerFile_FullMethodName               = "/manager.Manager/SchedulerFile"
+	Manager_ReportFileProcess_FullMethodName           = "/manager.Manager/ReportFileProcess"
+	Manager_SyncFileProcess_FullMethodName             = "/manager.Manager/SyncFileProcess"
+	Manager_DeleteByEtagsAndFields_FullMethodName      = "/manager.Manager/DeleteByEtagsAndFields"
+	Manager_CreateCacheJob_FullMethodName              = "/manager.Manager/CreateCacheJob"
+	Manager_UpdateCacheJobStatus_FullMethodName        = "/manager.Manager/UpdateCacheJobStatus"
+	Manager_UpdateRepositoryMountStatus_FullMethodName = "/manager.Manager/UpdateRepositoryMountStatus"
 )
 
 // ManagerClient is the client API for Manager service.
@@ -51,6 +52,7 @@ type ManagerClient interface {
 	// 缓存预热状态
 	CreateCacheJob(ctx context.Context, in *CreateCacheJobReq, opts ...grpc.CallOption) (*CreateCacheJobResp, error)
 	UpdateCacheJobStatus(ctx context.Context, in *UpdateCacheJobStatusReq, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	UpdateRepositoryMountStatus(ctx context.Context, in *UpdateRepositoryMountStatusReq, opts ...grpc.CallOption) (*emptypb.Empty, error)
 }
 
 type managerClient struct {
@@ -141,6 +143,16 @@ func (c *managerClient) UpdateCacheJobStatus(ctx context.Context, in *UpdateCach
 	return out, nil
 }
 
+func (c *managerClient) UpdateRepositoryMountStatus(ctx context.Context, in *UpdateRepositoryMountStatusReq, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, Manager_UpdateRepositoryMountStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ManagerServer is the server API for Manager service.
 // All implementations must embed UnimplementedManagerServer
 // for forward compatibility.
@@ -162,6 +174,7 @@ type ManagerServer interface {
 	// 缓存预热状态
 	CreateCacheJob(context.Context, *CreateCacheJobReq) (*CreateCacheJobResp, error)
 	UpdateCacheJobStatus(context.Context, *UpdateCacheJobStatusReq) (*emptypb.Empty, error)
+	UpdateRepositoryMountStatus(context.Context, *UpdateRepositoryMountStatusReq) (*emptypb.Empty, error)
 	mustEmbedUnimplementedManagerServer()
 }
 
@@ -195,6 +208,9 @@ func (UnimplementedManagerServer) CreateCacheJob(context.Context, *CreateCacheJo
 }
 func (UnimplementedManagerServer) UpdateCacheJobStatus(context.Context, *UpdateCacheJobStatusReq) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateCacheJobStatus not implemented")
+}
+func (UnimplementedManagerServer) UpdateRepositoryMountStatus(context.Context, *UpdateRepositoryMountStatusReq) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateRepositoryMountStatus not implemented")
 }
 func (UnimplementedManagerServer) mustEmbedUnimplementedManagerServer() {}
 func (UnimplementedManagerServer) testEmbeddedByValue()                 {}
@@ -361,6 +377,24 @@ func _Manager_UpdateCacheJobStatus_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Manager_UpdateRepositoryMountStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateRepositoryMountStatusReq)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ManagerServer).UpdateRepositoryMountStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Manager_UpdateRepositoryMountStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ManagerServer).UpdateRepositoryMountStatus(ctx, req.(*UpdateRepositoryMountStatusReq))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Manager_ServiceDesc is the grpc.ServiceDesc for Manager service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -399,6 +433,10 @@ var Manager_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateCacheJobStatus",
 			Handler:    _Manager_UpdateCacheJobStatus_Handler,
+		},
+		{
+			MethodName: "UpdateRepositoryMountStatus",
+			Handler:    _Manager_UpdateRepositoryMountStatus_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

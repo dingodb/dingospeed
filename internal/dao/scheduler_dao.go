@@ -92,9 +92,21 @@ func (s *SchedulerDao) CreateCacheJob(request *manager.CreateCacheJobReq) (*mana
 }
 
 func (s *SchedulerDao) UpdateCacheJobStatus(request *manager.UpdateCacheJobStatusReq) {
+	zap.S().Infof("update status cacheJobId:%d,status:%d, %s", request.Id, request.Status, request.ErrorMsg)
 	ctx, cancel := context.WithTimeout(context.Background(), consts.RpcRequestTimeout)
 	defer cancel()
 	_, err := s.Client.UpdateCacheJobStatus(ctx, request)
+	if err != nil {
+		zap.S().Errorf("UpdateCacheJobStatus fail.%v", ctx)
+		return
+	}
+}
+
+func (s *SchedulerDao) UpdateRepositoryMountStatus(request *manager.UpdateRepositoryMountStatusReq) {
+	zap.S().Infof("UpdateRepositoryMountStatus id:%d,status:%d, %s", request.Id, request.Status, request.ErrorMsg)
+	ctx, cancel := context.WithTimeout(context.Background(), consts.RpcRequestTimeout)
+	defer cancel()
+	_, err := s.Client.UpdateRepositoryMountStatus(ctx, request)
 	if err != nil {
 		zap.S().Errorf("UpdateCacheJobStatus fail.%v", ctx)
 		return

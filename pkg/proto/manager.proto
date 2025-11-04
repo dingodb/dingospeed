@@ -23,6 +23,7 @@ service Manager {
     // 缓存预热状态
     rpc CreateCacheJob (CreateCacheJobReq) returns (CreateCacheJobResp);
     rpc UpdateCacheJobStatus (UpdateCacheJobStatusReq) returns (google.protobuf.Empty);
+    rpc UpdateRepositoryMountStatus (UpdateRepositoryMountStatusReq) returns (google.protobuf.Empty);
 
 }
 
@@ -110,10 +111,9 @@ message CreateCacheJobReq{
     string datatype = 3;
     string org = 4;
     string repo = 5;
-    string token = 6;
-    int64 usedStorage = 7;
-    string commit = 8;
-    int32 status = 9;
+    int64 usedStorage = 6;
+    string commit = 7;
+    int32 status = 8;
 }
 
 // 注册响应
@@ -126,4 +126,12 @@ message UpdateCacheJobStatusReq{
     int32 status = 2;
     string errorMsg = 3;
     string instanceId = 4;
+    string org = 5;
+    string repo = 6;
+}
+
+message UpdateRepositoryMountStatusReq{
+    int64 id = 1;
+    int32 status = 2;
+    string errorMsg = 3;
 }

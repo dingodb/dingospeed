@@ -9,6 +9,7 @@ import (
 
 	"dingospeed/pkg/config"
 	"dingospeed/pkg/consts"
+	"dingospeed/pkg/proto/manager"
 
 	"go.uber.org/zap"
 )
@@ -37,6 +38,7 @@ func (m *MountCacheTask) DoTask() {
 	logFile := filepath.Join(logDir, logFileName)
 	logF, err := os.Create(logFile)
 	if err != nil {
+		zap.S().Errorf("create err.%v", err)
 		return
 	}
 	defer logF.Close()
@@ -60,8 +62,15 @@ func (m *MountCacheTask) DoTask() {
 	if err := cmd.Run(); err != nil {
 		zap.S().Errorf("下载失败（错误摘要）：%v", err)
 		m.UpdateCacheJobStatus(consts.StatusCacheJobBreak, err.Error())
-		return
 	} else {
 		m.UpdateCacheJobStatus(consts.StatusCacheJobComplete, "")
 	}
+}
+
+func (p *MountCacheTask) UpdateCacheJobStatus(status int32, errorMsg string) {
+	p.SchedulerDao.UpdateRepositoryMountStatus(&manager.UpdateRepositoryMountStatusReq{
+		Id:       int64(p.TaskNo),
+		Status:   status,
+		ErrorMsg: errorMsg,
+	})
 }

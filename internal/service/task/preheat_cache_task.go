@@ -19,7 +19,7 @@ type CacheTask struct {
 	TaskNo       int
 	Ctx          context.Context
 	CancelFunc   context.CancelFunc
-	Job          *query.CacheJobQuery
+	Job          *query.CreateCacheJobReq
 	SchedulerDao *dao.SchedulerDao
 	InstanceId   string
 }
@@ -30,16 +30,6 @@ func (c *CacheTask) GetTaskNo() int {
 
 func (c *CacheTask) GetCancelFun() context.CancelFunc {
 	return c.CancelFunc
-}
-
-func (c *CacheTask) UpdateCacheJobStatus(status int32, errorMsg string) {
-	zap.S().Infof("update status jobId:%d,status:%d, %s", c.Job.Id, status, errorMsg)
-	c.SchedulerDao.UpdateCacheJobStatus(&manager.UpdateCacheJobStatusReq{
-		Id:         int64(c.Job.Id),
-		InstanceId: c.InstanceId,
-		Status:     status,
-		ErrorMsg:   errorMsg,
-	})
 }
 
 type PreheatCacheTask struct {
@@ -53,23 +43,19 @@ type PreheatCacheTask struct {
 func (p *PreheatCacheTask) DoTask() {
 	// 获取模型元数据
 	orgRepo := fmt.Sprintf("%s/%s", p.Job.Org, p.Job.Repo)
-	zap.S().Infof("preheat start...%s", orgRepo)
 	err := p.preheatProcess(orgRepo)
 	if err != nil {
 		zap.S().Errorf("999999999999999999999,%s", err.Error())
-		p.UpdateCacheJobStatus(consts.StatusCacheJobBreak, err.Error())
+		p.UpdateCacheJobStatus(consts.StatusCacheJobBreak, p.Job.Org, p.Job.Repo, err.Error())
 		return
 	}
-	zap.S().Infof("preheat end.%s", orgRepo)
-	p.UpdateCacheJobStatus(consts.StatusCacheJobComplete, "")
+	p.UpdateCacheJobStatus(consts.StatusCacheJobComplete, p.Job.Org, p.Job.Repo, "")
 }
 
 func (p *PreheatCacheTask) preheatProcess(orgRepo string) error {
 	limit := make(chan struct{}, 8)
 	for _, rFile := range p.Sha.Siblings {
 		if p.Ctx.Err() != nil {
-			zap.S().Errorf("777777777777777777777,%s", p.Ctx.Err().Error())
-			p.UpdateCacheJobStatus(consts.StatusCacheJobBreak, p.Ctx.Err().Error())
 			return p.Ctx.Err()
 		}
 		fileName := rFile.Rfilename
@@ -164,10 +150,18 @@ func (p *PreheatCacheTask) result(ctx context.Context, responseChan chan []byte)
 				return
 			}
 		case <-ctx.Done():
-			zap.S().Errorf("000000000000000000000000000")
-			// zap.S().Errorf("000000000000000000000000000,%s", Ctx.Err().Error())
-			p.UpdateCacheJobStatus(consts.StatusCacheJobBreak, ctx.Err().Error())
 			return
 		}
 	}
+}
+
+func (p *PreheatCacheTask) UpdateCacheJobStatus(status int32, org, repo, errorMsg string) {
+	p.SchedulerDao.UpdateCacheJobStatus(&manager.UpdateCacheJobStatusReq{
+		Id:         int64(p.TaskNo),
+		InstanceId: p.Job.InstanceId,
+		Status:     status,
+		ErrorMsg:   errorMsg,
+		Org:        org,
+		Repo:       repo,
+	})
 }

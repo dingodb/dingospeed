@@ -15,8 +15,11 @@
 package util
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
+
+	myerr "dingospeed/pkg/error"
 
 	"github.com/labstack/echo/v4"
 )
@@ -104,13 +107,6 @@ func ErrorProxyError(ctx echo.Context) error {
 	return Response(ctx, http.StatusInternalServerError, headers, nil)
 }
 
-func ResponseError(ctx echo.Context, err error) error {
-	content := map[string]string{
-		"error": err.Error(),
-	}
-	return ctx.JSON(http.StatusInternalServerError, content)
-}
-
 func ErrorMethodError(ctx echo.Context) error {
 	content := map[string]string{
 		"error": "request method error",
@@ -141,6 +137,28 @@ func Response(ctx echo.Context, httpStatus int, headers map[string]string, data 
 
 func ResponseData(ctx echo.Context, data interface{}) error {
 	return ctx.JSON(http.StatusOK, data)
+}
+
+func NormalResponseData(ctx echo.Context, data interface{}) error {
+	return ctx.JSON(http.StatusOK, Body{
+		Data: data,
+		Msg:  "success",
+	})
+}
+
+func ResponseError(ctx echo.Context, cause ...error) error {
+	msg := "操作失败"
+	if len(cause) > 0 {
+		c := cause[0]
+		var t myerr.Error
+		if errors.As(c, &t) {
+			msg = t.Error()
+		}
+	}
+	content := map[string]string{
+		"error": msg,
+	}
+	return ctx.JSON(http.StatusInternalServerError, content)
 }
 
 func fullHeaders(c echo.Context, headers map[string]string) {

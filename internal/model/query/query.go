@@ -1,5 +1,14 @@
 package query
 
+type CreateCacheJobReq struct {
+	Type         int32  `json:"type"`
+	InstanceId   string `json:"instanceId"`
+	Datatype     string `json:"datatype"`
+	Org          string `json:"org"`
+	Repo         string `json:"repo"`
+	RepositoryId int64  `json:"repositoryId"`
+}
+
 type CacheJobQuery struct {
 	Id         int32  `json:"id"`
 	InstanceId string `json:"instanceId"`
@@ -10,9 +19,17 @@ type CacheJobQuery struct {
 	Token      string `json:"token"`
 }
 
-type JobStatus struct {
+type ResumeCacheJobReq struct {
+	Id         int64  `json:"id"`
+	Type       int32  `json:"type"`
+	InstanceId string `json:"instanceId"`
+	Datatype   string `json:"datatype"`
+	Org        string `json:"org"`
+	Repo       string `json:"repo"`
+	Token      string `json:"token"`
+}
+
+type JobStatusReq struct {
 	Id         int64  `json:"id"`
 	InstanceId string `json:"instanceId"`
-	Status     int32  `json:"status"`
-	ErrorMsg   string `json:"errorMsg"`
 }
