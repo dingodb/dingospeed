@@ -1,0 +1,26 @@
+FROM alpine:3.20
+
+#LABEL huggingface-hub-version="0.36.0"
+#LABEL base-image="alpine:3.20"
+#LABEL description="轻量基础镜像：Alpine 3.20 + Python 3.11 + huggingface-hub"
+
+# 安装核心依赖（Alpine 包名与 Ubuntu 不同）
+RUN apk --no-cache add \
+    python3 \
+    py3-pip \
+    py3-setuptools \
+    ca-certificates \
+    tzdata \
+    git \
+    && rm -rf /var/cache/apk/*
+
+# 可选：设置时区
+ENV TZ=Asia/Shanghai
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+# 安装 huggingface-hub（指定版本）
+RUN pip3 install --no-cache-dir --break-system-packages huggingface-hub==0.34.4
+
+# 验证安装
+RUN huggingface-cli version
+CMD ["/bin/sh"]

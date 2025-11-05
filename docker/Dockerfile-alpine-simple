@@ -1,0 +1,13 @@
+FROM huggingface-hub:alpine-0.34.4
+
+WORKDIR /app
+
+COPY ./bin/dingospeed .
+
+# Expose the 8090 port of the container for external acces
+EXPOSE 8090
+
+VOLUME /app/repos
+VOLUME /app/log
+
+CMD ["./dingospeed"]

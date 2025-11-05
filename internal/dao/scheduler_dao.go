@@ -102,6 +102,17 @@ func (s *SchedulerDao) UpdateCacheJobStatus(request *manager.UpdateCacheJobStatu
 	}
 }
 
+func (s *SchedulerDao) ExecUpdateCacheJobStatus(jobId int, status int32, instanceId, org, repo, errorMsg string) {
+	s.UpdateCacheJobStatus(&manager.UpdateCacheJobStatusReq{
+		Id:         int64(jobId),
+		InstanceId: instanceId,
+		Status:     status,
+		ErrorMsg:   errorMsg,
+		Org:        org,
+		Repo:       repo,
+	})
+}
+
 func (s *SchedulerDao) UpdateRepositoryMountStatus(request *manager.UpdateRepositoryMountStatusReq) {
 	zap.S().Infof("UpdateRepositoryMountStatus id:%d,status:%d, %s", request.Id, request.Status, request.ErrorMsg)
 	ctx, cancel := context.WithTimeout(context.Background(), consts.RpcRequestTimeout)
@@ -111,4 +122,12 @@ func (s *SchedulerDao) UpdateRepositoryMountStatus(request *manager.UpdateReposi
 		zap.S().Errorf("UpdateCacheJobStatus fail.%v", ctx)
 		return
 	}
+}
+
+func (s *SchedulerDao) ExecUpdateRepositoryMountStatus(jobId int, status int32, errorMsg string) {
+	s.UpdateRepositoryMountStatus(&manager.UpdateRepositoryMountStatusReq{
+		Id:       int64(jobId),
+		Status:   status,
+		ErrorMsg: errorMsg,
+	})
 }

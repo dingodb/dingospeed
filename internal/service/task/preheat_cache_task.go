@@ -10,7 +10,6 @@ import (
 	"dingospeed/internal/model/query"
 	"dingospeed/pkg/config"
 	"dingospeed/pkg/consts"
-	"dingospeed/pkg/proto/manager"
 
 	"go.uber.org/zap"
 )
@@ -46,10 +45,10 @@ func (p *PreheatCacheTask) DoTask() {
 	err := p.preheatProcess(orgRepo)
 	if err != nil {
 		zap.S().Errorf("999999999999999999999,%s", err.Error())
-		p.UpdateCacheJobStatus(consts.StatusCacheJobBreak, p.Job.Org, p.Job.Repo, err.Error())
+		p.SchedulerDao.ExecUpdateCacheJobStatus(p.TaskNo, consts.StatusCacheJobBreak, p.InstanceId, p.Job.Org, p.Job.Repo, err.Error())
 		return
 	}
-	p.UpdateCacheJobStatus(consts.StatusCacheJobComplete, p.Job.Org, p.Job.Repo, "")
+	p.SchedulerDao.ExecUpdateCacheJobStatus(p.TaskNo, consts.StatusCacheJobComplete, p.InstanceId, p.Job.Org, p.Job.Repo, "")
 }
 
 func (p *PreheatCacheTask) preheatProcess(orgRepo string) error {
@@ -153,15 +152,4 @@ func (p *PreheatCacheTask) result(ctx context.Context, responseChan chan []byte)
 			return
 		}
 	}
-}
-
-func (p *PreheatCacheTask) UpdateCacheJobStatus(status int32, org, repo, errorMsg string) {
-	p.SchedulerDao.UpdateCacheJobStatus(&manager.UpdateCacheJobStatusReq{
-		Id:         int64(p.TaskNo),
-		InstanceId: p.Job.InstanceId,
-		Status:     status,
-		ErrorMsg:   errorMsg,
-		Org:        org,
-		Repo:       repo,
-	})
 }

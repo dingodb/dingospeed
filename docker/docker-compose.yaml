@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
     dingospeed:
-        image: harbor.dev01.zetyun.cn/dingofs/dingospeed:v4
+        image: harbor.zetyun.cn/dingofs/dingospeed:2025
         container_name: dingospeed
           #environment:
           #- http_proxy=http://100.64.1.68:1080
@@ -12,25 +12,11 @@ services:
         ports:
             - "8090:8090"
         volumes:
+            - ./config.yaml:/app/config/config.yaml
             - ./repos:/app/repos
             - ./log:/app/log
         restart: always
         environment:
             - TZ=Asia/Shanghai
-        cpus: '25'  # 限制 CPU 为 20 核
-        mem_limit: '50g'  # 限制内存为 50G
-    dingospeed-online:
-        image: harbor.dev01.zetyun.cn/dingofs/dingospeed-online:v4
-        container_name: dingospeed-online
-        environment:
-            - http_proxy=http://10.201.44.68:1080
-            - https_proxy=http://10.201.44.68:1080
-            - TZ=Asia/Shanghai
-        ports:
-            - "8091:8091"
-        volumes:
-            - ./repos:/app/repos
-            - ./log:/app/log
-        restart: always
-        cpus: '25'  # 限制 CPU 为 20 核
-        mem_limit: '50g'  # 限制内存为 50G
+#        cpus: '25'  # 限制 CPU 为 20 核
+#        mem_limit: '50g'  # 限制内存为 50G

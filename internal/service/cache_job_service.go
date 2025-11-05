@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"dingospeed/internal/dao"
 	"dingospeed/internal/model/query"
@@ -23,6 +24,7 @@ type CacheJobService struct {
 	downloaderDao *dao.DownloaderDao
 	schedulerDao  *dao.SchedulerDao
 	cachePool     *common.Pool
+	mu            sync.Mutex
 }
 
 func NewCacheJobService(fileDao *dao.FileDao, metaDao *dao.MetaDao, downloaderDao *dao.DownloaderDao, schedulerDao *dao.SchedulerDao) *CacheJobService {
@@ -36,6 +38,8 @@ func NewCacheJobService(fileDao *dao.FileDao, metaDao *dao.MetaDao, downloaderDa
 }
 
 func (p *CacheJobService) CreateCacheJob(c echo.Context, jobReq *query.CreateCacheJobReq) (int64, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	appInfo, _ := app.FromContext(c.Request().Context())
 	ctx, cancelFunc := context.WithCancel(appInfo.Ctx())
 	var task common.Task
@@ -98,16 +102,20 @@ func (p *CacheJobService) CreateCacheJob(c echo.Context, jobReq *query.CreateCac
 }
 
 func (p *CacheJobService) StopCacheJob(jobStatusReq *query.JobStatusReq) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if task, ok := p.cachePool.GetTask(int(jobStatusReq.Id)); ok {
 		cancelFun := task.GetCancelFun()
 		cancelFun()
 	} else {
-		return fmt.Errorf("无法执行停止操作，没有相关任务。jobId:%d", jobStatusReq.Id)
+		p.schedulerDao.ExecUpdateCacheJobStatus(int(jobStatusReq.Id), consts.StatusCacheJobBreak, jobStatusReq.InstanceId, "", "", "speed未注册该任务，下载已中断。")
 	}
 	return nil
 }
 
 func (p *CacheJobService) ResumeCacheJob(c echo.Context, resumeCacheJobReq *query.ResumeCacheJobReq) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	appInfo, _ := app.FromContext(c.Request().Context())
 	ctx, cancelFunc := context.WithCancel(appInfo.Ctx())
 	var task common.Task
@@ -135,13 +143,8 @@ func (p *CacheJobService) ResumeCacheJob(c echo.Context, resumeCacheJobReq *quer
 			return err
 		}
 		// 将状态重置为进行中
-		p.schedulerDao.UpdateCacheJobStatus(&manager.UpdateCacheJobStatusReq{
-			Id:         resumeCacheJobReq.Id,
-			InstanceId: resumeCacheJobReq.InstanceId,
-			Status:     consts.StatusCacheJobIng,
-			Org:        resumeCacheJobReq.Org,
-			Repo:       resumeCacheJobReq.Repo,
-		})
+		p.schedulerDao.ExecUpdateCacheJobStatus(int(resumeCacheJobReq.Id), consts.StatusCacheJobIng,
+			resumeCacheJobReq.InstanceId, resumeCacheJobReq.Org, resumeCacheJobReq.Repo, "")
 		task = &task2.PreheatCacheTask{
 			CacheTask:     cacheTask,
 			FileDao:       p.fileDao,
