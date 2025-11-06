@@ -30,9 +30,9 @@ func (m *MountCacheTask) DoTask() {
 	}
 	modelDirName := filepath.Base(orgRepo)
 	mountDir := config.SysConfig.Cache.MountModelDir
-	localModelDir := filepath.Join(mountDir, orgRepo)
+	localModelDir := filepath.Join(mountDir, m.Job.Datatype, orgRepo)
 
-	logDir := filepath.Join(config.SysConfig.Server.Repos, "download_logs")
+	logDir := filepath.Join(config.SysConfig.Server.Repos, "mount_download_logs")
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		zap.S().Errorf("创建目录失败: %v", err)
 		return

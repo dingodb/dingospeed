@@ -12,9 +12,11 @@ services:
         ports:
             - "8090:8090"
         volumes:
-            - ./config.yaml:/app/config/config.yaml
-            - ./repos:/app/repos
+            - /Users/zhaoli/projects/code/zetyun/go/dingospeed/repos:/app/repos
+            - /Users/zhaoli/projects/code/zetyun/go/dingospeed/docker/config/config.yaml:/app/config/config.yaml
+            - /Users/zhaoli/projects/code/zetyun/go/dingospeed/config/ssl:/app/config/ssl
             - ./log:/app/log
+            - /Users/zhaoli/Downloads/public:/app/public
         restart: always
         environment:
             - TZ=Asia/Shanghai

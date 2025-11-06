@@ -24,3 +24,5 @@ RUN pip3 install --no-cache-dir --break-system-packages huggingface-hub==0.34.4
 # 验证安装
 RUN huggingface-cli version
 CMD ["/bin/sh"]
+
+# docker build -t huggingface-hub:alpine-0.34.4 -f Dockerfile-alpine .
