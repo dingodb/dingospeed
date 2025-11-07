@@ -20,7 +20,6 @@ type CacheTask struct {
 	CancelFunc   context.CancelFunc
 	Job          *query.CreateCacheJobReq
 	SchedulerDao *dao.SchedulerDao
-	InstanceId   string
 }
 
 func (c *CacheTask) GetTaskNo() int {
@@ -45,10 +44,10 @@ func (p *PreheatCacheTask) DoTask() {
 	err := p.preheatProcess(orgRepo)
 	if err != nil {
 		zap.S().Errorf("999999999999999999999,%s", err.Error())
-		p.SchedulerDao.ExecUpdateCacheJobStatus(p.TaskNo, consts.StatusCacheJobBreak, p.InstanceId, p.Job.Org, p.Job.Repo, err.Error())
+		p.SchedulerDao.ExecUpdateCacheJobStatus(p.TaskNo, consts.StatusCacheJobBreak, p.Job.InstanceId, p.Job.Org, p.Job.Repo, err.Error())
 		return
 	}
-	p.SchedulerDao.ExecUpdateCacheJobStatus(p.TaskNo, consts.StatusCacheJobComplete, p.InstanceId, p.Job.Org, p.Job.Repo, "")
+	p.SchedulerDao.ExecUpdateCacheJobStatus(p.TaskNo, consts.StatusCacheJobComplete, p.Job.InstanceId, p.Job.Org, p.Job.Repo, "")
 }
 
 func (p *PreheatCacheTask) preheatProcess(orgRepo string) error {
