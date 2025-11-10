@@ -12,15 +12,20 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-var requestQueue chan struct{}
+var (
+	requestQueue      chan struct{}
+	fileDownloadQueue chan struct{}
+)
 
 func InitMiddlewareConfig() {
 	requestQueue = make(chan struct{}, config.SysConfig.TokenBucketLimit.HandlerCapacity)
+	fileDownloadQueue = make(chan struct{}, config.SysConfig.TokenBucketLimit.HandlerCapacity*2)
 }
 
 func QueueLimitMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		url := c.Request().URL.String()
+		method := c.Request().Method
 		remoteAddr := c.Request().RemoteAddr
 		source, _, err := net.SplitHostPort(remoteAddr)
 		if err != nil {
@@ -32,13 +37,12 @@ func QueueLimitMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 			if metrics {
 				return next(c)
 			}
-			promFlag := strings.Contains(url, "resolve") || strings.Contains(url, "revision")
-			if promFlag {
+			if method == echo.GET && strings.Contains(url, "resolve") {
 				prom.PromSourceCounter(prom.RequestTotalCnt, source)
 				select {
-				case requestQueue <- struct{}{}:
+				case fileDownloadQueue <- struct{}{}:
 					defer func() {
-						<-requestQueue
+						<-fileDownloadQueue
 					}()
 					if err = next(c); err != nil {
 						prom.PromSourceCounter(prom.RequestFailCnt, source)

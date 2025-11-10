@@ -400,7 +400,7 @@ func (f *FileDao) FileChunkGet(c echo.Context, taskParam *downloader.TaskParam, 
 	taskParam.Cancel = cancel
 	go f.downloaderDao.FileDownload(startPos, endPos, isInnerRequest, taskParam)
 	if err := util.ResponseStream(c, fmt.Sprintf("%s/%s", taskParam.OrgRepo, taskParam.FileName), respHeaders, responseChan); err != nil {
-		zap.S().Warnf("FileChunkGet stream err.%v", err)
+		zap.S().Errorf("FileChunkGet stream err.%v", err)
 		return util.ErrorProxyTimeout(c)
 	}
 	return nil
