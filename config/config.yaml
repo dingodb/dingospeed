@@ -24,7 +24,7 @@ scheduler:
     discovery:
         instanceId: xn-zl
         host: 127.0.0.1
-        port: 8091
+        port: 8090
         heartbeatPeriod: 5          # 心跳周期，单位秒
     publicDomain: http://hfmirror.mas.zetyun.cn:8082
 

@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -59,7 +60,16 @@ func (a *App) Stop() (err error) {
 	if a.cancel != nil {
 		a.cancel()
 	}
-	return err
+	time.Sleep(5 * time.Second)
+	ctx, cancel := context.WithTimeout(a.ctx, a.opts.stopTimeout)
+	defer cancel()
+	for _, srv := range a.opts.servers {
+		srv := srv
+		if err = srv.Stop(ctx); err != nil {
+			zap.S().Errorf("app stop err.%v", err)
+		}
+	}
+	return nil
 }
 
 func (a *App) Run() error {
@@ -68,12 +78,6 @@ func (a *App) Run() error {
 	wg := sync.WaitGroup{}
 	for _, srv := range a.opts.servers {
 		srv := srv
-		eg.Go(func() error {
-			<-ctx.Done() // wait for stop signal
-			stopCtx, cancel := context.WithTimeout(NewContext(a.opts.ctx, a), a.opts.stopTimeout)
-			defer cancel()
-			return srv.Stop(stopCtx)
-		})
 		wg.Add(1)
 		eg.Go(func() error {
 			wg.Done() // here is to ensure server start has begun running before register, so defer is not needed

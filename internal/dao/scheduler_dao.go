@@ -64,7 +64,7 @@ func (s *SchedulerDao) ReportFileProcess(request *manager.FileProcessRequest) er
 	defer cancel()
 	_, err := s.Client.ReportFileProcess(ctx, request)
 	if err != nil {
-		zap.S().Errorf("ReportFileProcess fail.%v", ctx)
+		zap.S().Errorf("ReportFileProcess fail.%v", err)
 		return err
 	}
 	return nil
@@ -75,7 +75,7 @@ func (s *SchedulerDao) DeleteByEtagsAndFields(request *manager.DeleteByEtagsAndF
 	defer cancel()
 	_, err := s.Client.DeleteByEtagsAndFields(ctx, request)
 	if err != nil {
-		zap.S().Errorf("DeleteByEtagsAndFields fail.%v", ctx)
+		zap.S().Errorf("DeleteByEtagsAndFields fail.%v", err)
 		return
 	}
 }
@@ -85,19 +85,19 @@ func (s *SchedulerDao) CreateCacheJob(request *manager.CreateCacheJobReq) (*mana
 	defer cancel()
 	resp, err := s.Client.CreateCacheJob(ctx, request)
 	if err != nil {
-		zap.S().Errorf("CreateCacheJob fail.%v", ctx)
+		zap.S().Errorf("CreateCacheJob fail.%v", err)
 		return nil, err
 	}
 	return resp, nil
 }
 
 func (s *SchedulerDao) UpdateCacheJobStatus(request *manager.UpdateCacheJobStatusReq) {
-	zap.S().Infof("update status cacheJobId:%d,status:%d, %s", request.Id, request.Status, request.ErrorMsg)
+	zap.S().Infof("update status cacheJobId:%d, status:%d, %s", request.Id, request.Status, request.ErrorMsg)
 	ctx, cancel := context.WithTimeout(context.Background(), consts.RpcRequestTimeout)
 	defer cancel()
 	_, err := s.Client.UpdateCacheJobStatus(ctx, request)
 	if err != nil {
-		zap.S().Errorf("UpdateCacheJobStatus fail.%v", ctx)
+		zap.S().Errorf("UpdateCacheJobStatus fail.%v", err)
 		return
 	}
 }
@@ -119,7 +119,7 @@ func (s *SchedulerDao) UpdateRepositoryMountStatus(request *manager.UpdateReposi
 	defer cancel()
 	_, err := s.Client.UpdateRepositoryMountStatus(ctx, request)
 	if err != nil {
-		zap.S().Errorf("UpdateCacheJobStatus fail.%v", ctx)
+		zap.S().Errorf("UpdateCacheJobStatus fail.%v", err)
 		return
 	}
 }

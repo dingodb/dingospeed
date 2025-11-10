@@ -76,7 +76,6 @@ func (s *SchedulerService) ReportFileProcess() {
 				data.WriteLocalProcessChan(processParam) // write local
 			}
 		case <-s.Ctx.Done():
-			zap.S().Warnf("ReportFileProcess stop.")
 			return
 		}
 	}
@@ -94,5 +93,4 @@ func runModeChange(mode string) {
 			config.SysConfig.SetSchedulerModel(consts.SchedulerModeCluster)
 		}
 	}
-
 }

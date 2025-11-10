@@ -12,6 +12,7 @@ import (
 	"dingospeed/pkg/consts"
 
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 type CacheTask struct {
@@ -43,7 +44,7 @@ func (p *PreheatCacheTask) DoTask() {
 	orgRepo := fmt.Sprintf("%s/%s", p.Job.Org, p.Job.Repo)
 	err := p.preheatProcess(orgRepo)
 	if err != nil {
-		zap.S().Errorf("999999999999999999999,%s", err.Error())
+		zap.S().Errorf("preheatProcess,%s", err.Error())
 		p.SchedulerDao.ExecUpdateCacheJobStatus(p.TaskNo, consts.StatusCacheJobBreak, p.Job.InstanceId, p.Job.Org, p.Job.Repo, err.Error())
 		return
 	}
@@ -78,6 +79,7 @@ func (p *PreheatCacheTask) preheatProcess(orgRepo string) error {
 		if offset < pathInfo.Size {
 			limit <- struct{}{}
 			if err = p.startPreheat(orgRepo, fileName, p.Sha.Sha, etag, p.Authorization, pathInfo.Size, offset); err != nil {
+				zap.S().Errorf("startPreheat err.%v", err)
 				return err
 			}
 			<-limit
@@ -124,31 +126,26 @@ func (p *PreheatCacheTask) startPreheat(orgRepo, fileName, commit, etag, authori
 	taskParam.ResponseChan = responseChan
 	taskParam.Cancel = cancel
 	wg.Add(2)
-	go func() {
-		defer func() {
-			wg.Done()
-		}()
-		p.result(ctx, responseChan)
-	}()
-	go func() {
-		defer func() {
-			wg.Done()
-		}()
+	eg, ctx := errgroup.WithContext(ctx)
+	eg.Go(func() error {
+		return p.result(ctx, responseChan)
+	})
+	eg.Go(func() error {
 		p.DownloaderDao.FileDownload(offset, fileSize, false, taskParam)
-	}()
-	wg.Wait()
-	return nil
+		return nil
+	})
+	return eg.Wait()
 }
 
-func (p *PreheatCacheTask) result(ctx context.Context, responseChan chan []byte) {
+func (p *PreheatCacheTask) result(ctx context.Context, responseChan chan []byte) error {
 	for {
 		select {
 		case _, ok := <-responseChan:
 			if !ok {
-				return
+				return nil
 			}
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		}
 	}
 }

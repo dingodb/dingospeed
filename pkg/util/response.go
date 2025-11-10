@@ -37,7 +37,7 @@ func ErrorRepoNotFound(ctx echo.Context) error {
 
 func ErrorRequestParam(ctx echo.Context) error {
 	content := map[string]string{
-		"error": "Request param error",
+		"error": "请求参数错误",
 	}
 	headers := map[string]string{
 		"x-error-code":    "Request param error",

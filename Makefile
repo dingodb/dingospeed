@@ -90,7 +90,7 @@ license:
 .PHONY: docker
 docker:
 	make macbuild;
-	docker build -f docker/Dockerfile-alpine-simple -t harbor.zetyun.cn/dingofs/dingospeed:$(CURRENTTIME) .
+	docker buildx build --platform linux/amd64 -f docker/Dockerfile-alpine-simple -t harbor.zetyun.cn/dingofs/dingospeed:$(CURRENTTIME) .
 	docker push harbor.zetyun.cn/dingofs/dingospeed:$(CURRENTTIME)
 
 .PHONY: all
