@@ -8,7 +8,7 @@
 .idea/**/usage.statistics.xml
 .idea/**/dictionaries
 .idea/**/shelf
-
+config/ssl/*
 # AWS User-specific
 .idea/**/aws.xml
 
