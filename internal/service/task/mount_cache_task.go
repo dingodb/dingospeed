@@ -55,13 +55,13 @@ func (m *MountCacheTask) DoTask() {
 		<-m.Ctx.Done()
 		if cmd.Process != nil {
 			if err = cmd.Process.Kill(); err != nil {
-				zap.S().Warnf("终止子进程失败 (pid: %d): %v", cmd.Process.Pid, err)
+				zap.S().Errorf("终止子进程失败 (pid: %d): %v", cmd.Process.Pid, err)
 			} else {
 				zap.S().Infof("已通过 context 取消终止子进程 (pid: %d)", cmd.Process.Pid)
 			}
 		}
 	}()
-	if err := cmd.Run(); err != nil {
+	if err = cmd.Run(); err != nil {
 		zap.S().Errorf("下载失败（错误摘要）：%v", err)
 		m.SchedulerDao.ExecUpdateRepositoryMountStatus(m.TaskNo, consts.StatusCacheJobBreak, err.Error())
 	} else {

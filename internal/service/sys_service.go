@@ -47,7 +47,7 @@ func NewSysService(schedulerDao *dao.SchedulerDao) *SysService {
 	return sysSvc
 }
 
-func (s SysService) MemoryUsed() {
+func (s *SysService) MemoryUsed() {
 	ticker := time.NewTicker(config.SysConfig.GetCollectTimePeriod())
 	defer ticker.Stop()
 	for {
@@ -197,7 +197,7 @@ func (s *SysService) deleteRecordByFilePath(baseRepoPath, filePath, instanceID s
 	s.schedulerDao.DeleteByEtagsAndFields(req)
 }
 
-func (s SysService) cycleTestProxyConnectivity() {
+func (s *SysService) cycleTestProxyConnectivity() {
 	ticker := time.NewTicker(config.SysConfig.GetDynamicProxyTimePeriod())
 	defer ticker.Stop()
 	for {
