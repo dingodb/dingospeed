@@ -250,7 +250,7 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 				for {
 					select {
 					case <-r.Context.Done():
-						zap.S().Warnf("getFileRangeFromRemote Context.Done err :%s", r.FileName)
+						zap.S().Warnf("getFileRangeFromRemote Context.Done.%s/%s", r.OrgRepo, r.FileName)
 						return nil
 					default:
 						chunk := make([]byte, config.SysConfig.Download.RespChunkSize)
@@ -271,7 +271,7 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 							if err == io.EOF {
 								return nil
 							}
-							zap.S().Errorf("file:%s, taskNo:%d, statusCode:%d, req remote err.%v", r.FileName, r.TaskNo, resp.StatusCode, err)
+							zap.S().Errorf("file:%s/%s, taskNo:%d, statusCode:%d, chunkByteLen:%d, contentLengthStr:%s, %v", r.OrgRepo, r.FileName, r.TaskNo, resp.StatusCode, chunkByteLen, contentLengthStr, err)
 							if chunkByteLen > 0 {
 								headers["range"] = fmt.Sprintf("bytes=%d-%d", startPos+int64(chunkByteLen), endPos-1)
 							}
@@ -316,11 +316,11 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 			contentLength = chunkByteLen
 		}
 		if endPos-startPos != int64(contentLength) {
-			return fmt.Errorf("file:%s, taskNo:%d,The content of the response is incomplete. Expected-%d. Accepted-%d", r.FileName, r.TaskNo, endPos-startPos, contentLength)
+			return fmt.Errorf("file:%s/%s, taskNo:%d,The content of the response is incomplete. Expected-%d. Accepted-%d", r.OrgRepo, r.FileName, r.TaskNo, endPos-startPos, contentLength)
 		}
 	}
 	if endPos-startPos != int64(chunkByteLen) {
-		return fmt.Errorf("file:%s, taskNo:%d,The block is incomplete. Expected-%d. Accepted-%d", r.FileName, r.TaskNo, endPos-startPos, chunkByteLen)
+		return fmt.Errorf("file:%s/%s, taskNo:%d,The block is incomplete. Expected-%d. Accepted-%d", r.OrgRepo, r.FileName, r.TaskNo, endPos-startPos, chunkByteLen)
 	}
 	return err
 }

@@ -74,28 +74,6 @@ func (l *LocalProcessService) writeLocalFile() {
 	}
 }
 
-func writeToDailyFile(fileSuffix, data string) error {
-	now := time.Now()
-	dateStr := now.Format("2006010201")
-	filename := fmt.Sprintf("%s-%s.log", dateStr, fileSuffix)
-	processDir := filepath.Join(config.SysConfig.Server.Repos, "daily_process")
-	if err := os.MkdirAll(processDir, 0755); err != nil {
-		return fmt.Errorf("创建目录失败: %v", err)
-	}
-	filePath := filepath.Join(processDir, filename)
-	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		return fmt.Errorf("打开文件失败: %v", err)
-	}
-	defer file.Close()
-	timestamp := now.Format("15:04:05")
-	content := fmt.Sprintf("[%s] %s\n", timestamp, data)
-	if _, err := file.WriteString(content); err != nil {
-		return fmt.Errorf("写入文件失败: %v", err)
-	}
-	return nil
-}
-
 func (l *LocalProcessService) startFileProcessSync() {
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
@@ -261,4 +239,26 @@ func listFilesBeforeLastHour(dirPath string) ([]string, error) {
 		return nil, err
 	}
 	return result, nil
+}
+
+func writeToDailyFile(fileSuffix, data string) error {
+	now := time.Now()
+	dateStr := now.Format("2006010201")
+	filename := fmt.Sprintf("%s-%s.log", dateStr, fileSuffix)
+	processDir := filepath.Join(config.SysConfig.Server.Repos, "daily_process")
+	if err := os.MkdirAll(processDir, 0755); err != nil {
+		return fmt.Errorf("创建目录失败: %v", err)
+	}
+	filePath := filepath.Join(processDir, filename)
+	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return fmt.Errorf("打开文件失败: %v", err)
+	}
+	defer file.Close()
+	timestamp := now.Format("15:04:05")
+	content := fmt.Sprintf("[%s] %s\n", timestamp, data)
+	if _, err := file.WriteString(content); err != nil {
+		return fmt.Errorf("写入文件失败: %v", err)
+	}
+	return nil
 }

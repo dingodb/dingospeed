@@ -44,7 +44,6 @@ func (p *PreheatCacheTask) DoTask() {
 	orgRepo := fmt.Sprintf("%s/%s", p.Job.Org, p.Job.Repo)
 	err := p.preheatProcess(orgRepo)
 	if err != nil {
-		zap.S().Errorf("preheatProcess,%s", err.Error())
 		p.SchedulerDao.ExecUpdateCacheJobStatus(p.TaskNo, consts.StatusCacheJobBreak, p.Job.InstanceId, p.Job.Org, p.Job.Repo, err.Error())
 		return
 	}
@@ -92,10 +91,10 @@ func (p *PreheatCacheTask) startPreheat(orgRepo, fileName, commit, etag, authori
 	var wg sync.WaitGroup
 	bgCtx := context.WithValue(p.Ctx, consts.PromSource, "localhost")
 	responseChan := make(chan []byte, config.SysConfig.Download.RespChanSize)
-	ctx, cancel := context.WithCancel(bgCtx)
-	defer func() {
-		cancel()
-	}()
+	// ctx, cancel := context.WithCancel(bgCtx)
+	// defer func() {
+	// 	cancel()
+	// }()
 	var hfUri string
 	if p.Job.Datatype == "models" {
 		hfUri = fmt.Sprintf("/%s/resolve/%s/%s", orgRepo, commit, fileName)
@@ -122,11 +121,11 @@ func (p *PreheatCacheTask) startPreheat(orgRepo, fileName, commit, etag, authori
 		Etag:          etag,
 		Preheat:       true,
 	}
-	taskParam.Context = ctx
+	taskParam.Context = bgCtx
 	taskParam.ResponseChan = responseChan
-	taskParam.Cancel = cancel
+	taskParam.Cancel = p.CancelFunc
 	wg.Add(2)
-	eg, ctx := errgroup.WithContext(ctx)
+	eg, ctx := errgroup.WithContext(bgCtx)
 	eg.Go(func() error {
 		return p.result(ctx, responseChan)
 	})
