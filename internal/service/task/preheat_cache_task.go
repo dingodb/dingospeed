@@ -78,7 +78,7 @@ func (p *PreheatCacheTask) preheatProcess(orgRepo string) error {
 		if offset < pathInfo.Size {
 			limit <- struct{}{}
 			if err = p.startPreheat(orgRepo, fileName, p.Sha.Sha, etag, p.Authorization, pathInfo.Size, offset); err != nil {
-				zap.S().Errorf("startPreheat err.%v", err)
+				zap.S().Errorf("startPreheat err, %s/%s %v", orgRepo, fileName, err)
 				return err
 			}
 			<-limit

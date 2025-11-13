@@ -18,6 +18,10 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
+
+	"dingospeed/pkg/consts"
+	myerr "dingospeed/pkg/error"
 )
 
 // Task 定义任务类型
@@ -89,6 +93,8 @@ func (p *Pool) Submit(ctx context.Context, task Task) error {
 			p.taskMap.Set(task.GetTaskNo(), task)
 		}
 		return nil
+	case <-time.After(3 * time.Second):
+		return myerr.New(consts.TaskMoreErrMsg)
 	case <-ctx.Done():
 		return errors.New("submit task fail")
 	}

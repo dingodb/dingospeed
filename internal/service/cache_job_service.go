@@ -79,7 +79,8 @@ func (p *CacheJobService) CreateCacheJob(c echo.Context, jobReq *query.CreateCac
 			Sha:           &sha,
 			Authorization: authorization,
 		}
-		if err := p.cachePool.Submit(ctx, task); err != nil {
+		if err = p.cachePool.Submit(ctx, task); err != nil {
+			p.schedulerDao.ExecUpdateCacheJobStatus(int(cacheJob.Id), consts.StatusCacheJobBreak, jobReq.InstanceId, "", "", consts.TaskMoreErrMsg)
 			return 0, err
 		}
 	} else if jobReq.Type == consts.CacheTypeMount {
@@ -88,6 +89,7 @@ func (p *CacheJobService) CreateCacheJob(c echo.Context, jobReq *query.CreateCac
 			CacheTask: cacheTask,
 		}
 		if err := p.cachePool.Submit(ctx, task); err != nil {
+			p.schedulerDao.ExecUpdateRepositoryMountStatus(cacheTask.TaskNo, consts.StatusCacheJobBreak, consts.TaskMoreErrMsg)
 			return 0, err
 		}
 	} else {

@@ -82,7 +82,8 @@ const (
 
 	KeyProcessId        = "processId"
 	KeyMasterInstanceId = "masterInstanceId"
+)
 
-	TaskTypeCache  = "cache"
-	TaskTypeRemote = "remote"
+const (
+	TaskMoreErrMsg = "当前缓存任务较多导致启动失败，请稍后再启动。"
 )

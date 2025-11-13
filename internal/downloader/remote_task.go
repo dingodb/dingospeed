@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"sync"
 
 	"dingospeed/internal/data"
@@ -182,7 +181,8 @@ func (r *RemoteFileTask) DoTask() {
 		}
 	}
 	if curPos != rangeEndPos {
-		zap.S().Warnf("file:%s, taskNo:%d, remote range (%d) is different from sent size (%d).", r.FileName, r.TaskNo, rangeEndPos-rangeStartPos, curPos-rangeStartPos)
+		zap.S().Errorf("file:%s/%s, taskNo:%d, remote range (%d) is different from sent size (%d).", r.OrgRepo, r.FileName, r.TaskNo, rangeEndPos-rangeStartPos, curPos-rangeStartPos)
+		return
 	}
 	zap.S().Infof("end remote dotask:%s/%s, taskNo:%d, size:%d, domain:%s, startPos:%d, endPos:%d", r.OrgRepo, r.FileName, r.TaskNo, r.TaskSize, r.Domain, rangeStartPos, rangeEndPos)
 }
@@ -235,22 +235,20 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 	}
 	headers["range"] = fmt.Sprintf("bytes=%d-%d", startPos, endPos-1)
 	var (
-		rawData                           []byte
-		chunkByteLen                      = 0
-		attempts                          = 2
-		contentEncoding, contentLengthStr = "", ""
-		err                               error
-		n                                 int
+		rawData         []byte
+		chunkByteLen    = 0
+		attempts        = 2
+		contentEncoding = ""
+		err             error
+		n               int
 	)
 	for i := 0; i < attempts; {
 		if _, err = util.RetryRequest(func() (*common.Response, error) {
 			err = util.GetStream(r.Domain, r.Uri, headers, func(resp *http.Response) error {
 				contentEncoding = resp.Header.Get("content-encoding")
-				contentLengthStr = resp.Header.Get("content-length")
 				for {
 					select {
 					case <-r.Context.Done():
-						zap.S().Warnf("getFileRangeFromRemote Context.Done.%s/%s", r.OrgRepo, r.FileName)
 						return nil
 					default:
 						chunk := make([]byte, config.SysConfig.Download.RespChunkSize)
@@ -271,7 +269,7 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 							if err == io.EOF {
 								return nil
 							}
-							zap.S().Errorf("file:%s/%s, taskNo:%d, statusCode:%d, chunkByteLen:%d, contentLengthStr:%s, %v", r.OrgRepo, r.FileName, r.TaskNo, resp.StatusCode, chunkByteLen, contentLengthStr, err)
+							zap.S().Errorf("file:%s/%s, taskNo:%d, statusCode:%d, chunkByteLen:%d, %v", r.OrgRepo, r.FileName, r.TaskNo, resp.StatusCode, chunkByteLen, err)
 							if chunkByteLen > 0 {
 								headers["range"] = fmt.Sprintf("bytes=%d-%d", startPos+int64(chunkByteLen), endPos-1)
 							}
@@ -282,9 +280,11 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 			})
 			return nil, err
 		}); err != nil {
-			zap.S().Warnf("GetStream err.%v", err)
+			// 若从内部其他节点获取数据出现异常，则切换到官网获取。
 			if config.SysConfig.IsCluster() && util.IsInnerDomain(r.Domain) {
-				r.Domain = config.SysConfig.GetHFURLBase()
+				officialDomain := config.SysConfig.GetHFURLBase()
+				zap.S().Infof("Request error, access address changed from %s to %s", r.Domain, officialDomain)
+				r.Domain = officialDomain
 				if chunkByteLen > 0 {
 					headers["range"] = fmt.Sprintf("bytes=%d-%d", startPos+int64(chunkByteLen), endPos-1)
 				}
@@ -293,8 +293,11 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 				break
 			}
 		} else {
-			break
+			break // 访问无异常直接退出
 		}
+	}
+	if err != nil {
+		return fmt.Errorf("GetStream err.%v", err)
 	}
 	if contentEncoding != "" {
 		// 这里需要实现解压缩逻辑
@@ -304,23 +307,11 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 			return err
 		}
 		contentChan <- finalData      // 返回解码后的数据流
-		chunkByteLen = len(finalData) // 将解码后的长度复制为原理的chunkBytes
+		chunkByteLen = len(finalData) // 将解码后的长度复制为原始的chunkByteLen
 	}
-	if contentLengthStr != "" {
-		contentLength, err := strconv.Atoi(contentLengthStr) // 原始数据长度
-		if err != nil {
-			zap.S().Errorf("contentLengthStr conv err.%s", contentLengthStr)
-			return err
-		}
-		if contentEncoding != "" {
-			contentLength = chunkByteLen
-		}
-		if endPos-startPos != int64(contentLength) {
-			return fmt.Errorf("file:%s/%s, taskNo:%d,The content of the response is incomplete. Expected-%d. Accepted-%d", r.OrgRepo, r.FileName, r.TaskNo, endPos-startPos, contentLength)
-		}
+	expectedLength := endPos - startPos
+	if expectedLength != int64(chunkByteLen) {
+		return fmt.Errorf("file:%s/%s, taskNo:%d,The block is incomplete. Expected-%d. Accepted-%d", r.OrgRepo, r.FileName, r.TaskNo, expectedLength, chunkByteLen)
 	}
-	if endPos-startPos != int64(chunkByteLen) {
-		return fmt.Errorf("file:%s/%s, taskNo:%d,The block is incomplete. Expected-%d. Accepted-%d", r.OrgRepo, r.FileName, r.TaskNo, endPos-startPos, chunkByteLen)
-	}
-	return err
+	return nil
 }
