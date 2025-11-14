@@ -55,8 +55,9 @@ func NewRemoteFileTask(taskNo int, rangeStartPos int64, rangeEndPos int64) *Remo
 // 分段下载
 func (r *RemoteFileTask) DoTask() {
 	var (
-		curBlock int64
-		wg       sync.WaitGroup
+		curBlock    int64
+		wg          sync.WaitGroup
+		streamCache = bytes.Buffer{}
 	)
 	contentChan := make(chan []byte, consts.RespChanSize)
 	rangeStartPos, rangeEndPos := r.RangeStartPos, r.RangeEndPos
@@ -72,7 +73,6 @@ func (r *RemoteFileTask) DoTask() {
 		}
 	}()
 	curPos, lastReportPos := rangeStartPos, rangeStartPos
-	streamCache := bytes.Buffer{}
 	lastBlock, lastBlockStartPos, lastBlockEndPos := GetBlockInfo(curPos, r.DingFile.GetBlockSize(), r.DingFile.GetFileSize()) // 块编号，开始位置，结束位置
 	blockNumber := r.DingFile.getBlockNumber()
 	go func() {
@@ -229,11 +229,6 @@ func (r *RemoteFileTask) GetResponseChan() chan []byte {
 }
 
 func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentChan chan<- []byte) error {
-	headers := make(map[string]string)
-	if r.Authorization != "" {
-		headers["authorization"] = r.Authorization
-	}
-	headers["range"] = fmt.Sprintf("bytes=%d-%d", startPos, endPos-1)
 	var (
 		rawData         []byte
 		chunkByteLen    = 0
@@ -241,7 +236,12 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 		contentEncoding = ""
 		err             error
 		n               int
+		headers         = make(map[string]string)
 	)
+	if r.Authorization != "" {
+		headers["authorization"] = r.Authorization
+	}
+	headers["range"] = fmt.Sprintf("bytes=%d-%d", startPos, endPos-1)
 	for i := 0; i < attempts; {
 		if _, err = util.RetryRequest(func() (*common.Response, error) {
 			err = util.GetStream(r.Domain, r.Uri, headers, func(resp *http.Response) error {
@@ -283,7 +283,7 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 			// 若从内部其他节点获取数据出现异常，则切换到官网获取。
 			if config.SysConfig.IsCluster() && util.IsInnerDomain(r.Domain) {
 				officialDomain := config.SysConfig.GetHFURLBase()
-				zap.S().Infof("Request error, access address changed from %s to %s", r.Domain, officialDomain)
+				zap.S().Infof("request fail %s/%s req from %s to %s", r.OrgRepo, r.FileName, r.Domain, officialDomain)
 				r.Domain = officialDomain
 				if chunkByteLen > 0 {
 					headers["range"] = fmt.Sprintf("bytes=%d-%d", startPos+int64(chunkByteLen), endPos-1)

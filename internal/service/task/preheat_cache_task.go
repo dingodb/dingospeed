@@ -74,6 +74,9 @@ func (p *PreheatCacheTask) preheatProcess(orgRepo string) error {
 		} else {
 			etag = pathInfo.Oid
 		}
+		if pathInfo.Size == 0 {
+			continue
+		}
 		offset := p.FileDao.GetFileOffset(p.Job.Datatype, p.Job.Org, p.Job.Repo, etag, pathInfo.Size)
 		if offset < pathInfo.Size {
 			limit <- struct{}{}
@@ -91,10 +94,6 @@ func (p *PreheatCacheTask) startPreheat(orgRepo, fileName, commit, etag, authori
 	var wg sync.WaitGroup
 	bgCtx := context.WithValue(p.Ctx, consts.PromSource, "localhost")
 	responseChan := make(chan []byte, config.SysConfig.Download.RespChanSize)
-	// ctx, cancel := context.WithCancel(bgCtx)
-	// defer func() {
-	// 	cancel()
-	// }()
 	var hfUri string
 	if p.Job.Datatype == "models" {
 		hfUri = fmt.Sprintf("/%s/resolve/%s/%s", orgRepo, commit, fileName)

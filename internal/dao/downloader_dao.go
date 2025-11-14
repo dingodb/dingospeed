@@ -92,16 +92,13 @@ func (d *DownloaderDao) constructTask(startPos, endPos int64, isInnerRequest boo
 		existPosition bool
 		curPos        int64
 	)
+	// 小于这个值的文件将不参与调度
 	if taskParam.FileSize <= config.SysConfig.GetMinimumFileSize() {
 		goto localTask
 	}
+	// 分析下载类型是否全部存在，若文件不完整，返回当前已缓存的最大偏移量
 	existPosition, curPos = analysisFilePosition(taskParam.DingFile, startPos, endPos)
-	// if config.SysConfig.IsCluster() && existPosition {
-	// 	// 同步check本地仓库和数据库的偏移量，若数据库滞后，则需更新该数据。
-	// 	if err := d.SyncFileProcess(taskParam.DataType, taskParam.OrgRepo, taskParam.FileName, taskParam.Etag, curPos, endPos, taskParam.FileSize); err != nil {
-	// 		zap.S().Errorf("SyncFileProcess err.%v", err)
-	// 	}
-	// }
+	// isInnerRequest为true，即内部请求，是已经被调度过后，设置为内部域名的请求，这种请求将不会再次参与调度，直接做下载即可。
 	if !isInnerRequest && config.SysConfig.IsCluster() && !existPosition {
 		if response, err := d.getRequestDomainScheduler(taskParam.DataType, taskParam.OrgRepo, taskParam.FileName, taskParam.Etag, curPos, endPos, taskParam.FileSize); err != nil {
 			zap.S().Errorf("getRequestDomainScheduler err.%v", err)
@@ -111,7 +108,7 @@ func (d *DownloaderDao) constructTask(startPos, endPos int64, isInnerRequest boo
 			ctx = context.WithValue(ctx, consts.KeyMasterInstanceId, response.MasterInstanceId)
 			taskParam.Context = ctx
 			if response.SchedulerType == consts.SchedulerYes {
-				if curPos != 0 {
+				if curPos > 0 && startPos < curPos {
 					tasks = getContiguousRanges(startPos, curPos, taskParam)
 				}
 				speedDomain := fmt.Sprintf("http://%s:%d", response.Host, response.Port) // 此刻向该节点发起远程下载请求
@@ -197,10 +194,10 @@ func doTask(ctx context.Context, tasks []common.DownloadTask) {
 
 func analysisFilePosition(dingFile *downloader.DingCache, startPos, endPos int64) (bool, int64) {
 	if startPos == 0 && endPos == 0 {
-		return true, endPos
+		return true, startPos
 	}
 	if startPos < 0 || endPos <= startPos || endPos > dingFile.GetFileSize() {
-		zap.S().Errorf("Invalid startPos or endPos: path=%s, startPos=%d, endPos=%d", dingFile.GetPath(), startPos, endPos)
+		zap.S().Errorf("Invalid startPos/endPos: path=%s, startPos=%d, endPos=%d", dingFile.GetPath(), startPos, endPos)
 		return false, startPos
 	}
 	startBlock := startPos / dingFile.GetBlockSize()
@@ -209,11 +206,12 @@ func analysisFilePosition(dingFile *downloader.DingCache, startPos, endPos int64
 		blockExists, err := dingFile.HasBlock(curBlock)
 		if err != nil {
 			zap.S().Errorf("Failed to check block existence: %v", err)
-			curPos := curBlock * dingFile.GetBlockSize()
-			return false, curPos
 		}
 		if !blockExists {
 			curPos := curBlock * dingFile.GetBlockSize()
+			if curPos < startPos { // 若startPos就不存在，将直接返回该位置。
+				curPos = startPos
+			}
 			return false, curPos
 		}
 	}
@@ -229,7 +227,7 @@ func getContiguousRanges(startPos, endPos int64, taskParam *downloader.TaskParam
 		return
 	}
 	if startPos < 0 || endPos <= startPos || endPos > dingFile.GetFileSize() {
-		zap.S().Errorf("Invalid startPos or endPos: startPos=%d, endPos=%d", startPos, endPos)
+		zap.S().Errorf("Invalid pos path=%s, startPos=%d, endPos=%d", dingFile.GetPath(), startPos, endPos)
 		return
 	}
 	startBlock := startPos / dingFile.GetBlockSize()

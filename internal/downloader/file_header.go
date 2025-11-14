@@ -21,7 +21,6 @@ type DingCacheHeader struct {
 	BlockMask     *Bitset
 }
 
-// NewDingCacheHeader 创建一个新的 DingCacheHeader 对象
 func NewDingCacheHeader(version, blockSize, fileSize uint64) *DingCacheHeader {
 	blockNumber := (fileSize + blockSize - 1) / blockSize
 	blockMask := NewBitset(DEFAULT_BLOCK_MASK_MAX)
