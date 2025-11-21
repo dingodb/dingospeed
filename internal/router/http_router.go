@@ -90,4 +90,5 @@ func (r *HttpRouter) routerForCacheJob() { // alayanew
 	r.echo.POST("/api/cacheJob/create", r.cacheJobHandler.CreateCacheJobHandler)
 	r.echo.POST("/api/cacheJob/stop", r.cacheJobHandler.StopCacheJobHandler)
 	r.echo.POST("/api/cacheJob/resume", r.cacheJobHandler.ResumeCacheJobHandler)
+	r.echo.POST("/api/cacheJob/realtime", r.cacheJobHandler.RealtimeCacheJobHandler)
 }

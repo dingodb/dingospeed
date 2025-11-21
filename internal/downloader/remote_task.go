@@ -88,15 +88,12 @@ func (r *RemoteFileTask) DoTask() {
 					if !ok {
 						return
 					}
-					// 先写到缓存
-					if !r.Preheat {
-						select {
-						case r.Queue <- chunk:
-						case <-r.Context.Done():
-							zap.S().Warnf("send chunk err:%s/%s, task %d, ctx done, DoTask exit.", r.OrgRepo, r.FileName, r.TaskNo)
-							data.ReportFileProcess(r.Context, r.constructFileProcessParam(lastReportPos, lastBlockEndPos, consts.StatusDownloadBreak))
-							return
-						}
+					select {
+					case r.Queue <- chunk:
+					case <-r.Context.Done():
+						zap.S().Warnf("send chunk err:%s/%s, task %d, ctx done, DoTask exit.", r.OrgRepo, r.FileName, r.TaskNo)
+						data.ReportFileProcess(r.Context, r.constructFileProcessParam(lastReportPos, lastBlockEndPos, consts.StatusDownloadBreak))
+						return
 					}
 					chunkLen := int64(len(chunk))
 					curPos += chunkLen

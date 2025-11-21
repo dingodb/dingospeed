@@ -31,6 +31,7 @@ import (
 	"dingospeed/pkg/util"
 
 	"github.com/bytedance/sonic"
+	"github.com/robfig/cron/v3"
 	"go.uber.org/zap"
 )
 
@@ -46,7 +47,9 @@ func NewLocalProcessService(schedulerDao *dao.SchedulerDao) *LocalProcessService
 func (l *LocalProcessService) Run() {
 	if config.SysConfig.GetOriginSchedulerModel() == consts.SchedulerModeCluster {
 		go l.writeLocalFile()
-		go l.startFileProcessSync()
+		if config.SysConfig.Online() {
+			go l.startFileProcessSync()
+		}
 	}
 }
 
@@ -75,18 +78,22 @@ func (l *LocalProcessService) writeLocalFile() {
 }
 
 func (l *LocalProcessService) startFileProcessSync() {
-	ticker := time.NewTicker(time.Hour)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			err := l.FileProcessSync()
-			if err != nil {
-				break
-			}
-		case <-l.Ctx.Done():
-			return
+	c := cron.New(cron.WithSeconds())
+	_, err := c.AddFunc("0 0 * * * ?", func() {
+		err := l.FileProcessSync()
+		if err != nil {
+			zap.S().Errorf("FileProcessSync err.%v", err)
 		}
+	})
+	if err != nil {
+		zap.S().Errorf("添加PersistRepo任务失败: %v", err)
+		return
+	}
+	c.Start()
+	defer c.Stop()
+	select {
+	case <-l.Ctx.Done():
+		return
 	}
 }
 
@@ -230,7 +237,7 @@ func listFilesBeforeLastHour(dirPath string) ([]string, error) {
 			// 忽略格式不符合的文件（非目标命名规则）
 			return nil
 		}
-		if fileTime.After(threshold) {
+		if fileTime.Before(threshold) {
 			result = append(result, path) // 记录完整路径
 		}
 		return nil

@@ -78,9 +78,10 @@ func (p *CacheJobService) CreateCacheJob(c echo.Context, jobReq *query.CreateCac
 			DownloaderDao: p.downloaderDao,
 			Sha:           &sha,
 			Authorization: authorization,
+			UsedStorage:   uint64(sha.UsedStorage),
 		}
 		if err = p.cachePool.Submit(ctx, task); err != nil {
-			p.schedulerDao.ExecUpdateCacheJobStatus(int(cacheJob.Id), consts.StatusCacheJobBreak, jobReq.InstanceId, "", "", consts.TaskMoreErrMsg)
+			p.schedulerDao.ExecUpdateCacheJobStatus(int(cacheJob.Id), consts.StatusCacheJobBreak, jobReq.InstanceId, "", "", consts.TaskMoreErrMsg, 0)
 			return 0, err
 		}
 	} else if jobReq.Type == consts.CacheTypeMount {
@@ -104,7 +105,7 @@ func (p *CacheJobService) StopCacheJob(jobStatusReq *query.JobStatusReq) error {
 		cancelFun := task.GetCancelFun()
 		cancelFun()
 	} else {
-		p.schedulerDao.ExecUpdateCacheJobStatus(int(jobStatusReq.Id), consts.StatusCacheJobBreak, jobStatusReq.InstanceId, "", "", "speed未注册该任务，下载已中断。")
+		p.schedulerDao.ExecUpdateCacheJobStatus(int(jobStatusReq.Id), consts.StatusCacheJobBreak, jobStatusReq.InstanceId, "", "", "speed未注册该任务，下载已中断。", 0)
 	}
 	return nil
 }
@@ -138,17 +139,34 @@ func (p *CacheJobService) ResumeCacheJob(c echo.Context, resumeCacheJobReq *quer
 		}
 		// 将状态重置为进行中
 		p.schedulerDao.ExecUpdateCacheJobStatus(int(resumeCacheJobReq.Id), consts.StatusCacheJobIng,
-			resumeCacheJobReq.InstanceId, resumeCacheJobReq.Org, resumeCacheJobReq.Repo, "")
+			resumeCacheJobReq.InstanceId, resumeCacheJobReq.Org, resumeCacheJobReq.Repo, "", 0)
 		task = &task2.PreheatCacheTask{
 			CacheTask:     cacheTask,
 			FileDao:       p.fileDao,
 			DownloaderDao: p.downloaderDao,
 			Sha:           &sha,
 			Authorization: authorization,
+			UsedStorage:   uint64(resumeCacheJobReq.UsedStorage),
 		}
 		if err := p.cachePool.Submit(ctx, task); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (p *CacheJobService) RealtimeCacheJob(realtimeReq *query.RealtimeReq) []*query.RealtimeResp {
+	ret := make([]*query.RealtimeResp, 0)
+	for _, jobId := range realtimeReq.CacheJobIds {
+		if task, ok := p.cachePool.GetTask(int(jobId)); ok {
+			if pTask, ok := task.(*task2.PreheatCacheTask); ok {
+				ret = append(ret, &query.RealtimeResp{
+					CacheJobId:   jobId,
+					StockSpeed:   pTask.StockSpeed,
+					StockProcess: pTask.StockProcess,
+				})
+			}
+		}
+	}
+	return ret
 }

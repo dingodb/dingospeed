@@ -35,7 +35,6 @@ type TaskParam struct {
 	Uri           string
 	DataType      string
 	Etag          string
-	Preheat       bool
 	Cancel        context.CancelFunc
 }
 
@@ -82,9 +81,6 @@ func (c *CacheFileTask) DoTask() {
 }
 
 func (c *CacheFileTask) OutResult() {
-	if c.Preheat {
-		return
-	}
 	startBlock := c.RangeStartPos / c.DingFile.GetBlockSize()
 	endBlock := (c.RangeEndPos - 1) / c.DingFile.GetBlockSize()
 	curPos := c.RangeStartPos

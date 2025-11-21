@@ -128,6 +128,7 @@ message UpdateCacheJobStatusReq{
     string instanceId = 4;
     string org = 5;
     string repo = 6;
+    float process = 7;
 }
 
 message UpdateRepositoryMountStatusReq{

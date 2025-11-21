@@ -71,3 +71,14 @@ func (handler *CacheJobHandler) ResumeCacheJobHandler(c echo.Context) error {
 	}
 	return util.ResponseData(c, nil)
 }
+
+func (handler *CacheJobHandler) RealtimeCacheJobHandler(c echo.Context) error {
+	realtimeReq := new(query.RealtimeReq)
+	if err := c.Bind(realtimeReq); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "无效的 JSON 数据",
+		})
+	}
+	resp := handler.cacheJobService.RealtimeCacheJob(realtimeReq)
+	return util.ResponseData(c, resp)
+}

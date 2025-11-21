@@ -3,7 +3,10 @@ package task
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"dingospeed/internal/dao"
 	"dingospeed/internal/downloader"
@@ -37,17 +40,24 @@ type PreheatCacheTask struct {
 	Authorization string
 	FileDao       *dao.FileDao
 	DownloaderDao *dao.DownloaderDao
+	UsedStorage   uint64
+	stockLen      atomic.Uint64
+	StockSpeed    string
+	StockProcess  float32
 }
 
 func (p *PreheatCacheTask) DoTask() {
-	// 获取模型元数据
 	orgRepo := fmt.Sprintf("%s/%s", p.Job.Org, p.Job.Repo)
+	ctx, cancelFunc := context.WithCancel(p.Ctx)
+	defer cancelFunc()
+	go p.realTimeSpeed(ctx)
 	err := p.preheatProcess(orgRepo)
 	if err != nil {
-		p.SchedulerDao.ExecUpdateCacheJobStatus(p.TaskNo, consts.StatusCacheJobBreak, p.Job.InstanceId, p.Job.Org, p.Job.Repo, err.Error())
+		p.SchedulerDao.ExecUpdateCacheJobStatus(p.TaskNo, consts.StatusCacheJobBreak, p.Job.InstanceId, p.Job.Org, p.Job.Repo, err.Error(), p.StockProcess)
 		return
 	}
-	p.SchedulerDao.ExecUpdateCacheJobStatus(p.TaskNo, consts.StatusCacheJobComplete, p.Job.InstanceId, p.Job.Org, p.Job.Repo, "")
+	p.StockProcess = 100
+	p.SchedulerDao.ExecUpdateCacheJobStatus(p.TaskNo, consts.StatusCacheJobComplete, p.Job.InstanceId, p.Job.Org, p.Job.Repo, "", p.StockProcess)
 }
 
 func (p *PreheatCacheTask) preheatProcess(orgRepo string) error {
@@ -58,7 +68,7 @@ func (p *PreheatCacheTask) preheatProcess(orgRepo string) error {
 		}
 		fileName := rFile.Rfilename
 		infos, err := p.FileDao.GetPathsInfo(p.Job.Datatype, orgRepo, p.Sha.Sha,
-			p.Authorization, []string{fileName})
+			p.Authorization, []string{fileName}) // 获取模型元数据
 		if err != nil {
 			zap.S().Errorf("RemoteRequestPathsInfo err,%v", err)
 			return err
@@ -78,6 +88,9 @@ func (p *PreheatCacheTask) preheatProcess(orgRepo string) error {
 			continue
 		}
 		offset := p.FileDao.GetFileOffset(p.Job.Datatype, p.Job.Org, p.Job.Repo, etag, pathInfo.Size)
+		if offset > 0 {
+			p.stockLen.Add(uint64(offset))
+		}
 		if offset < pathInfo.Size {
 			limit <- struct{}{}
 			if err = p.startPreheat(orgRepo, fileName, p.Sha.Sha, etag, p.Authorization, pathInfo.Size, offset); err != nil {
@@ -118,7 +131,6 @@ func (p *PreheatCacheTask) startPreheat(orgRepo, fileName, commit, etag, authori
 		Uri:           hfUri,
 		DataType:      p.Job.Datatype,
 		Etag:          etag,
-		Preheat:       true,
 	}
 	taskParam.Context = bgCtx
 	taskParam.ResponseChan = responseChan
@@ -138,12 +150,52 @@ func (p *PreheatCacheTask) startPreheat(orgRepo, fileName, commit, etag, authori
 func (p *PreheatCacheTask) result(ctx context.Context, responseChan chan []byte) error {
 	for {
 		select {
-		case _, ok := <-responseChan:
+		case b, ok := <-responseChan:
 			if !ok {
 				return nil
 			}
+			p.stockLen.Add(uint64(len(b)))
 		case <-ctx.Done():
 			return ctx.Err()
 		}
+	}
+}
+
+func (p *PreheatCacheTask) realTimeSpeed(ctx context.Context) {
+	lastBytes := uint64(0)
+	ticker := time.NewTicker(1 * time.Second) // 1 秒采样一次
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			currentBytes := p.stockLen.Load()
+			delta := currentBytes - lastBytes
+			p.StockSpeed = formatSpeed(delta, 1*time.Second) // 采样间隔 1 秒
+			// 计算下载进度（百分比）
+			process := float64(currentBytes) / float64(p.UsedStorage) * 100
+			if process >= 100 {
+				process = 99.9
+			}
+			p.StockProcess = float32(math.Round(process*10) / 10)
+			lastBytes = currentBytes
+		case <-ctx.Done():
+			p.StockSpeed = "0 B/s"
+			return
+		}
+	}
+}
+
+func formatSpeed(bytes uint64, duration time.Duration) string {
+	if duration <= 0 || bytes <= 0 {
+		return "0 B/s"
+	}
+	speedBps := float64(bytes) / duration.Seconds()
+	switch {
+	case speedBps >= 1024*1024:
+		return fmt.Sprintf("%.2f MB/s", speedBps/(1024*1024))
+	case speedBps >= 1024:
+		return fmt.Sprintf("%.2f KB/s", speedBps/1024)
+	default:
+		return fmt.Sprintf("%.2f B/s", speedBps)
 	}
 }

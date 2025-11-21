@@ -310,7 +310,6 @@ func createCacheTask(taskNo int, start, end int64, taskParam *downloader.TaskPar
 	cache.FileName = taskParam.FileName
 	cache.OrgRepo = taskParam.OrgRepo
 	cache.ResponseChan = taskParam.ResponseChan
-	cache.Preheat = taskParam.Preheat
 	return cache
 }
 
@@ -329,6 +328,5 @@ func createRemoteTask(taskNo int, start, end int64, taskParam *downloader.TaskPa
 	remote.DataType = taskParam.DataType
 	remote.Etag = taskParam.Etag
 	remote.Cancel = taskParam.Cancel
-	remote.Preheat = taskParam.Preheat
 	return remote
 }

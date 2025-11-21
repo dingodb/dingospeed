@@ -52,7 +52,6 @@ func (s *SchedulerService) Heartbeat() {
 			}
 			runModeChange(consts.SchedulerModeCluster)
 		case <-s.Ctx.Done():
-			zap.S().Warnf("Heartbeat stop.")
 			return
 		}
 	}

@@ -102,7 +102,7 @@ func (s *SchedulerDao) UpdateCacheJobStatus(request *manager.UpdateCacheJobStatu
 	}
 }
 
-func (s *SchedulerDao) ExecUpdateCacheJobStatus(jobId int, status int32, instanceId, org, repo, errorMsg string) {
+func (s *SchedulerDao) ExecUpdateCacheJobStatus(jobId int, status int32, instanceId, org, repo, errorMsg string, process float32) {
 	s.UpdateCacheJobStatus(&manager.UpdateCacheJobStatusReq{
 		Id:         int64(jobId),
 		InstanceId: instanceId,
@@ -110,6 +110,7 @@ func (s *SchedulerDao) ExecUpdateCacheJobStatus(jobId int, status int32, instanc
 		ErrorMsg:   errorMsg,
 		Org:        org,
 		Repo:       repo,
+		Process:    process,
 	})
 }
 
