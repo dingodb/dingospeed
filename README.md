@@ -11,18 +11,33 @@ DingoSpeed has the following main product features:
 * Localized Management: Cover the entire process of local compilation, deployment, monitoring, and usage of the mirror service, bringing an excellent and flexible experience. It avoids reliance on external networks and public mirror repositories, significantly improving the system's response speed and data security.
 
 # Function List
-1. [X] Implemented an HTTP RESTful API (compatible with the HF Hub specification) to support model and dataset downloads.
-2. [X] Implemented multiple cache cleaning strategies (LRU/FIFO/LARGE_FIRST), scheduled tasks, and threshold triggers.
-3. [X] Supports HTTP Range requests, enabling clients to resume interrupted downloads and allowing the server to download large files in chunks, reducing memory usage.
-4. [X] Supports synchronizing cache data across multiple mirror nodes to avoid repeated downloads of the same file on multiple nodes.
-5. [X] Supports storing large files in chunks and using multiple replica storage nodes.
-6. [X] Low download time and high concurrent download success rate.
-7. [X] Low memory usage.
-8. [X] Stable download speed.
+## Single node download
+1. [x] implements HTTP RESTful API (compatible with HF Hub specification), supports model and dataset download;
+2. [x] supports online and offline download mode, will give priority to check whether the model has been updated, and give priority to return the content downloaded locally;
+3. [x] Support HTTP Range request, realize the client break point continuation, the server downloads large files in blocks, reduce memory occupation;
+4. [x] Support download line automatic switching (huggingface.co->hf-mirror.com), automatically enable proxy connection;
+5. [x] Implement multi-version snapshot storage.
+6. [x] Support large file block storage and multi-copy storage nodes;
+7. [x] Low memory usage, stable download speed;
+## Multi-node collaborative download
+1. [x] Support synchronous caching data across multiple DingoSpeed mirror nodes to avoid multiple nodes downloading the same file repeatedly;
+2. [x] Support intelligent scheduling among multiple DingoSpeed mirror nodes, return the best download node, and build a peer-to-peer download network;
+3. [x] Support model and dataset warm-up download, real-time display of the overall download rate, progress, etc.
+4. [x] Support caching hot models and datasets to public directories for easy mounting into containers;
+5. [x] Support failover, if the access to other Dingospeed node fails, it will be back to the source download;
+## Operational Monitoring
+1. [x] Support real-time monitoring of download IP, download speed, traffic size (MB), request status, and download content (which model or dataset);
+2. [x] implements a variety of disk cleaning strategies (LRU/FIFO/LARGE_FIRST), timing tasks, threshold triggering;
+3. [x] Real-time detection of download status, if the network is abnormal, the enterprise and micro alarm will be triggered;
+
 
 
 # System Architecture
-![System Architecture](png/architecture_en.png)
+## Single-node system architecture
+![Diagram of the architecture of a single node system](png/architecture_en.png)
+
+## Multi-node collaborative system architecture diagram
+![Multi-node Cooperative System architecture Diagram](png/Multi-node architecture.png)
 
 # Installation
 The project uses the wire command to generate the required dependency code. Install the wire command as follows：
@@ -106,3 +121,14 @@ The repository cache data file consists of a HEADER and data blocks. The functio
 2. Efficiently check the existence of blocks without reading the actual database, improving operation efficiency.
 
 ![Storing Models](png/storing_models_en.png)
+
+# Ops monitoring
+When using Dingospeed, you need to monitor the current running status in real time, such as when you download, which models to download, how fast to download, and download IP, etc. Dingospeed has integrated prometheus to collect running data, and shows the running status in real time through grafana. grafana is configured in config/grafana.
+![Operation Monitoring](png/monitor1.png)
+
+![Operation Monitoring](png/monitor2.png)
+
+![Operation Monitoring](png/monitor3.png)
+
+# Get in touch and join the community
+<img src="png/author.jpg" width="40%" style="float:left;" />
