@@ -37,7 +37,7 @@ DingoSpeed has the following main product features:
 ![Diagram of the architecture of a single node system](png/architecture_en.png)
 
 ## Multi-node collaborative system architecture diagram
-![Multi-node Cooperative System architecture Diagram](png/Multi-node architecture.png)
+![Multi-node Cooperative System architecture Diagram](png/Multi-node_architecture.png)
 
 # Installation
 The project uses the wire command to generate the required dependency code. Install the wire command as follows：

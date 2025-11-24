@@ -35,7 +35,7 @@ DingoSpeed具备以下主要产品特性：
 ![单节点系统架构图](png/img.png)
 
 ## 多节点协同系统架构图
-![多节点协同系统架构图](png/Multi-node architecture.png)
+![多节点协同系统架构图](png/Multi-node_architecture.png)
 
 # 安装
 项目会使用wire命令生成所需的依赖代码，安装wire命令如下：
