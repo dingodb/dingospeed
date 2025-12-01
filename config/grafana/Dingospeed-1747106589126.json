@@ -18,7 +18,7 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "id": 9,
+  "id": 14,
   "links": [],
   "panels": [
     {
@@ -36,7 +36,7 @@
     },
     {
       "datasource": {
-        "uid": "depzl342qo7wgc"
+        "uid": "dejrofhzwvg8wb"
       },
       "fieldConfig": {
         "defaults": {
@@ -83,12 +83,12 @@
         "textMode": "auto",
         "wideLayout": true
       },
-      "pluginVersion": "11.6.0",
+      "pluginVersion": "12.0.2",
       "targets": [
         {
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "sum by (instance, job) (sum(request_total_cnt{namespace=~\"^($namespace)$\",instance=\"dingospeed\", source=~\"^($source)$\"}))",
+          "expr": "sum by (job) (sum(request_total_cnt{source=~\"^($source)$\"}))",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "legendFormat": "__auto",
@@ -102,7 +102,7 @@
     },
     {
       "datasource": {
-        "uid": "depzl342qo7wgc"
+        "uid": "dejrofhzwvg8wb"
       },
       "fieldConfig": {
         "defaults": {
@@ -149,12 +149,12 @@
         "textMode": "auto",
         "wideLayout": true
       },
-      "pluginVersion": "11.6.0",
+      "pluginVersion": "12.0.2",
       "targets": [
         {
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "sum by(instance, job)(request_success_cnt{namespace=~\"^($namespace)$\",instance=\"dingospeed\", source=~\"^($source)$\"})",
+          "expr": "sum by(job)(request_success_cnt{source=~\"^($source)$\"})",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "legendFormat": "__auto",
@@ -168,7 +168,7 @@
     },
     {
       "datasource": {
-        "uid": "depzl342qo7wgc"
+        "uid": "dejrofhzwvg8wb"
       },
       "fieldConfig": {
         "defaults": {
@@ -215,12 +215,12 @@
         "textMode": "auto",
         "wideLayout": true
       },
-      "pluginVersion": "11.6.0",
+      "pluginVersion": "12.0.2",
       "targets": [
         {
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "sum by (instance, job) (request_fail_cnt{namespace=~\"^($namespace)$\",instance=\"dingospeed\", source=~\"^($source)$\"})",
+          "expr": "sum by (job) (request_fail_cnt{source=~\"^($source)$\"})",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "legendFormat": "__auto",
@@ -234,7 +234,7 @@
     },
     {
       "datasource": {
-        "uid": "depzl342qo7wgc"
+        "uid": "dejrofhzwvg8wb"
       },
       "fieldConfig": {
         "defaults": {
@@ -281,12 +281,12 @@
         "textMode": "auto",
         "wideLayout": true
       },
-      "pluginVersion": "11.6.0",
+      "pluginVersion": "12.0.2",
       "targets": [
         {
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "sum by (instance, job) (sum(request_too_many_cnt{namespace=~\"^($namespace)$\",instance=\"dingospeed\", source=~\"^($source)$\"}) or vector(0))",
+          "expr": "sum by (job) (sum(request_too_many_cnt{source=~\"^($source)$\"}) or vector(0))",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "legendFormat": "__auto",
@@ -300,7 +300,7 @@
     },
     {
       "datasource": {
-        "uid": "depzl342qo7wgc"
+        "uid": "dejrofhzwvg8wb"
       },
       "fieldConfig": {
         "defaults": {
@@ -347,12 +347,12 @@
         "textMode": "auto",
         "wideLayout": true
       },
-      "pluginVersion": "11.6.0",
+      "pluginVersion": "12.0.2",
       "targets": [
         {
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "sum by (instance, job) (count(request_model_cnt{namespace=~\"^($namespace)$\",instance=\"dingospeed\", source=~\"^($source)$\"}))",
+          "expr": "sum by (job) (count(request_model_cnt{source=~\"^($source)$\"}))",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "legendFormat": "__auto",
@@ -366,7 +366,7 @@
     },
     {
       "datasource": {
-        "uid": "depzl342qo7wgc"
+        "uid": "dejrofhzwvg8wb"
       },
       "fieldConfig": {
         "defaults": {
@@ -413,12 +413,12 @@
         "textMode": "auto",
         "wideLayout": true
       },
-      "pluginVersion": "11.6.0",
+      "pluginVersion": "12.0.2",
       "targets": [
         {
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "sum by (instance, job) (count(request_dataset_cnt{namespace=~\"^($namespace)$\",instance=\"dingospeed\", source=~\"^($source)$\"}))",
+          "expr": "sum by (job) (count(request_dataset_cnt{source=~\"^($source)$\"}))",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "legendFormat": "__auto",
@@ -432,7 +432,7 @@
     },
     {
       "datasource": {
-        "uid": "depzl342qo7wgc"
+        "uid": "dejrofhzwvg8wb"
       },
       "fieldConfig": {
         "defaults": {
@@ -479,12 +479,12 @@
         "textMode": "auto",
         "wideLayout": true
       },
-      "pluginVersion": "11.6.0",
+      "pluginVersion": "12.0.2",
       "targets": [
         {
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "sum by (instance, job) (request_remote_byte{namespace=~\"^($namespace)$\",instance=\"dingospeed\", source=~\"^($source)$\"} / 1048576)",
+          "expr": "sum by (job) (request_remote_byte{source=~\"^($source)$\"} / 1048576)",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "legendFormat": "__auto",
@@ -493,12 +493,12 @@
           "useBackend": false
         }
       ],
-      "title": "远程下载流量(MB)",
+      "title": "请求远端流量(MB)",
       "type": "stat"
     },
     {
       "datasource": {
-        "uid": "depzl342qo7wgc"
+        "uid": "dejrofhzwvg8wb"
       },
       "fieldConfig": {
         "defaults": {
@@ -545,12 +545,12 @@
         "textMode": "auto",
         "wideLayout": true
       },
-      "pluginVersion": "11.6.0",
+      "pluginVersion": "12.0.2",
       "targets": [
         {
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "sum by (instance, job) (request_response_byte{namespace=~\"^($namespace)$\",instance=\"dingospeed\", source=~\"^($source)$\"} / 1048576)",
+          "expr": "sum by (job) (request_response_byte{source=~\"^($source)$\"} / 1048576)",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "legendFormat": "__auto",
@@ -578,7 +578,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "depzl342qo7wgc"
+        "uid": "dejrofhzwvg8wb"
       },
       "fieldConfig": {
         "defaults": {
@@ -635,8 +635,8 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
-        "w": 8,
+        "h": 6,
+        "w": 6,
         "x": 0,
         "y": 6
       },
@@ -654,16 +654,16 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "11.6.0",
+      "pluginVersion": "12.0.2",
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "depzl342qo7wgc"
+            "uid": "dejrofhzwvg8wb"
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "sum by (instance, job) (request_total_cnt{namespace=~\"^($namespace)$\",instance=\"dingospeed\", source=~\"^($source)$\"})",
+          "expr": "sum by (job) (request_total_cnt{source=~\"^($source)$\"})",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
@@ -676,12 +676,12 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "depzl342qo7wgc"
+            "uid": "dejrofhzwvg8wb"
           },
           "disableTextWrap": false,
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum by (instance, job) (request_success_cnt{namespace=~\"^($namespace)$\",instance=\"dingospeed\", source=~\"^($source)$\"})",
+          "expr": "sum by (job) (request_success_cnt{source=~\"^($source)$\"})",
           "format": "time_series",
           "fullMetaSearch": false,
           "hide": false,
@@ -699,7 +699,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "depzl342qo7wgc"
+        "uid": "dejrofhzwvg8wb"
       },
       "fieldConfig": {
         "defaults": {
@@ -756,9 +756,9 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 8,
+        "h": 6,
+        "w": 6,
+        "x": 6,
         "y": 6
       },
       "id": 18,
@@ -775,16 +775,16 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "11.6.0",
+      "pluginVersion": "12.0.2",
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "depzl342qo7wgc"
+            "uid": "dejrofhzwvg8wb"
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "(sum(request_total_cnt{namespace=~\"^($namespace)$\",instance=\"dingospeed\", source=~\"^($source)$\"}) or vector(0)) -\n(sum(request_success_cnt{namespace=~\"^($namespace)$\",instance=\"dingospeed\", source=~\"^($source)$\"}) or vector(0)) -\n(sum(request_fail_cnt{namespace=~\"^($namespace)$\",instance=\"dingospeed\", source=~\"^($source)$\"}) or vector(0)) -\n(sum(request_too_many_cnt{namespace=~\"^($namespace)$\",instance=\"dingospeed\", source=~\"^($source)$\"}) or vector(0))",
+          "expr": "(sum(request_total_cnt{source=~\"^($source)$\"}) or vector(0)) -\n(sum(request_success_cnt{source=~\"^($source)$\"}) or vector(0)) -\n(sum(request_fail_cnt{source=~\"^($source)$\"}) or vector(0)) -\n(sum(request_too_many_cnt{source=~\"^($source)$\"}) or vector(0))",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
@@ -801,7 +801,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "depzl342qo7wgc"
+        "uid": "dejrofhzwvg8wb"
       },
       "fieldConfig": {
         "defaults": {
@@ -858,9 +858,9 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
+        "h": 6,
+        "w": 6,
+        "x": 12,
         "y": 6
       },
       "id": 9,
@@ -877,16 +877,16 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "11.6.0",
+      "pluginVersion": "12.0.2",
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "depzl342qo7wgc"
+            "uid": "dejrofhzwvg8wb"
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "sum by (instance, job) (request_too_many_cnt{namespace=~\"^($namespace)$\",instance=\"dingospeed\", source=~\"^($source)$\"})",
+          "expr": "sum by (job) (request_too_many_cnt{source=~\"^($source)$\"})",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
@@ -899,11 +899,11 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "depzl342qo7wgc"
+            "uid": "dejrofhzwvg8wb"
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "sum by (instance, job) (request_fail_cnt{namespace=~\"^($namespace)$\",instance=\"dingospeed\", source=~\"^($source)$\"})",
+          "expr": "sum by (job) (request_fail_cnt{source=~\"^($source)$\"})",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
@@ -920,7 +920,88 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "depzl342qo7wgc"
+        "uid": "dejrofhzwvg8wb"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "fieldMinMax": false,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green"
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 18,
+        "y": 6
+      },
+      "id": 19,
+      "options": {
+        "displayMode": "gradient",
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "maxVizHeight": 265,
+        "minVizHeight": 22,
+        "minVizWidth": 8,
+        "namePlacement": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "sizing": "auto",
+        "text": {
+          "titleSize": 15
+        },
+        "valueMode": "color"
+      },
+      "pluginVersion": "12.0.2",
+      "targets": [
+        {
+          "disableTextWrap": false,
+          "editorMode": "code",
+          "exemplar": false,
+          "expr": "sum by (domain)(request_remote_byte{source=~\"^($source)$\"})/1048576",
+          "fullMetaSearch": false,
+          "includeNullMetadata": true,
+          "instant": false,
+          "interval": "",
+          "legendFormat": "{{domain}} ",
+          "range": true,
+          "refId": "A",
+          "useBackend": false
+        }
+      ],
+      "title": "请求远端流量排行(MB)",
+      "type": "bargauge"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "dejrofhzwvg8wb"
       },
       "fieldConfig": {
         "defaults": {
@@ -980,7 +1061,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 14
+        "y": 12
       },
       "id": 2,
       "options": {
@@ -996,17 +1077,17 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "11.6.0",
+      "pluginVersion": "12.0.2",
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "depzl342qo7wgc"
+            "uid": "dejrofhzwvg8wb"
           },
           "disableTextWrap": false,
           "editorMode": "code",
           "exemplar": false,
-          "expr": "count by(models) (request_model_cnt{namespace=~\"^($namespace)$\",instance=\"dingospeed\", source=~\"^($source)$\"} > 0)",
+          "expr": "count by(models) (request_model_cnt{source=~\"^($source)$\"} > 0)",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "instant": false,
@@ -1022,7 +1103,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "depzl342qo7wgc"
+        "uid": "dejrofhzwvg8wb"
       },
       "fieldConfig": {
         "defaults": {
@@ -1082,7 +1163,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 14
+        "y": 12
       },
       "id": 3,
       "options": {
@@ -1098,16 +1179,16 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "11.6.0",
+      "pluginVersion": "12.0.2",
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "depzl342qo7wgc"
+            "uid": "dejrofhzwvg8wb"
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "count by(datasets) (request_dataset_cnt{namespace=~\"^($namespace)$\",instance=\"dingospeed\", source=~\"^($source)$\"}>0)",
+          "expr": "count by(datasets) (request_dataset_cnt{source=~\"^($source)$\"}>0)",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "legendFormat": "{{label_name}}",
@@ -1122,7 +1203,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "depzl342qo7wgc"
+        "uid": "dejrofhzwvg8wb"
       },
       "fieldConfig": {
         "defaults": {
@@ -1182,7 +1263,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 22
+        "y": 20
       },
       "id": 13,
       "options": {
@@ -1198,16 +1279,16 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "11.6.0",
+      "pluginVersion": "12.0.2",
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "depzl342qo7wgc"
+            "uid": "dejrofhzwvg8wb"
           },
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "rate(request_remote_byte{namespace=~\"^($namespace)$\",instance=\"dingospeed\", source=~\"^($source)$\"}[1m]) / 1048576",
+          "expr": "rate(request_remote_byte{source=~\"^($source)$\"}[1m]) / 1048576",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "legendFormat": "{{label_name}}",
@@ -1222,7 +1303,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "depzl342qo7wgc"
+        "uid": "dejrofhzwvg8wb"
       },
       "fieldConfig": {
         "defaults": {
@@ -1282,7 +1363,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 22
+        "y": 20
       },
       "id": 14,
       "options": {
@@ -1298,16 +1379,16 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "11.6.0",
+      "pluginVersion": "12.0.2",
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "depzl342qo7wgc"
+            "uid": "dejrofhzwvg8wb"
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "rate(request_response_byte{namespace=~\"^($namespace)$\",instance=\"dingospeed\", source=~\"^($source)$\"}[1m]) / 1048576",
+          "expr": "rate(request_response_byte{source=~\"^($source)$\"}[1m]) / 1048576",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "legendFormat": "{{label_name}}",
@@ -1334,15 +1415,15 @@
             "$__all"
           ]
         },
-        "definition": "label_values(request_total_cnt,namespace)",
+        "definition": "label_values(request_total_cnt,job)",
         "includeAll": true,
         "label": "所属环境",
         "multi": true,
-        "name": "namespace",
+        "name": "job",
         "options": [],
         "query": {
           "qryType": 1,
-          "query": "label_values(request_total_cnt,namespace)",
+          "query": "label_values(request_total_cnt,job)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 1,
@@ -1382,5 +1463,5 @@
   "timezone": "browser",
   "title": "Dingospeed",
   "uid": "eeju8w9oo78qod",
-  "version": 3
+  "version": 7
 }

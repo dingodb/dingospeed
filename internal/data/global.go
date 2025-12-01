@@ -40,21 +40,24 @@ type FileProcessParam struct {
 }
 
 func ReportFileProcess(ctx context.Context, processParam *FileProcessParam) {
-	if config.SysConfig.IsCluster() {
-		if v := ctx.Value(consts.KeyProcessId); v != nil {
-			processId := v.(int64)
-			zap.S().Infof("processId:%d, startPos:%d, endPos:%d, status:%d", processId, processParam.StartPos, processParam.EndPos, processParam.Status)
-			processParam.ProcessId = processId
-			select {
-			case fileProcessChan <- processParam:
-				return
-			case <-time.After(3 * time.Second):
-				WriteLocalProcessChan(processParam)
-				return
+	// 已升级到集群模型才有上报操作
+	if config.SysConfig.GetOriginSchedulerModel() == consts.SchedulerModeCluster {
+		if config.SysConfig.IsCluster() {
+			if v := ctx.Value(consts.KeyProcessId); v != nil {
+				processId := v.(int64)
+				zap.S().Infof("processId:%d, startPos:%d, endPos:%d, status:%d", processId, processParam.StartPos, processParam.EndPos, processParam.Status)
+				processParam.ProcessId = processId
+				select {
+				case fileProcessChan <- processParam:
+					return
+				case <-time.After(3 * time.Second):
+					WriteLocalProcessChan(processParam)
+					return
+				}
 			}
 		}
+		WriteLocalProcessChan(processParam)
 	}
-	WriteLocalProcessChan(processParam)
 }
 
 func WriteLocalProcessChan(processParam *FileProcessParam) {

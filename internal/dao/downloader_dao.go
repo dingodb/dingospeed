@@ -120,9 +120,9 @@ func (d *DownloaderDao) constructTask(startPos, endPos int64, isInnerRequest boo
 					// 需要重新拆分任务
 					taskParam.Domain = speedDomain
 					beforeTasks := getContiguousRanges(curPos, response.MaxOffset, taskParam)
+					tasks = append(tasks, beforeTasks...)
 					taskParam.Domain = config.SysConfig.GetHFURLBase()
 					afterTasks := getContiguousRanges(response.MaxOffset, endPos, taskParam)
-					tasks = append(tasks, beforeTasks...)
 					tasks = append(tasks, afterTasks...)
 				}
 				return tasks

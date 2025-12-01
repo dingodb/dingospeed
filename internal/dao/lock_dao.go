@@ -52,10 +52,14 @@ func (f *LockDao) getMetaDataReqLock(orgRepoKey string) *sync.RWMutex {
 	return newLock
 }
 
-func GetMetaRepoKey(repo, commit string) string {
-	return fmt.Sprintf("meta/%s/%s", repo, commit)
+func GetMetaShaRepoKey(repo, commit, authorization string) string {
+	return fmt.Sprintf("meta/%s/%s/%s", repo, commit, authorization)
 }
 
 func GetMetaDataReqKey(repoType, orgRepo, commit string) string {
 	return fmt.Sprintf("metadatareq/%s/%s/%s", repoType, orgRepo, commit)
+}
+
+func GetFilePathInfoKey(repoType, orgRepo, authorization string) string {
+	return fmt.Sprintf("filePathInfo/%s/%s/%s", repoType, orgRepo, authorization)
 }

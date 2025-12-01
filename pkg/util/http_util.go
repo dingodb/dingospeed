@@ -312,7 +312,7 @@ func ResponseStream(c echo.Context, fileName string, headers map[string]string, 
 					// 原子性地更新响应总数
 					source := Itoa(c.Get(consts.PromSource))
 					orgRepo := Itoa(c.Get(consts.PromOrgRepo))
-					prom.PromRequestByteCounter(prom.RequestResponseByte, source, int64(len(b)), orgRepo)
+					prom.PromResponseByteCounter(prom.RequestResponseByte, source, orgRepo, int64(len(b)))
 				}
 			}
 			flusher.Flush()

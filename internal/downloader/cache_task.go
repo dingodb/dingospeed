@@ -86,7 +86,7 @@ func (c *CacheFileTask) OutResult() {
 	curPos := c.RangeStartPos
 	for curBlock := startBlock; curBlock <= endBlock; curBlock++ {
 		if c.Context.Err() != nil {
-			zap.S().Warnf("for cache ctx err :%s", c.FileName)
+			zap.S().Errorf("for cache ctx err :%s, %v", c.FileName, c.Context.Err())
 			return
 		}
 		_, blockStartPos, blockEndPos := GetBlockInfo(curPos, c.DingFile.GetBlockSize(), c.DingFile.GetFileSize())

@@ -234,14 +234,14 @@ func (c *Config) GetRemoteFileRangeWaitTime() time.Duration {
 
 func (c *Config) GetDefaultExpiration() time.Duration {
 	if c.Cache.DefaultExpiration == 0 {
-		c.Cache.DefaultExpiration = 60
+		c.Cache.DefaultExpiration = 30
 	}
 	return time.Duration(c.Cache.DefaultExpiration) * time.Minute
 }
 
 func (c *Config) GetCleanupInterval() time.Duration {
 	if c.Cache.CleanupInterval == 0 {
-		c.Cache.CleanupInterval = 80
+		c.Cache.CleanupInterval = 60
 	}
 	return time.Duration(c.Cache.CleanupInterval) * time.Minute
 }

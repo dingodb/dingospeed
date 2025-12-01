@@ -17,6 +17,7 @@ package downloader
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,6 +27,7 @@ import (
 	"dingospeed/pkg/common"
 	"dingospeed/pkg/config"
 	"dingospeed/pkg/consts"
+	myerr "dingospeed/pkg/error"
 	"dingospeed/pkg/prom"
 	"dingospeed/pkg/util"
 
@@ -100,7 +102,7 @@ func (r *RemoteFileTask) DoTask() {
 					if config.SysConfig.EnableMetric() {
 						// 原子性地更新总下载字节数
 						source := util.Itoa(r.Context.Value(consts.PromSource))
-						prom.PromRequestByteCounter(prom.RequestRemoteByte, source, chunkLen, r.OrgRepo)
+						prom.PromRequestByteCounter(prom.RequestRemoteByte, source, r.OrgRepo, r.Domain, chunkLen)
 					}
 
 					if len(chunk) != 0 {
@@ -243,6 +245,17 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 		if _, err = util.RetryRequest(func() (*common.Response, error) {
 			err = util.GetStream(r.Domain, r.Uri, headers, func(resp *http.Response) error {
 				contentEncoding = resp.Header.Get("content-encoding")
+				code := resp.StatusCode
+				if code != http.StatusOK && code != http.StatusPartialContent {
+					if code == http.StatusNotFound {
+						zap.S().Errorf("The resource was not found. %s", r.OrgRepo)
+					} else if code == http.StatusUnauthorized || code == http.StatusForbidden {
+						zap.S().Errorf("Do not have access to this resource. %s", r.OrgRepo)
+					} else {
+						zap.S().Errorf("Failed resource request.(%d) %s", code, r.OrgRepo)
+					}
+					return nil
+				}
 				for {
 					select {
 					case <-r.Context.Done():
@@ -277,6 +290,10 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 			})
 			return nil, err
 		}); err != nil {
+			var t myerr.Error
+			if errors.As(err, &t) {
+				break
+			}
 			// 若从内部其他节点获取数据出现异常，则切换到官网获取。
 			if config.SysConfig.IsCluster() && util.IsInnerDomain(r.Domain) {
 				officialDomain := config.SysConfig.GetHFURLBase()

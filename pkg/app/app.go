@@ -60,7 +60,7 @@ func (a *App) Stop() (err error) {
 	if a.cancel != nil {
 		a.cancel()
 	}
-	time.Sleep(5 * time.Second)
+	time.Sleep(3 * time.Second)
 	ctx, cancel := context.WithTimeout(a.ctx, a.opts.stopTimeout)
 	defer cancel()
 	for _, srv := range a.opts.servers {

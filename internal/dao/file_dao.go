@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"dingospeed/internal/data"
 	"dingospeed/internal/downloader"
@@ -66,8 +67,8 @@ func (f *FileDao) CheckCommitHf(repoType, orgRepo, commit, authorization string)
 }
 
 func (f *FileDao) GetFileCommitSha(repoType, orgRepo, commit, authorization string) (string, error) {
-	key := GetMetaRepoKey(orgRepo, commit)
-	if v, ok := f.baseData.Cache.Get(key); ok {
+	metaShaKey := GetMetaShaRepoKey(orgRepo, commit, authorization)
+	if v, ok := f.baseData.Cache.Get(metaShaKey); ok {
 		return v.(string), nil
 	}
 	var (
@@ -91,8 +92,8 @@ func (f *FileDao) GetFileCommitSha(repoType, orgRepo, commit, authorization stri
 		} else {
 			commitSha = sha
 		}
-		f.baseData.Cache.Set(key, commitSha, config.SysConfig.GetDefaultExpiration())
-		f.baseData.Cache.Set(GetMetaRepoKey(orgRepo, commitSha), commitSha, config.SysConfig.GetDefaultExpiration())
+		f.baseData.Cache.Set(metaShaKey, commitSha, config.SysConfig.GetDefaultExpiration())
+		f.baseData.Cache.Set(GetMetaShaRepoKey(orgRepo, commitSha, authorization), commitSha, config.SysConfig.GetDefaultExpiration())
 		return commitSha, nil
 	}
 	commitSha, err = f.GetCommitHfOffline(repoType, orgRepo, commit)
@@ -100,8 +101,8 @@ func (f *FileDao) GetFileCommitSha(repoType, orgRepo, commit, authorization stri
 		zap.S().Errorf("getFileCommitSha GetCommitHfOffline err.%v", err)
 		return "", myerr.NewAppendCode(http.StatusNotFound, fmt.Sprintf("%s is not found", orgRepo))
 	}
-	f.baseData.Cache.Set(key, commitSha, config.SysConfig.GetDefaultExpiration())
-	f.baseData.Cache.Set(GetMetaRepoKey(orgRepo, commitSha), commitSha, config.SysConfig.GetDefaultExpiration())
+	f.baseData.Cache.Set(metaShaKey, commitSha, config.SysConfig.GetDefaultExpiration())
+	f.baseData.Cache.Set(GetMetaShaRepoKey(orgRepo, commitSha, authorization), commitSha, config.SysConfig.GetDefaultExpiration())
 	return commitSha, nil
 }
 
@@ -293,10 +294,20 @@ func (f *FileDao) ConstructBlobsAndFileFile(blobsFile, filesPath string) (err er
 }
 
 func (f *FileDao) GetPathsInfo(repoType, orgRepo, commit, authorization string, pathFileNames []string) ([]common.PathsInfo, error) {
-	remoteReqFilePathMap := make(map[string]string, 0)
 	ret := make([]common.PathsInfo, 0)
+	remoteReqFilePathMap := make(map[string]string)
+	if len(pathFileNames) == 0 {
+		return ret, nil
+	}
+	// 对每个用户检测是否有权限
+	filePathInfoKey := GetFilePathInfoKey(repoType, orgRepo, authorization)
+	_, granted := f.baseData.Cache.Get(filePathInfoKey)
 	for _, pathFileName := range pathFileNames {
 		apiPathInfoPath := fmt.Sprintf("%s/api/%s/%s/paths-info/%s/%s/paths-info_post.json", config.SysConfig.Repos(), repoType, orgRepo, commit, pathFileName)
+		if !granted {
+			remoteReqFilePathMap[pathFileName] = apiPathInfoPath
+			continue
+		}
 		hitCache := util.FileExists(apiPathInfoPath)
 		if hitCache {
 			if cacheContent, err := f.ReadCacheRequest(apiPathInfoPath); err != nil { // 若存在缓存文件，却读取失败，将会在线请求。
@@ -323,26 +334,16 @@ func (f *FileDao) GetPathsInfo(repoType, orgRepo, commit, authorization string, 
 		for k := range remoteReqFilePathMap {
 			filePaths = append(filePaths, k)
 		}
-		pathsInfoUri := fmt.Sprintf("/api/%s/%s/paths-info/%s", repoType, orgRepo, commit)
-		response, err := f.pathsInfoProxy(pathsInfoUri, authorization, filePaths)
+		response, err := f.requestFilePath(repoType, orgRepo, commit, authorization, filePaths)
 		if err != nil {
-			zap.S().Errorf("req %s err.%v", pathsInfoUri, err)
-			return nil, myerr.NewAppendCode(http.StatusInternalServerError, fmt.Sprintf("%v", err))
+			return nil, err
 		}
-		if response.StatusCode != http.StatusOK {
-			var errorResp common.ErrorResp
-			if len(response.Body) > 0 {
-				err = sonic.Unmarshal(response.Body, &errorResp)
-				if err != nil {
-					return nil, myerr.NewAppendCode(response.StatusCode, fmt.Sprintf("response code %d, %v", response.StatusCode, err))
-				}
-			}
-			return nil, myerr.NewAppendCode(response.StatusCode, errorResp.Error)
+		if !granted {
+			f.baseData.Cache.Set(filePathInfoKey, "", 24*time.Hour)
 		}
 		remoteRespPathsInfos := make([]common.PathsInfo, 0)
 		err = sonic.Unmarshal(response.Body, &remoteRespPathsInfos)
 		if err != nil {
-			zap.S().Errorf("req %s remoteRespPathsInfos Unmarshal err.%v", pathsInfoUri, err)
 			return nil, myerr.NewAppendCode(http.StatusInternalServerError, fmt.Sprintf("%v", err))
 		}
 		for _, item := range remoteRespPathsInfos {
@@ -364,6 +365,26 @@ func (f *FileDao) GetPathsInfo(repoType, orgRepo, commit, authorization string, 
 		ret = append(ret, remoteRespPathsInfos...)
 	}
 	return ret, nil
+}
+
+func (f *FileDao) requestFilePath(repoType, orgRepo, commit, authorization string, filePaths []string) (*common.Response, error) {
+	pathsInfoUri := fmt.Sprintf("/api/%s/%s/paths-info/%s", repoType, orgRepo, commit)
+	response, err := f.pathsInfoProxy(pathsInfoUri, authorization, filePaths)
+	if err != nil {
+		zap.S().Errorf("req %s err.%v", pathsInfoUri, err)
+		return nil, myerr.NewAppendCode(http.StatusInternalServerError, fmt.Sprintf("%v", err))
+	}
+	if response.StatusCode != http.StatusOK {
+		var errorResp common.ErrorResp
+		if len(response.Body) > 0 {
+			err = sonic.Unmarshal(response.Body, &errorResp)
+			if err != nil {
+				return nil, myerr.NewAppendCode(response.StatusCode, fmt.Sprintf("response code %d, %v", response.StatusCode, err))
+			}
+		}
+		return nil, myerr.NewAppendCode(response.StatusCode, errorResp.Error)
+	}
+	return response, nil
 }
 
 func (f *FileDao) pathsInfoProxy(targetUri, authorization string, filePaths []string) (*common.Response, error) {

@@ -49,7 +49,7 @@ var (
 	RequestRemoteByte = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "request_remote_byte",
 		Help: "Total number of request remote byte",
-	}, []string{"source", "orgRepo"})
+	}, []string{"source", "orgRepo", "domain"})
 
 	RequestResponseByte = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "request_response_byte",
@@ -63,7 +63,15 @@ func PromSourceCounter(vec *prometheus.GaugeVec, source string) {
 	vec.With(labels).Inc()
 }
 
-func PromRequestByteCounter(vec *prometheus.CounterVec, source string, len int64, orgRepo string) {
+func PromRequestByteCounter(vec *prometheus.CounterVec, source, orgRepo, domain string, len int64) {
+	labels := prometheus.Labels{}
+	labels["source"] = source
+	labels["orgRepo"] = orgRepo
+	labels["domain"] = domain
+	vec.With(labels).Add(float64(len))
+}
+
+func PromResponseByteCounter(vec *prometheus.CounterVec, source, orgRepo string, len int64) {
 	labels := prometheus.Labels{}
 	labels["source"] = source
 	labels["orgRepo"] = orgRepo
