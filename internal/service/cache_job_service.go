@@ -53,9 +53,9 @@ func (p *CacheJobService) CreateCacheJob(c echo.Context, jobReq *query.CreateCac
 		Repo:       jobReq.Repo,
 		Status:     consts.StatusCacheJobIng,
 	}
+	authorization := c.Request().Header.Get("Authorization")
 	if jobReq.Type == consts.CacheTypePreheat {
 		orgRepo := fmt.Sprintf("%s/%s", jobReq.Org, jobReq.Repo)
-		authorization := c.Request().Header.Get("Authorization")
 		metadata, err := p.metaDao.GetMetadata(jobReq.Datatype, orgRepo, "main", "get", authorization)
 		if err != nil {
 			return 0, err
@@ -87,7 +87,8 @@ func (p *CacheJobService) CreateCacheJob(c echo.Context, jobReq *query.CreateCac
 	} else if jobReq.Type == consts.CacheTypeMount {
 		cacheTask.TaskNo = int(jobReq.RepositoryId)
 		task = &task2.MountCacheTask{
-			CacheTask: cacheTask,
+			CacheTask:     cacheTask,
+			Authorization: authorization,
 		}
 		if err := p.cachePool.Submit(ctx, task); err != nil {
 			p.schedulerDao.ExecUpdateRepositoryMountStatus(cacheTask.TaskNo, consts.StatusCacheJobBreak, consts.TaskMoreErrMsg)

@@ -1,10 +1,12 @@
 package task
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"dingospeed/pkg/config"
@@ -15,6 +17,7 @@ import (
 
 type MountCacheTask struct {
 	CacheTask
+	Authorization string
 }
 
 func (m *MountCacheTask) DoTask() {
@@ -34,7 +37,7 @@ func (m *MountCacheTask) DoTask() {
 
 	logDir := filepath.Join(config.SysConfig.Server.Repos, "mount_download_logs")
 	if err := os.MkdirAll(logDir, 0755); err != nil {
-		zap.S().Errorf("创建目录失败: %v", err)
+		zap.S().Errorf("mkdir err: %v", err)
 		return
 	}
 	logFileName := fmt.Sprintf("%s_%s.log", modelDirName, time.Now().Format("20060102_150405"))
@@ -47,7 +50,7 @@ func (m *MountCacheTask) DoTask() {
 	defer logF.Close()
 	hfEndpoint := fmt.Sprintf("http://%s:%d", config.SysConfig.Server.Host, config.SysConfig.Server.Port)
 	cmd := exec.Command("huggingface-cli", "download", "--resume-download", "--repo-type",
-		repoType, orgRepo, "--local-dir", localModelDir)
+		repoType, orgRepo, "--local-dir", localModelDir, "--token", getToken(m.Authorization))
 	cmd.Env = append(os.Environ(), fmt.Sprintf("HF_ENDPOINT=%s", hfEndpoint))
 	cmd.Stdout = logF
 	cmd.Stderr = logF
@@ -55,16 +58,51 @@ func (m *MountCacheTask) DoTask() {
 		<-m.Ctx.Done()
 		if cmd.Process != nil {
 			if err = cmd.Process.Kill(); err != nil {
-				zap.S().Errorf("终止子进程失败 (pid: %d): %v", cmd.Process.Pid, err)
+				zap.S().Errorf("kill process fail (%s, pid: %d): %v", orgRepo, cmd.Process.Pid, err)
 			} else {
-				zap.S().Infof("已通过 context 取消终止子进程 (pid: %d)", cmd.Process.Pid)
+				zap.S().Infof("cacel process (%s, pid: %d)", orgRepo, cmd.Process.Pid)
 			}
 		}
 	}()
 	if err = cmd.Run(); err != nil {
-		zap.S().Errorf("下载失败（错误摘要）：%v", err)
-		m.SchedulerDao.ExecUpdateRepositoryMountStatus(m.TaskNo, consts.StatusCacheJobBreak, err.Error())
+		errMsg := ""
+		lines, err := getLastNLines(logFile, 50)
+		if err != nil {
+			errMsg = err.Error()
+		} else {
+			errMsg = strings.Join(lines, "\n")
+		}
+		m.SchedulerDao.ExecUpdateRepositoryMountStatus(m.TaskNo, consts.StatusCacheJobBreak, errMsg)
 	} else {
 		m.SchedulerDao.ExecUpdateRepositoryMountStatus(m.TaskNo, consts.StatusCacheJobComplete, "")
 	}
+}
+
+func getLastNLines(filePath string, n int) ([]string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("open file failed, %s, %w", filePath, err)
+	}
+	defer file.Close()
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scan file failed, %s, %w", filePath, err)
+	}
+	startIdx := len(lines) - n
+	if startIdx < 0 {
+		startIdx = 0 // 不足 N 行时取全部
+	}
+	return lines[startIdx:], nil
+}
+
+func getToken(authorization string) string {
+	split := strings.Split(authorization, " ")
+	if len(split) == 2 {
+		return split[1]
+	}
+	return ""
 }

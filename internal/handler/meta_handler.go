@@ -20,6 +20,7 @@ import (
 
 	"dingospeed/internal/service"
 	"dingospeed/pkg/consts"
+	myerr "dingospeed/pkg/error"
 	"dingospeed/pkg/util"
 
 	"github.com/labstack/echo/v4"
@@ -55,6 +56,9 @@ func (handler *MetaHandler) GetMetadataHandler(c echo.Context) error {
 	authorization := c.Request().Header.Get("authorization")
 	cacheContent, err := handler.metaService.GetMetadata(repoType, orgRepo, commit, method, authorization)
 	if err != nil {
+		if e, ok := err.(myerr.Error); ok {
+			return util.ErrorEntryUnknown(c, e.StatusCode(), e.Error())
+		}
 		return util.ErrorProxyError(c)
 	}
 	if cacheContent != nil {

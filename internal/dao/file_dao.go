@@ -83,9 +83,9 @@ func (f *FileDao) GetFileCommitSha(repoType, orgRepo, commit, authorization stri
 		if code != http.StatusOK && code != http.StatusTemporaryRedirect {
 			zap.S().Errorf("getFileCommitSha %s code:%d", orgRepo, code)
 			if code == http.StatusNotFound {
-				return "", myerr.New("未找到该资源。")
+				return "", myerr.NewAppendCode(code, "未找到该资源。")
 			} else if code == http.StatusUnauthorized || code == http.StatusForbidden {
-				return "", myerr.New("没有该资源的访问权限，请联系管理员。")
+				return "", myerr.NewAppendCode(code, "没有该资源的访问权限，请联系管理员。")
 			} else {
 				return "", myerr.NewAppendCode(code, fmt.Sprintf("请求资源失败.(%d)", code))
 			}
@@ -299,7 +299,7 @@ func (f *FileDao) GetPathsInfo(repoType, orgRepo, commit, authorization string, 
 	if len(pathFileNames) == 0 {
 		return ret, nil
 	}
-	// 对每个用户检测是否有权限
+	// 对每个用户检测是否有权限，在线、离线都检测，都需要携带token。
 	filePathInfoKey := GetFilePathInfoKey(repoType, orgRepo, authorization)
 	_, granted := f.baseData.Cache.Get(filePathInfoKey)
 	for _, pathFileName := range pathFileNames {
