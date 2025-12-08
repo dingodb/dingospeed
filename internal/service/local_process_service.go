@@ -224,6 +224,9 @@ func parseFileTime(filename string) (time.Time, error) {
 func listFilesBeforeLastHour(dirPath string) ([]string, error) {
 	threshold := time.Now().Add(-1 * time.Hour)
 	var result []string
+	if !util.FileExists(dirPath) {
+		return result, nil
+	}
 	err := filepath.WalkDir(dirPath, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return fmt.Errorf("访问路径失败: %w", err)

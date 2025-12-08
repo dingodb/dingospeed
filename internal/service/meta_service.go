@@ -43,9 +43,9 @@ func NewMetaService(fileDao *dao.FileDao, metaDao *dao.MetaDao) *MetaService {
 	}
 }
 
-func (m *MetaService) GetMetadata(repoType, orgRepo, commit, method, authorization string) (*common.CacheContent, error) {
-	zap.S().Debugf("GetMetadata:%s/%s/%s/%s", repoType, orgRepo, commit, method)
-	return m.metaDao.GetMetadata(repoType, orgRepo, commit, method, authorization)
+func (m *MetaService) GetMetadata(repoType, orgRepo, revision, method, authorization string) (*common.CacheContent, error) {
+	zap.S().Debugf("GetMetadata:%s/%s/%s/%s", repoType, orgRepo, revision, method)
+	return m.metaDao.GetMetadata(repoType, orgRepo, revision, method, authorization)
 }
 
 func (m *MetaService) WhoamiV2(c echo.Context) error {

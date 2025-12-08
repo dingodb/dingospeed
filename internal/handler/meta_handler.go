@@ -41,7 +41,7 @@ func (handler *MetaHandler) GetMetadataHandler(c echo.Context) error {
 	repoType := c.Param("repoType")
 	org := c.Param("org")
 	repo := c.Param("repo")
-	commit := c.Param("commit")
+	revision := c.Param("revision")
 	method := strings.ToLower(c.Request().Method)
 	orgRepo := util.GetOrgRepo(org, repo)
 	c.Set(consts.PromOrgRepo, orgRepo)
@@ -54,7 +54,7 @@ func (handler *MetaHandler) GetMetadataHandler(c echo.Context) error {
 		return util.ErrorRepoNotFound(c)
 	}
 	authorization := c.Request().Header.Get("authorization")
-	cacheContent, err := handler.metaService.GetMetadata(repoType, orgRepo, commit, method, authorization)
+	cacheContent, err := handler.metaService.GetMetadata(repoType, orgRepo, revision, method, authorization)
 	if err != nil {
 		if e, ok := err.(myerr.Error); ok {
 			return util.ErrorEntryUnknown(c, e.StatusCode(), e.Error())

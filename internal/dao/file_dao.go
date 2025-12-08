@@ -125,12 +125,12 @@ func (f *FileDao) getCommitHfRemote(repoType, orgRepo, commit, authorization str
 	return resp.StatusCode, sha.Sha, nil
 }
 
-func (f *FileDao) RemoteRequestMeta(method, repoType, orgRepo, commit, authorization string) (*common.Response, error) {
+func (f *FileDao) RemoteRequestMeta(method, repoType, orgRepo, revision, authorization string) (*common.Response, error) {
 	var reqUri string
-	if commit == "" {
+	if revision == "" {
 		reqUri = fmt.Sprintf("/api/%s/%s", repoType, orgRepo)
 	} else {
-		reqUri = fmt.Sprintf("/api/%s/%s/revision/%s", repoType, orgRepo, commit)
+		reqUri = fmt.Sprintf("/api/%s/%s/revision/%s", repoType, orgRepo, revision)
 	}
 	headers := map[string]string{}
 	if authorization != "" {
@@ -493,14 +493,15 @@ func parseRangeParams(fileRange string, fileSize int64) (int64, int64) {
 	if len(parts) != 2 {
 		panic("file range err.")
 	}
+	s1, s2 := util.Atoi64(parts[0]), util.Atoi64(parts[1])
 	var startPos, endPos int64
-	if len(parts[0]) != 0 {
-		startPos = util.Atoi64(parts[0])
+	if s1 != 0 {
+		startPos = s1
 	} else {
 		startPos = 0
 	}
-	if len(parts[1]) != 0 {
-		endPos = util.Atoi64(parts[1])
+	if s2 != 0 {
+		endPos = s2
 	} else {
 		endPos = fileSize - 1
 	}

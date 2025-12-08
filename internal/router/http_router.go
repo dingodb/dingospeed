@@ -66,8 +66,8 @@ func (r *HttpRouter) routerForSpeed() { // alayanew
 	r.echo.GET("/:repo/resolve/:commit/:filePath", r.fileHandler.GetFileHandler3)
 
 	// 模型&数据集元数据
-	r.echo.HEAD("/api/:repoType/:org/:repo/revision/:commit", r.metaHandler.GetMetadataHandler)
-	r.echo.GET("/api/:repoType/:org/:repo/revision/:commit", r.metaHandler.GetMetadataHandler)
+	r.echo.HEAD("/api/:repoType/:org/:repo/revision/:revision", r.metaHandler.GetMetadataHandler)
+	r.echo.GET("/api/:repoType/:org/:repo/revision/:revision", r.metaHandler.GetMetadataHandler)
 
 	// refs
 	// r.echo.GET("/api/:repoType/:org/:repo/refs", r.metaHandler.RepoRefsHandler)  修复转发响应码，走统一转发。

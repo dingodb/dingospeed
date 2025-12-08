@@ -105,16 +105,16 @@ func (m *MetaDao) ForwardRefs(originalReq echo.Context) (*http.Response, error) 
 	return util.ForwardRequest(originalReq)
 }
 
-func (m *MetaDao) GetMetadata(repoType, orgRepo, commit, method, authorization string) (*common.CacheContent, error) {
+func (m *MetaDao) GetMetadata(repoType, orgRepo, revision, method, authorization string) (*common.CacheContent, error) {
 	var (
 		cacheContent *common.CacheContent
 		err          error
 	)
-	orgRepoKey := GetMetaDataReqKey(repoType, orgRepo, commit)
+	orgRepoKey := GetMetaDataReqKey(repoType, orgRepo, revision)
 	lock := m.lockDao.getMetaDataReqLock(orgRepoKey)
 	lock.Lock()
 	defer lock.Unlock()
-	commitSha, err := m.fileDao.GetFileCommitSha(repoType, orgRepo, commit, authorization)
+	commitSha, err := m.fileDao.GetFileCommitSha(repoType, orgRepo, revision, authorization)
 	if err != nil {
 		return nil, err
 	}
@@ -124,12 +124,12 @@ func (m *MetaDao) GetMetadata(repoType, orgRepo, commit, method, authorization s
 		if util.FileExists(apiMetaPath) {
 			if cacheContent, err = m.fileDao.ReadCacheRequest(apiMetaPath); err != nil {
 				zap.S().Errorf("ReadCacheRequest err.%v", err)
-				if cacheContent, err = m.requestAndSaveMeta(repoType, orgRepo, commit, commitSha, method, authorization); err != nil {
+				if cacheContent, err = m.requestAndSaveMeta(repoType, orgRepo, revision, commitSha, method, authorization); err != nil {
 					return nil, err
 				}
 			}
 		} else {
-			if cacheContent, err = m.requestAndSaveMeta(repoType, orgRepo, commit, commitSha, method, authorization); err != nil {
+			if cacheContent, err = m.requestAndSaveMeta(repoType, orgRepo, revision, commitSha, method, authorization); err != nil {
 				return nil, err
 			}
 		}
@@ -142,8 +142,8 @@ func (m *MetaDao) GetMetadata(repoType, orgRepo, commit, method, authorization s
 	return cacheContent, nil
 }
 
-func (m *MetaDao) requestAndSaveMeta(repoType, orgRepo, commit, commitSha, method, authorization string) (*common.CacheContent, error) {
-	resp, err := m.fileDao.RemoteRequestMeta(method, repoType, orgRepo, commit, authorization)
+func (m *MetaDao) requestAndSaveMeta(repoType, orgRepo, revision, commitSha, method, authorization string) (*common.CacheContent, error) {
+	resp, err := m.fileDao.RemoteRequestMeta(method, repoType, orgRepo, revision, authorization)
 	if err != nil {
 		zap.S().Errorf("requestAndSaveMeta %s err.%v", method, err)
 		return nil, err
@@ -152,26 +152,25 @@ func (m *MetaDao) requestAndSaveMeta(repoType, orgRepo, commit, commitSha, metho
 		return nil, myerr.NewAppendCode(resp.StatusCode, "request err")
 	}
 	extractHeaders := resp.ExtractHeaders(resp.Headers)
-	apiMainDir := fmt.Sprintf("%s/api/%s/%s/revision/%s", config.SysConfig.Repos(), repoType, orgRepo, commit)
-	apiMainMetaPath := fmt.Sprintf("%s/%s", apiMainDir, fmt.Sprintf("meta_%s.json", method))
-	err = util.MakeDirs(apiMainMetaPath)
+	mainVersion := "main"
+	if revision == mainVersion {
+		err = m.writeApiMetaFile(repoType, orgRepo, revision, method, resp.StatusCode, extractHeaders, resp.Body)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		apiDir := fmt.Sprintf("%s/api/%s/%s/revision/%s", config.SysConfig.Repos(), repoType, orgRepo, mainVersion)
+		apiMetaPath := fmt.Sprintf("%s/%s", apiDir, fmt.Sprintf("meta_%s.json", method))
+		if !util.FileExists(apiMetaPath) {
+			err = m.writeApiMetaFile(repoType, orgRepo, mainVersion, method, resp.StatusCode, extractHeaders, resp.Body) // create main dir
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	err = m.writeApiMetaFile(repoType, orgRepo, commitSha, method, resp.StatusCode, extractHeaders, resp.Body)
 	if err != nil {
-		zap.S().Errorf("create %s dir err.%v", apiMainDir, err)
-		return nil, err
-	}
-	if err = m.fileDao.WriteCacheRequest(apiMainMetaPath, resp.StatusCode, extractHeaders, resp.Body); err != nil {
-		zap.S().Errorf("writeCacheRequest err.%v", err)
-		return nil, err
-	}
-	apiDir := fmt.Sprintf("%s/api/%s/%s/revision/%s", config.SysConfig.Repos(), repoType, orgRepo, commitSha)
-	apiMetaPath := fmt.Sprintf("%s/%s", apiDir, fmt.Sprintf("meta_%s.json", method))
-	err = util.MakeDirs(apiMetaPath)
-	if err != nil {
-		zap.S().Errorf("create %s dir err.%v", apiMetaPath, err)
-		return nil, err
-	}
-	if err = m.fileDao.WriteCacheRequest(apiMetaPath, resp.StatusCode, extractHeaders, resp.Body); err != nil {
-		zap.S().Errorf("writeCacheRequest err.%v", err)
 		return nil, err
 	}
 	return &common.CacheContent{
@@ -179,4 +178,19 @@ func (m *MetaDao) requestAndSaveMeta(repoType, orgRepo, commit, commitSha, metho
 		Headers:       extractHeaders,
 		OriginContent: resp.Body,
 	}, nil
+}
+
+func (m *MetaDao) writeApiMetaFile(repoType, orgRepo, commitSha, method string, statusCode int, extractHeaders map[string]string, body []byte) error {
+	apiDir := fmt.Sprintf("%s/api/%s/%s/revision/%s", config.SysConfig.Repos(), repoType, orgRepo, commitSha)
+	apiMetaPath := fmt.Sprintf("%s/%s", apiDir, fmt.Sprintf("meta_%s.json", method))
+	err := util.MakeDirs(apiMetaPath)
+	if err != nil {
+		zap.S().Errorf("create %s dir err.%v", apiMetaPath, err)
+		return err
+	}
+	if err = m.fileDao.WriteCacheRequest(apiMetaPath, statusCode, extractHeaders, body); err != nil {
+		zap.S().Errorf("writeCacheRequest err.%v", err)
+		return err
+	}
+	return nil
 }
