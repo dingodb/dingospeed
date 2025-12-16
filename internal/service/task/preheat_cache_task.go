@@ -19,11 +19,12 @@ import (
 )
 
 type CacheTask struct {
-	TaskNo       int
-	Ctx          context.Context
-	CancelFunc   context.CancelFunc
-	Job          *query.CreateCacheJobReq
-	SchedulerDao *dao.SchedulerDao
+	TaskNo        int
+	Ctx           context.Context
+	CancelFunc    context.CancelFunc
+	Job           *query.CreateCacheJobReq
+	SchedulerDao  *dao.SchedulerDao
+	RunningStatus int32
 }
 
 func (c *CacheTask) GetTaskNo() int {
@@ -53,11 +54,11 @@ func (p *PreheatCacheTask) DoTask() {
 	go p.realTimeSpeed(ctx)
 	err := p.preheatProcess(orgRepo)
 	if err != nil {
-		p.SchedulerDao.ExecUpdateCacheJobStatus(p.TaskNo, consts.StatusCacheJobBreak, p.Job.InstanceId, p.Job.Org, p.Job.Repo, err.Error(), p.StockProcess)
+		p.SchedulerDao.ExecUpdateCacheJobStatus(p.TaskNo, p.RunningStatus, p.Job.InstanceId, p.Job.Org, p.Job.Repo, err.Error(), p.StockProcess)
 		return
 	}
 	p.StockProcess = 100
-	p.SchedulerDao.ExecUpdateCacheJobStatus(p.TaskNo, consts.StatusCacheJobComplete, p.Job.InstanceId, p.Job.Org, p.Job.Repo, "", p.StockProcess)
+	p.SchedulerDao.ExecUpdateCacheJobStatus(p.TaskNo, consts.RunningStatusJobComplete, p.Job.InstanceId, p.Job.Org, p.Job.Repo, "", p.StockProcess)
 }
 
 func (p *PreheatCacheTask) preheatProcess(orgRepo string) error {

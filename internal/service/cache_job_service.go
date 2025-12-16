@@ -40,10 +40,11 @@ func (p *CacheJobService) CreateCacheJob(c echo.Context, jobReq *query.CreateCac
 	ctx, cancelFunc := context.WithCancel(appInfo.Ctx())
 	var task common.Task
 	cacheTask := task2.CacheTask{
-		Ctx:          ctx,
-		Job:          jobReq,
-		CancelFunc:   cancelFunc,
-		SchedulerDao: p.schedulerDao,
+		Ctx:           ctx,
+		Job:           jobReq,
+		CancelFunc:    cancelFunc,
+		SchedulerDao:  p.schedulerDao,
+		RunningStatus: consts.RunningStatusJobBreak,
 	}
 	req := &manager.CreateCacheJobReq{
 		Type:       jobReq.Type,
@@ -51,7 +52,7 @@ func (p *CacheJobService) CreateCacheJob(c echo.Context, jobReq *query.CreateCac
 		Datatype:   jobReq.Datatype,
 		Org:        jobReq.Org,
 		Repo:       jobReq.Repo,
-		Status:     consts.StatusCacheJobIng,
+		Status:     consts.RunningStatusJobIng,
 	}
 	authorization := c.Request().Header.Get("Authorization")
 	if jobReq.Type == consts.CacheTypePreheat {
@@ -81,7 +82,7 @@ func (p *CacheJobService) CreateCacheJob(c echo.Context, jobReq *query.CreateCac
 			UsedStorage:   uint64(sha.UsedStorage),
 		}
 		if err = p.cachePool.SubmitForTimeout(ctx, task); err != nil {
-			p.schedulerDao.ExecUpdateCacheJobStatus(int(cacheJob.Id), consts.StatusCacheJobWait, jobReq.InstanceId, "", "", consts.TaskMoreErrMsg, 0)
+			p.schedulerDao.ExecUpdateCacheJobStatus(int(cacheJob.Id), consts.RunningStatusJobWait, jobReq.InstanceId, "", "", consts.TaskMoreErrMsg, 0)
 			return 0, err
 		}
 	} else if jobReq.Type == consts.CacheTypeMount {
@@ -91,7 +92,7 @@ func (p *CacheJobService) CreateCacheJob(c echo.Context, jobReq *query.CreateCac
 			Authorization: authorization,
 		}
 		if err := p.cachePool.SubmitForTimeout(ctx, task); err != nil {
-			p.schedulerDao.ExecUpdateRepositoryMountStatus(cacheTask.TaskNo, consts.StatusCacheJobWait, consts.TaskMoreErrMsg)
+			p.schedulerDao.ExecUpdateRepositoryMountStatus(cacheTask.TaskNo, consts.RunningStatusJobWait, consts.TaskMoreErrMsg)
 			return 0, err
 		}
 	} else {
@@ -103,10 +104,15 @@ func (p *CacheJobService) CreateCacheJob(c echo.Context, jobReq *query.CreateCac
 
 func (p *CacheJobService) StopCacheJob(jobStatusReq *query.JobStatusReq) error {
 	if task, ok := p.cachePool.GetTask(int(jobStatusReq.Id)); ok {
+		if t, ok := task.(*task2.PreheatCacheTask); ok {
+			t.RunningStatus = consts.RunningStatusJobStop
+		} else if t, ok := task.(*task2.MountCacheTask); ok {
+			t.RunningStatus = consts.RunningStatusJobStop
+		}
 		cancelFun := task.GetCancelFun()
 		cancelFun()
 	} else {
-		p.schedulerDao.ExecUpdateCacheJobStatus(int(jobStatusReq.Id), consts.StatusCacheJobBreak, jobStatusReq.InstanceId, "", "", "speed未注册该任务，下载已中断。", 0)
+		p.schedulerDao.ExecUpdateCacheJobStatus(int(jobStatusReq.Id), consts.RunningStatusJobStop, jobStatusReq.InstanceId, "", "", "speed未注册该任务，下载已中断。", 0)
 	}
 	return nil
 }
@@ -139,7 +145,7 @@ func (p *CacheJobService) ResumeCacheJob(c echo.Context, resumeCacheJobReq *quer
 			return err
 		}
 		// 将状态重置为进行中
-		p.schedulerDao.ExecUpdateCacheJobStatus(int(resumeCacheJobReq.Id), consts.StatusCacheJobIng,
+		p.schedulerDao.ExecUpdateCacheJobStatus(int(resumeCacheJobReq.Id), consts.RunningStatusJobIng,
 			resumeCacheJobReq.InstanceId, resumeCacheJobReq.Org, resumeCacheJobReq.Repo, "", 0)
 		task = &task2.PreheatCacheTask{
 			CacheTask:     cacheTask,
@@ -150,7 +156,7 @@ func (p *CacheJobService) ResumeCacheJob(c echo.Context, resumeCacheJobReq *quer
 			UsedStorage:   uint64(resumeCacheJobReq.UsedStorage),
 		}
 		if err := p.cachePool.SubmitForTimeout(ctx, task); err != nil {
-			p.schedulerDao.ExecUpdateCacheJobStatus(int(resumeCacheJobReq.Id), consts.StatusCacheJobWait, resumeCacheJobReq.InstanceId, "", "", consts.TaskMoreErrMsg, 0)
+			p.schedulerDao.ExecUpdateCacheJobStatus(int(resumeCacheJobReq.Id), consts.RunningStatusJobWait, resumeCacheJobReq.InstanceId, "", "", consts.TaskMoreErrMsg, 0)
 			return err
 		}
 	}

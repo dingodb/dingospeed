@@ -80,11 +80,12 @@ const (
 	CacheTypePreheat = 1
 	CacheTypeMount   = 2
 
-	StatusCacheJobIng      = 1
-	StatusCacheJobBreak    = 2
-	StatusCacheJobComplete = 3
-	StatusCacheJobStopping = 4
-	StatusCacheJobWait     = 5
+	RunningStatusJobIng      = 1
+	RunningStatusJobBreak    = 2
+	RunningStatusJobComplete = 3
+	RunningStatusJobStopping = 4
+	RunningStatusJobStop     = 5
+	RunningStatusJobWait     = 6
 
 	OperationProcess int = 1
 	OperationPreheat int = 2

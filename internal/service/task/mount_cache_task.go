@@ -75,10 +75,10 @@ func (m *MountCacheTask) DoTask() {
 				errMsg = strings.Join(lines, "\n")
 			}
 		}
-		m.SchedulerDao.ExecUpdateRepositoryMountStatus(m.TaskNo, consts.StatusCacheJobBreak, errMsg)
+		m.SchedulerDao.ExecUpdateRepositoryMountStatus(m.TaskNo, m.RunningStatus, errMsg)
 	} else {
 		zap.S().Infof("command success.%d", m.TaskNo)
-		m.SchedulerDao.ExecUpdateRepositoryMountStatus(m.TaskNo, consts.StatusCacheJobComplete, "")
+		m.SchedulerDao.ExecUpdateRepositoryMountStatus(m.TaskNo, consts.RunningStatusJobComplete, "")
 	}
 }
 
