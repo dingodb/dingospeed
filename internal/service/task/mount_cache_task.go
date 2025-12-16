@@ -49,7 +49,7 @@ func (m *MountCacheTask) DoTask() {
 	}
 	defer logF.Close()
 	hfEndpoint := fmt.Sprintf("http://%s:%d", config.SysConfig.Server.Host, config.SysConfig.Server.Port)
-	cmd := exec.Command("huggingface-cli", "download", "--resume-download", "--repo-type",
+	cmd := exec.Command("hf", "download", "--repo-type",
 		repoType, orgRepo, "--local-dir", localModelDir, "--token", getToken(m.Authorization))
 	cmd.Env = append(os.Environ(), fmt.Sprintf("HF_ENDPOINT=%s", hfEndpoint))
 	cmd.Stdout = logF
@@ -60,20 +60,24 @@ func (m *MountCacheTask) DoTask() {
 			if err = cmd.Process.Kill(); err != nil {
 				zap.S().Errorf("kill process fail (%s, pid: %d): %v", orgRepo, cmd.Process.Pid, err)
 			} else {
-				zap.S().Infof("cacel process (%s, pid: %d)", orgRepo, cmd.Process.Pid)
+				zap.S().Infof("cancel process (%s, pid: %d)", orgRepo, cmd.Process.Pid)
 			}
 		}
 	}()
 	if err = cmd.Run(); err != nil {
-		errMsg := ""
-		lines, err := getLastNLines(logFile, 50)
+		zap.S().Infof("command fail.%d", m.TaskNo)
+		errMsg := err.Error()
+		lines, err := getLastNLines(logFile, 80)
 		if err != nil {
 			errMsg = err.Error()
 		} else {
-			errMsg = strings.Join(lines, "\n")
+			if len(lines) > 0 {
+				errMsg = strings.Join(lines, "\n")
+			}
 		}
 		m.SchedulerDao.ExecUpdateRepositoryMountStatus(m.TaskNo, consts.StatusCacheJobBreak, errMsg)
 	} else {
+		zap.S().Infof("command success.%d", m.TaskNo)
 		m.SchedulerDao.ExecUpdateRepositoryMountStatus(m.TaskNo, consts.StatusCacheJobComplete, "")
 	}
 }

@@ -46,6 +46,6 @@ func initGlobal(gCache *cache.Cache) {
 	}
 	if config.SysConfig.IsCluster() {
 		fileProcessChan = make(chan *FileProcessParam, 100)
-		localProcessChan = make(chan *FileProcessParam, 100)
+		localOperationChan = make(chan *LocalOperation, 100)
 	}
 }

@@ -1,4 +1,4 @@
-FROM huggingface-hub:alpine-0.34.4
+FROM huggingface-hub:alpine-1.2.3
 
 WORKDIR /app
 

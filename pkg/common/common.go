@@ -55,7 +55,7 @@ type Response struct {
 }
 
 func (r Response) GetKey(key string) string {
-	if v, ok := r.Headers[key]; ok {
+	if v, ok := r.Headers[strings.ToLower(key)]; ok {
 		if strSlice, ok := v.([]string); ok {
 			if len(strSlice) > 0 {
 				return strSlice[0]
@@ -80,11 +80,14 @@ func (r Response) ExtractHeaders(headers map[string]interface{}) map[string]stri
 }
 
 type PathsInfo struct {
-	Type string `json:"type"`
-	Oid  string `json:"oid"`
-	Size int64  `json:"size"`
-	Lfs  Lfs    `json:"lfs"`
-	Path string `json:"path"`
+	Type     string `json:"type"`
+	Oid      string `json:"oid"`
+	Size     int64  `json:"size"`
+	Lfs      Lfs    `json:"lfs"`
+	Path     string `json:"path"`
+	XXetHash string `json:"-"`
+	Location string `json:"-"`
+	Link     string `json:"-"`
 }
 
 type Lfs struct {

@@ -67,17 +67,21 @@ func (p *PreheatCacheTask) preheatProcess(orgRepo string) error {
 			return p.Ctx.Err()
 		}
 		fileName := rFile.Rfilename
-		infos, err := p.FileDao.GetPathsInfo(p.Job.Datatype, orgRepo, p.Sha.Sha,
-			p.Authorization, []string{fileName}) // 获取模型元数据
+		var hfUri string
+		if p.Job.Datatype == "models" {
+			hfUri = fmt.Sprintf("/%s/resolve/%s/%s", orgRepo, p.Sha.Sha, fileName)
+		} else {
+			hfUri = fmt.Sprintf("/%s/%s/resolve/%s/%s", p.Job.Datatype, orgRepo, p.Sha.Sha, fileName)
+		}
+		pathInfo, err := p.FileDao.GetPathsInfo(hfUri, p.Job.Datatype, orgRepo, p.Sha.Sha,
+			p.Authorization, fileName) // 获取模型元数据
 		if err != nil {
 			zap.S().Errorf("RemoteRequestPathsInfo err,%v", err)
 			return err
 		}
-		if len(infos) != 1 {
-			zap.S().Errorf("RemoteRequestPathsInfo err, len infos greater than 1")
-			return err
+		if pathInfo == nil {
+			return fmt.Errorf("RemoteRequestPathsInfo err, pathInfo is null, %s/%s", orgRepo, fileName)
 		}
-		pathInfo := infos[0]
 		var etag string
 		if pathInfo.Lfs.Oid != "" {
 			etag = pathInfo.Lfs.Oid
@@ -93,7 +97,7 @@ func (p *PreheatCacheTask) preheatProcess(orgRepo string) error {
 		}
 		if offset < pathInfo.Size {
 			limit <- struct{}{}
-			if err = p.startPreheat(orgRepo, fileName, p.Sha.Sha, etag, p.Authorization, pathInfo.Size, offset); err != nil {
+			if err = p.startPreheat(hfUri, orgRepo, fileName, p.Sha.Sha, etag, p.Authorization, pathInfo.Size, offset); err != nil {
 				zap.S().Errorf("startPreheat err, %s/%s %v", orgRepo, fileName, err)
 				return err
 			}
@@ -103,16 +107,10 @@ func (p *PreheatCacheTask) preheatProcess(orgRepo string) error {
 	return nil
 }
 
-func (p *PreheatCacheTask) startPreheat(orgRepo, fileName, commit, etag, authorization string, fileSize, offset int64) error {
+func (p *PreheatCacheTask) startPreheat(hfUri, orgRepo, fileName, commit, etag, authorization string, fileSize, offset int64) error {
 	var wg sync.WaitGroup
 	bgCtx := context.WithValue(p.Ctx, consts.PromSource, "localhost")
 	responseChan := make(chan []byte, config.SysConfig.Download.RespChanSize)
-	var hfUri string
-	if p.Job.Datatype == "models" {
-		hfUri = fmt.Sprintf("/%s/resolve/%s/%s", orgRepo, commit, fileName)
-	} else {
-		hfUri = fmt.Sprintf("/%s/%s/resolve/%s/%s", p.Job.Datatype, orgRepo, commit, fileName)
-	}
 	blobsDir := fmt.Sprintf("%s/files/%s/%s/blobs", config.SysConfig.Repos(), p.Job.Datatype, orgRepo)
 	blobsFile := fmt.Sprintf("%s/%s", blobsDir, etag)
 	filesDir := fmt.Sprintf("%s/files/%s/%s/resolve/%s", config.SysConfig.Repos(), p.Job.Datatype, orgRepo, commit)
@@ -179,6 +177,7 @@ func (p *PreheatCacheTask) realTimeSpeed(ctx context.Context) {
 			p.StockProcess = float32(math.Round(process*10) / 10)
 			lastBytes = currentBytes
 		case <-ctx.Done():
+			zap.S().Debug("speed ctx done")
 			p.StockSpeed = "0 B/s"
 			return
 		}

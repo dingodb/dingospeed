@@ -3,6 +3,7 @@ package dao
 import (
 	"context"
 
+	"dingospeed/internal/data"
 	"dingospeed/pkg/config"
 	"dingospeed/pkg/consts"
 	"dingospeed/pkg/proto/manager"
@@ -64,7 +65,6 @@ func (s *SchedulerDao) ReportFileProcess(request *manager.FileProcessRequest) er
 	defer cancel()
 	_, err := s.Client.ReportFileProcess(ctx, request)
 	if err != nil {
-		zap.S().Errorf("ReportFileProcess fail.%v", err)
 		return err
 	}
 	return nil
@@ -91,19 +91,16 @@ func (s *SchedulerDao) CreateCacheJob(request *manager.CreateCacheJobReq) (*mana
 	return resp, nil
 }
 
-func (s *SchedulerDao) UpdateCacheJobStatus(request *manager.UpdateCacheJobStatusReq) {
+func (s *SchedulerDao) UpdateCacheJobStatus(request *manager.UpdateCacheJobStatusReq) error {
 	zap.S().Infof("update status cacheJobId:%d, status:%d, %s", request.Id, request.Status, request.ErrorMsg)
 	ctx, cancel := context.WithTimeout(context.Background(), consts.RpcRequestTimeout)
 	defer cancel()
 	_, err := s.Client.UpdateCacheJobStatus(ctx, request)
-	if err != nil {
-		zap.S().Errorf("UpdateCacheJobStatus fail.%v", err)
-		return
-	}
+	return err
 }
 
 func (s *SchedulerDao) ExecUpdateCacheJobStatus(jobId int, status int32, instanceId, org, repo, errorMsg string, process float32) {
-	s.UpdateCacheJobStatus(&manager.UpdateCacheJobStatusReq{
+	request := &manager.UpdateCacheJobStatusReq{
 		Id:         int64(jobId),
 		InstanceId: instanceId,
 		Status:     status,
@@ -111,24 +108,28 @@ func (s *SchedulerDao) ExecUpdateCacheJobStatus(jobId int, status int32, instanc
 		Org:        org,
 		Repo:       repo,
 		Process:    process,
-	})
-}
-
-func (s *SchedulerDao) UpdateRepositoryMountStatus(request *manager.UpdateRepositoryMountStatusReq) {
-	zap.S().Infof("UpdateRepositoryMountStatus id:%d,status:%d, %s", request.Id, request.Status, request.ErrorMsg)
-	ctx, cancel := context.WithTimeout(context.Background(), consts.RpcRequestTimeout)
-	defer cancel()
-	_, err := s.Client.UpdateRepositoryMountStatus(ctx, request)
-	if err != nil {
-		zap.S().Errorf("UpdateCacheJobStatus fail.%v", err)
-		return
+	}
+	if err := s.UpdateCacheJobStatus(request); err != nil {
+		data.WriteLocalOperationChan(consts.OperationPreheat, request)
 	}
 }
 
+func (s *SchedulerDao) UpdateRepositoryMountStatus(request *manager.UpdateRepositoryMountStatusReq) error {
+	zap.S().Infof("updateRepositoryMountStatus id:%d, status:%d, %s", request.Id, request.Status, request.ErrorMsg)
+	ctx, cancel := context.WithTimeout(context.Background(), consts.RpcRequestTimeout)
+	defer cancel()
+	_, err := s.Client.UpdateRepositoryMountStatus(ctx, request)
+	return err
+}
+
 func (s *SchedulerDao) ExecUpdateRepositoryMountStatus(jobId int, status int32, errorMsg string) {
-	s.UpdateRepositoryMountStatus(&manager.UpdateRepositoryMountStatusReq{
+	request := &manager.UpdateRepositoryMountStatusReq{
 		Id:       int64(jobId),
 		Status:   status,
 		ErrorMsg: errorMsg,
-	})
+	}
+	if err := s.UpdateRepositoryMountStatus(request); err != nil {
+		data.WriteLocalOperationChan(consts.OperationMount, request)
+	}
+
 }

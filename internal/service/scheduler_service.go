@@ -72,7 +72,7 @@ func (s *SchedulerService) ReportFileProcess() {
 			})
 			if err != nil {
 				zap.S().Errorf("ReportFileProcess err.%v", err)
-				data.WriteLocalProcessChan(processParam) // write local
+				data.WriteLocalOperationChan(consts.OperationProcess, processParam) // write local
 			}
 		case <-s.Ctx.Done():
 			return

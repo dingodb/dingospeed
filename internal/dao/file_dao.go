@@ -173,7 +173,7 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, orgRepo, commit, fi
 	}
 	authorization := c.Request().Header.Get("Authorization")
 	// _file_realtime_stream
-	pathsInfos, err := f.GetPathsInfo(repoType, orgRepo, commit, authorization, []string{fileName})
+	pathInfo, err := f.GetPathsInfo(hfUri, repoType, orgRepo, commit, authorization, fileName)
 	if err != nil {
 		if e, ok := err.(myerr.Error); ok {
 			zap.S().Errorf("GetPathsInfo code:%d, err:%v", e.StatusCode(), err)
@@ -182,42 +182,15 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, orgRepo, commit, fi
 		zap.S().Errorf("GetPathsInfo err:%v", err)
 		return util.ErrorProxyError(c)
 	}
-	if len(pathsInfos) == 0 {
+	if pathInfo == nil {
 		zap.S().Errorf("pathsInfos is null. repo:%s, commit:%s, fileName:%s", orgRepo, commit, fileName)
 		return util.ErrorEntryNotFound(c)
 	}
-	if len(pathsInfos) != 1 {
-		zap.S().Errorf("pathsInfos not equal to 1. repo:%s, commit:%s, fileName:%s", orgRepo, commit, fileName)
-		return util.ErrorProxyTimeout(c)
-	}
-	pathInfo := pathsInfos[0]
 	if pathInfo.Type == "directory" {
 		zap.S().Warnf("repo:%s, commit:%s, fileName:%s is directory", orgRepo, commit, fileName)
 		return util.ErrorEntryNotFound(c)
 	}
-	var startPos, endPos int64
-	if pathInfo.Size > 0 { // There exists a file of size 0
-		var headRange = c.Request().Header.Get("Range")
-		if headRange == "" {
-			headRange = fmt.Sprintf("bytes=%d-%d", 0, pathInfo.Size-1)
-		}
-		startPos, endPos = parseRangeParams(headRange, pathInfo.Size)
-		endPos = endPos + 1
-	} else if pathInfo.Size == 0 {
-		zap.S().Warnf("file %s size: %d", fileName, pathInfo.Size)
-	}
-	respHeaders := map[string]string{}
-	respHeaders["content-length"] = util.Itoa(endPos - startPos)
-	if commit != "" {
-		respHeaders[strings.ToLower(consts.HUGGINGFACE_HEADER_X_REPO_COMMIT)] = commit
-	}
-	var etag string
-	if pathInfo.Lfs.Oid != "" {
-		etag = pathInfo.Lfs.Oid
-	} else {
-		etag = pathInfo.Oid
-	}
-	respHeaders["etag"] = etag
+	respHeaders, etag, startPos, endPos := constructRespHeader(c, pathInfo, commit, fileName)
 	blobsDir := fmt.Sprintf("%s/files/%s/%s/blobs", config.SysConfig.Repos(), repoType, orgRepo)
 	blobsFile := fmt.Sprintf("%s/%s", blobsDir, etag)
 	filesDir := fmt.Sprintf("%s/files/%s/%s/resolve/%s", config.SysConfig.Repos(), repoType, orgRepo, commit)
@@ -243,6 +216,46 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, orgRepo, commit, fi
 	} else {
 		return util.ErrorMethodError(c)
 	}
+}
+
+func constructRespHeader(c echo.Context, pathInfo *common.PathsInfo, commit, fileName string) (map[string]string, string, int64, int64) {
+	var startPos, endPos int64
+	if pathInfo.Size > 0 { // There exists a file of size 0
+		var headRange = c.Request().Header.Get("Range")
+		if headRange == "" {
+			headRange = fmt.Sprintf("bytes=%d-%d", 0, pathInfo.Size-1)
+		}
+		startPos, endPos = parseRangeParams(headRange, pathInfo.Size)
+		endPos = endPos + 1
+	} else if pathInfo.Size == 0 {
+		zap.S().Warnf("file %s size: %d", fileName, pathInfo.Size)
+	}
+	respHeaders := map[string]string{}
+	respHeaders[consts.HUGGINGFACE_HEADER_CONTENT_LENGTH] = util.Itoa(endPos - startPos)
+	if commit != "" {
+		respHeaders[strings.ToLower(consts.HUGGINGFACE_HEADER_X_REPO_COMMIT)] = commit
+	}
+	var etag string
+	if pathInfo.Lfs.Oid != "" {
+		etag = pathInfo.Lfs.Oid
+	} else {
+		etag = pathInfo.Oid
+	}
+	respHeaders[consts.HUGGINGFACE_HEADER_X_LINKED_ETAG] = etag
+	respHeaders[consts.HUGGINGFACE_HEADER_X_LINKED_SIZE] = util.Itoa(pathInfo.Size)
+	if pathInfo.Location != "" {
+		// clientHost := c.Request().Host
+		// clientScheme := "http"
+		// if c.Request().TLS != nil {
+		// 	clientScheme = "https"
+		// }
+		// hfEndPoint := fmt.Sprintf("%s://%s", clientScheme, clientHost)
+		// loc := strings.ReplaceAll(pathInfo.Location, config.SysConfig.GetXetURLBase(), hfEndPoint)
+		respHeaders[consts.HUGGINGFACE_LOCATION] = pathInfo.Location
+		respHeaders[consts.HUGGINGFACE_HEADER_X_XET_HASH] = pathInfo.XXetHash
+		respHeaders[consts.HUGGINGFACE_Link] = pathInfo.Link
+	}
+	return respHeaders, etag, startPos, endPos
 }
 
 func GetAnalysisFilePosition(dingFile *downloader.DingCache, startPos, endPos int64) int64 {
@@ -293,88 +306,90 @@ func (f *FileDao) ConstructBlobsAndFileFile(blobsFile, filesPath string) (err er
 	return
 }
 
-func (f *FileDao) GetPathsInfo(repoType, orgRepo, commit, authorization string, pathFileNames []string) ([]common.PathsInfo, error) {
-	ret := make([]common.PathsInfo, 0)
-	remoteReqFilePathMap := make(map[string]string)
-	if len(pathFileNames) == 0 {
-		return ret, nil
+func (f *FileDao) GetPathsInfo(hfUri, repoType, orgRepo, commit, authorization string, pathFileName string) (*common.PathsInfo, error) {
+	var pathInfo *common.PathsInfo
+	if pathFileName == "" {
+		return nil, fmt.Errorf("pathFileName is null, %s/%s", orgRepo, commit)
 	}
+	apiPathInfoPath := fmt.Sprintf("%s/api/%s/%s/paths-info/%s/%s/paths-info_post.json", config.SysConfig.Repos(), repoType, orgRepo, commit, pathFileName)
 	// 对每个用户检测是否有权限，在线、离线都检测，都需要携带token。
 	filePathInfoKey := GetFilePathInfoKey(repoType, orgRepo, authorization)
 	_, granted := f.baseData.Cache.Get(filePathInfoKey)
-	for _, pathFileName := range pathFileNames {
-		apiPathInfoPath := fmt.Sprintf("%s/api/%s/%s/paths-info/%s/%s/paths-info_post.json", config.SysConfig.Repos(), repoType, orgRepo, commit, pathFileName)
-		if !granted {
-			remoteReqFilePathMap[pathFileName] = apiPathInfoPath
-			continue
-		}
-		hitCache := util.FileExists(apiPathInfoPath)
-		if hitCache {
-			if cacheContent, err := f.ReadCacheRequest(apiPathInfoPath); err != nil { // 若存在缓存文件，却读取失败，将会在线请求。
-				zap.S().Errorf("ReadCacheRequest err.%v", err)
-			} else {
-				if cacheContent.Version != consts.VersionSnapshot {
-					// 若是老版本，需要重新请求pathsInfo数据
+	if granted && f.ExistApiPathFile(apiPathInfoPath) { // 已授权的用户，才可以从缓存读取，若存在则返回，否则一律在线请求。
+		if cacheContent, err := f.ReadCacheRequest(apiPathInfoPath); err != nil { // 若存在缓存文件，却读取失败，将会在线请求。
+			zap.S().Warnf("ReadCacheRequest err, go to online access%v", err)
+		} else {
+			if cacheContent.Version == consts.VersionSnapshot {
+				pathsInfos := make([]common.PathsInfo, 0)
+				if err = sonic.Unmarshal(cacheContent.OriginContent, &pathsInfos); err != nil {
+					zap.S().Errorf("pathsInfo Unmarshal err.%v", err)
 				} else {
-					pathsInfos := make([]common.PathsInfo, 0)
-					if err = sonic.Unmarshal(cacheContent.OriginContent, &pathsInfos); err != nil {
-						zap.S().Errorf("pathsInfo Unmarshal err.%v", err)
-					} else if cacheContent.StatusCode == http.StatusOK {
-						ret = append(ret, pathsInfos...)
-						continue
+					if len(pathsInfos) > 0 {
+						if pathsInfos[0].Size > consts.MAX_HTTP_DOWNLOAD_SIZE {
+							goto requestRemoteFileInfo
+						} else {
+							return &pathsInfos[0], nil
+						}
 					}
 				}
 			}
 		}
-		// 若命中缓存读取失败，将执行在线
-		remoteReqFilePathMap[pathFileName] = apiPathInfoPath
 	}
-	if len(remoteReqFilePathMap) > 0 {
-		filePaths := make([]string, 0)
-		for k := range remoteReqFilePathMap {
-			filePaths = append(filePaths, k)
-		}
-		response, err := f.requestFilePath(repoType, orgRepo, commit, authorization, filePaths)
-		if err != nil {
-			return nil, err
-		}
+	goto requestRemoteFileInfo
+
+requestRemoteFileInfo:
+	pathsInfoUri := fmt.Sprintf("/api/%s/%s/paths-info/%s", repoType, orgRepo, commit)
+	if response, err := f.requestFilePathInfo(pathsInfoUri, authorization, []string{pathFileName}); err != nil {
+		return nil, err
+	} else {
 		if !granted {
 			f.baseData.Cache.Set(filePathInfoKey, "", 24*time.Hour)
 		}
-		remoteRespPathsInfos := make([]common.PathsInfo, 0)
+		remoteRespPathsInfos := make([]*common.PathsInfo, 0)
 		err = sonic.Unmarshal(response.Body, &remoteRespPathsInfos)
 		if err != nil {
 			return nil, myerr.NewAppendCode(http.StatusInternalServerError, fmt.Sprintf("%v", err))
 		}
-		for _, item := range remoteRespPathsInfos {
-			// 对单个文件pathsInfo做存储
-			if apiPath, ok := remoteReqFilePathMap[item.Path]; ok {
-				if err = util.MakeDirs(apiPath); err != nil {
-					zap.S().Errorf("create %s dir err.%v", apiPath, err)
-					continue
-				}
-				if item.Type == "file" {
-					b, _ := sonic.Marshal([]common.PathsInfo{item}) // 转成单个文件的切片
-					if err = f.WriteCacheRequest(apiPath, response.StatusCode, response.ExtractHeaders(response.Headers), b); err != nil {
-						zap.S().Errorf("WriteCacheRequest err.%s,%v", apiPath, err)
-						continue
-					}
-				}
+		if len(remoteRespPathsInfos) > 0 {
+			pathInfo = remoteRespPathsInfos[0]
+		} else {
+			return nil, myerr.NewAppendCode(http.StatusNotFound, "remoteRespPathsInfos is null")
+		}
+		if pathInfo.Size > consts.MAX_HTTP_DOWNLOAD_SIZE {
+			if resolveResp, err := f.requestFileResolve(hfUri, authorization); err != nil {
+				return nil, err
+			} else {
+				pathInfo.XXetHash = resolveResp.GetKey(consts.HUGGINGFACE_HEADER_X_XET_HASH)
+				pathInfo.Location = resolveResp.GetKey(consts.HUGGINGFACE_LOCATION)
+				pathInfo.Link = resolveResp.GetKey(consts.HUGGINGFACE_Link)
 			}
 		}
-		ret = append(ret, remoteRespPathsInfos...)
+		ret := []*common.PathsInfo{pathInfo}
+		b, _ := sonic.Marshal(ret) // 转成单个文件的切片
+		if err = util.MakeDirs(apiPathInfoPath); err != nil {
+			return nil, fmt.Errorf("create %s dir err.%v", apiPathInfoPath, err)
+		}
+		if err = f.WriteCacheRequest(apiPathInfoPath, response.StatusCode, response.ExtractHeaders(response.Headers), b); err != nil {
+			return nil, fmt.Errorf("WriteCacheRequest err.%s,%v", apiPathInfoPath, err)
+		}
 	}
-	return ret, nil
+	return pathInfo, nil
 }
 
-func (f *FileDao) requestFilePath(repoType, orgRepo, commit, authorization string, filePaths []string) (*common.Response, error) {
-	pathsInfoUri := fmt.Sprintf("/api/%s/%s/paths-info/%s", repoType, orgRepo, commit)
-	response, err := f.pathsInfoProxy(pathsInfoUri, authorization, filePaths)
+func (f *FileDao) requestFileResolve(fileResolveUri, authorization string) (*common.Response, error) {
+	headers := map[string]string{}
+	if authorization != "" {
+		headers["authorization"] = authorization
+	}
+	response, err := util.RetryRequest(func() (*common.Response, error) {
+		return util.Head(fileResolveUri, headers)
+	})
 	if err != nil {
-		zap.S().Errorf("req %s err.%v", pathsInfoUri, err)
+		zap.S().Errorf("req %s err.%v", fileResolveUri, err)
 		return nil, myerr.NewAppendCode(http.StatusInternalServerError, fmt.Sprintf("%v", err))
 	}
-	if response.StatusCode != http.StatusOK {
+	// 非成功或重定向
+	if response.StatusCode != http.StatusOK && !(response.StatusCode >= http.StatusMultipleChoices && response.StatusCode <= http.StatusPermanentRedirect) {
 		var errorResp common.ErrorResp
 		if len(response.Body) > 0 {
 			err = sonic.Unmarshal(response.Body, &errorResp)
@@ -387,7 +402,7 @@ func (f *FileDao) requestFilePath(repoType, orgRepo, commit, authorization strin
 	return response, nil
 }
 
-func (f *FileDao) pathsInfoProxy(targetUri, authorization string, filePaths []string) (*common.Response, error) {
+func (f *FileDao) requestFilePathInfo(pathsInfoUri, authorization string, filePaths []string) (*common.Response, error) {
 	reqData := map[string]interface{}{
 		"paths": filePaths,
 	}
@@ -399,9 +414,23 @@ func (f *FileDao) pathsInfoProxy(targetUri, authorization string, filePaths []st
 	if authorization != "" {
 		headers["authorization"] = authorization
 	}
-	return util.RetryRequest(func() (*common.Response, error) {
-		return util.Post(targetUri, "application/json", jsonData, headers)
-	})
+	if response, err := util.RetryRequest(func() (*common.Response, error) {
+		return util.Post(pathsInfoUri, "application/json", jsonData, headers)
+	}); err != nil {
+		zap.S().Errorf("req %s err.%v", pathsInfoUri, err)
+		return nil, myerr.NewAppendCode(http.StatusInternalServerError, fmt.Sprintf("%v", err))
+	} else if response.StatusCode != http.StatusOK {
+		var errorResp common.ErrorResp
+		if len(response.Body) > 0 {
+			err = sonic.Unmarshal(response.Body, &errorResp)
+			if err != nil {
+				return nil, myerr.NewAppendCode(response.StatusCode, fmt.Sprintf("response code %d, %v", response.StatusCode, err))
+			}
+		}
+		return nil, myerr.NewAppendCode(response.StatusCode, errorResp.Error)
+	} else {
+		return response, nil
+	}
 }
 
 func (f *FileDao) FileChunkGet(c echo.Context, taskParam *downloader.TaskParam, startPos, endPos int64, respHeaders map[string]string) error {
@@ -438,6 +467,13 @@ func (f *FileDao) WriteCacheRequest(apiPath string, statusCode int, headers map[
 		Content:    hex.EncodeToString(content),
 	}
 	return util.WriteDataToFile(apiPath, cacheContent)
+}
+
+func (f *FileDao) ExistApiPathFile(apiPath string) bool {
+	lock := f.lockDao.getMetaFileLock(apiPath)
+	lock.RLock()
+	defer lock.RUnlock()
+	return util.FileExists(apiPath)
 }
 
 func (f *FileDao) ReadCacheRequest(apiPath string) (*common.CacheContent, error) {

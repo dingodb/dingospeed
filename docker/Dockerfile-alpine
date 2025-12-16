@@ -19,10 +19,11 @@ ENV TZ=Asia/Shanghai
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 # 安装 huggingface-hub（指定版本）
-RUN pip3 install --no-cache-dir --break-system-packages huggingface-hub==0.36.0
+RUN pip3 install --no-cache-dir --break-system-packages huggingface-hub==1.2.3
 RUN pip3 install --no-cache-dir --break-system-packages hf_transfer==0.1.9
+RUN pip3 install --no-cache-dir --break-system-packages hf-xet==1.2.0
 # 验证安装
-RUN huggingface-cli version
+RUN hf version
 CMD ["/bin/sh"]
 
-# docker build -t huggingface-hub:alpine-0.34.4 -f Dockerfile-alpine .
+# docker build -t huggingface-hub:alpine-1.2.3 -f Dockerfile-alpine .

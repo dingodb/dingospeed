@@ -7,23 +7,13 @@ import (
 	"dingospeed/pkg/config"
 	"dingospeed/pkg/consts"
 
+	"github.com/bytedance/sonic"
 	"go.uber.org/zap"
 )
 
-// 缓存预读取的文件块，默认每个文件16个块
-
-var (
-	FileBlockCache   Cache
-	fileProcessChan  chan *FileProcessParam
-	localProcessChan chan *FileProcessParam
-)
-
-func GetFileProcessChan() <-chan *FileProcessParam {
-	return fileProcessChan
-}
-
-func GetLocalProcessChan() chan *FileProcessParam {
-	return localProcessChan
+type LocalOperation struct {
+	Type int    `json:"type"`
+	Body string `json:"body"`
 }
 
 type FileProcessParam struct {
@@ -39,6 +29,22 @@ type FileProcessParam struct {
 	Status    int32  `json:"status"`
 }
 
+// 缓存预读取的文件块，默认每个文件16个块
+
+var (
+	FileBlockCache     Cache
+	fileProcessChan    chan *FileProcessParam
+	localOperationChan chan *LocalOperation
+)
+
+func GetFileProcessChan() <-chan *FileProcessParam {
+	return fileProcessChan
+}
+
+func GetLocalOperationChan() chan *LocalOperation {
+	return localOperationChan
+}
+
 func ReportFileProcess(ctx context.Context, processParam *FileProcessParam) {
 	// 已升级到集群模型才有上报操作
 	if config.SysConfig.GetOriginSchedulerModel() == consts.SchedulerModeCluster {
@@ -51,19 +57,28 @@ func ReportFileProcess(ctx context.Context, processParam *FileProcessParam) {
 				case fileProcessChan <- processParam:
 					return
 				case <-time.After(3 * time.Second):
-					WriteLocalProcessChan(processParam)
+					WriteLocalOperationChan(consts.OperationProcess, processParam)
 					return
 				}
 			}
 		}
-		WriteLocalProcessChan(processParam)
+		WriteLocalOperationChan(consts.OperationProcess, processParam)
 	}
 }
 
-func WriteLocalProcessChan(processParam *FileProcessParam) {
+func WriteLocalOperationChan(operationType int, body interface{}) {
+	marshal, err := sonic.Marshal(body)
+	if err != nil {
+		zap.S().Errorf("marshal err.%v", err)
+		return
+	}
+	opera := &LocalOperation{
+		Type: operationType,
+		Body: string(marshal),
+	}
 	select {
-	case localProcessChan <- processParam:
+	case localOperationChan <- opera:
 	case <-time.After(3 * time.Second):
-		zap.S().Errorf("localProcessChan write timeout...")
+		zap.S().Errorf("localOperationChan write timeout...")
 	}
 }

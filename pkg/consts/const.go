@@ -35,7 +35,17 @@ func (a RepoType) Value() string {
 	return string(a)
 }
 
-const HUGGINGFACE_HEADER_X_REPO_COMMIT = "X-Repo-Commit"
+const (
+	HUGGINGFACE_HEADER_CONTENT_LENGTH = "content-length"
+	HUGGINGFACE_HEADER_ETAG           = "etag"
+	HUGGINGFACE_HEADER_X_REPO_COMMIT  = "X-Repo-Commit"
+	HUGGINGFACE_HEADER_X_LINKED_ETAG  = "X-Linked-Etag"
+	HUGGINGFACE_HEADER_X_LINKED_SIZE  = "X-Linked-Size"
+	HUGGINGFACE_HEADER_X_XET_HASH     = "X-Xet-Hash"
+	HUGGINGFACE_LOCATION              = "Location"
+	HUGGINGFACE_Link                  = "Link"
+)
+const MAX_HTTP_DOWNLOAD_SIZE = 50 * 1000 * 1000 * 1000 // 50 GB
 
 const (
 	RequestTypeHead = "head"
@@ -73,6 +83,12 @@ const (
 	StatusCacheJobIng      = 1
 	StatusCacheJobBreak    = 2
 	StatusCacheJobComplete = 3
+	StatusCacheJobStopping = 4
+	StatusCacheJobWait     = 5
+
+	OperationProcess int = 1
+	OperationPreheat int = 2
+	OperationMount   int = 3
 )
 
 const (

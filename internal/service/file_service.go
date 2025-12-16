@@ -16,8 +16,6 @@ package service
 
 import (
 	"dingospeed/internal/dao"
-	"dingospeed/internal/model"
-	"dingospeed/pkg/common"
 	"dingospeed/pkg/consts"
 	myerr "dingospeed/pkg/error"
 	"dingospeed/pkg/util"
@@ -37,6 +35,7 @@ func NewFileService(fileDao *dao.FileDao) *FileService {
 }
 
 func (f *FileService) FileHeadCommon(c echo.Context, repoType, orgRepo, commit, filePath string) error {
+	zap.S().Infof("exec file head:%s/%s/%s/%s, remoteAdd:%s", repoType, orgRepo, commit, filePath, c.Request().RemoteAddr)
 	authorization := c.Request().Header.Get("authorization")
 	commitSha, err := f.fileDao.GetFileCommitSha(repoType, orgRepo, commit, authorization)
 	if err != nil {
@@ -59,10 +58,6 @@ func (f *FileService) FileGetCommon(c echo.Context, repoType, orgRepo, commit, f
 		return util.ErrorProxyError(c)
 	}
 	return f.fileDao.FileGetGenerator(c, repoType, orgRepo, commitSha, filePath, consts.RequestTypeGet)
-}
-
-func (f *FileService) GetPathInfo(query *model.PathInfoQuery) ([]common.PathsInfo, error) {
-	return f.fileDao.GetPathsInfo(query.Datatype, util.GetOrgRepo(query.Org, query.Repo), query.Revision, query.Token, query.FileNames)
 }
 
 func (f *FileService) GetFileOffset(dataType string, org string, repo string, etag string, fileSize int64) int64 {

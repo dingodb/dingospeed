@@ -35,53 +35,60 @@ import (
 	"go.uber.org/zap"
 )
 
-type LocalProcessService struct {
+type LocalOperationService struct {
 	Ctx          context.Context
 	schedulerDao *dao.SchedulerDao
 }
 
-func NewLocalProcessService(schedulerDao *dao.SchedulerDao) *LocalProcessService {
-	return &LocalProcessService{schedulerDao: schedulerDao}
+func NewLocalOperationService(schedulerDao *dao.SchedulerDao) *LocalOperationService {
+	return &LocalOperationService{schedulerDao: schedulerDao}
 }
 
-func (l *LocalProcessService) Run() {
+func (l *LocalOperationService) Initialize() {
 	if config.SysConfig.GetOriginSchedulerModel() == consts.SchedulerModeCluster {
-		go l.writeLocalFile()
+		// 将失败的信息存储到本地
+		go l.storeLocalOperation()
 		if config.SysConfig.Online() {
+			// 将本地记录同步到schedule
 			go l.startFileProcessSync()
 		}
 	}
 }
 
-func (l *LocalProcessService) writeLocalFile() {
+func (l *LocalOperationService) storeLocalOperation() {
 	for {
 		select {
-		case processParam, ok := <-data.GetLocalProcessChan():
+		case localOperation, ok := <-data.GetLocalOperationChan():
 			if !ok {
 				return
 			}
-			marshal, err := sonic.Marshal(processParam)
+			marshal, err := sonic.Marshal(localOperation)
 			if err != nil {
-				zap.S().Errorf("writeToDailyFile err.%v", err)
+				zap.S().Errorf("marshal err.%v", err)
 				continue
 			}
-			err = writeToDailyFile(processParam.Repo, string(marshal))
+			err = writeToDailyFile(string(marshal))
 			if err != nil {
 				zap.S().Errorf("writeToDailyFile err.%v", err)
 				continue
 			}
 		case <-l.Ctx.Done():
-			zap.S().Warnf("writeLocalFile stop.")
+			zap.S().Warnf("storeLocalOperation stop.")
 			return
 		}
 	}
 }
 
-func (l *LocalProcessService) startFileProcessSync() {
+func (l *LocalOperationService) startFileProcessSync() {
+	time.Sleep(10 * time.Second) // 程序启动后10s会先做一次同步
+	err := l.FileProcessSync()
+	if err != nil {
+		zap.S().Errorf("FileProcessSync err.%v", err)
+	}
+
 	c := cron.New(cron.WithSeconds())
-	_, err := c.AddFunc("0 0 * * * ?", func() {
-		err := l.FileProcessSync()
-		if err != nil {
+	_, err = c.AddFunc("0 0 * * * ?", func() {
+		if err = l.FileProcessSync(); err != nil {
 			zap.S().Errorf("FileProcessSync err.%v", err)
 		}
 	})
@@ -97,7 +104,10 @@ func (l *LocalProcessService) startFileProcessSync() {
 	}
 }
 
-func (l *LocalProcessService) FileProcessSync() error {
+func (l *LocalOperationService) FileProcessSync() error {
+	if config.SysConfig.GetSchedulerModel() == consts.SchedulerModeStandalone {
+		return nil
+	}
 	processDir := filepath.Join(config.SysConfig.Server.Repos, "daily_process")
 	processFilePaths, err := listFilesBeforeLastHour(processDir)
 	if err != nil {
@@ -118,7 +128,7 @@ func (l *LocalProcessService) FileProcessSync() error {
 	return nil
 }
 
-func (l *LocalProcessService) readAndSyncFileProcess(filePath string) error {
+func (l *LocalOperationService) readAndSyncFileProcess(filePath string) error {
 	file, err := os.Open(filePath)
 	if err != nil {
 		return fmt.Errorf("打开文件失败: %w", err)
@@ -134,20 +144,45 @@ func (l *LocalProcessService) readAndSyncFileProcess(filePath string) error {
 		}
 		jsonStr, err := extractJSON(line)
 		if err != nil {
-			fmt.Printf("跳过无效行: %v\n", err)
+			zap.S().Errorf("跳过无效行: %v", err)
 			return err
 		}
-		var param *data.FileProcessParam
-		if err = sonic.Unmarshal([]byte(jsonStr), &param); err != nil {
-			fmt.Printf("解析 JSON 失败: %v, 内容: %s\n", err, jsonStr)
+		var localOperation data.LocalOperation
+		if err = sonic.Unmarshal([]byte(jsonStr), &localOperation); err != nil {
+			zap.S().Errorf("解析 JSON 失败: %v, 内容: %s", err, jsonStr)
 			return err
 		}
-		processParams = append(processParams, param)
-		count++
-		if count == batchSize {
-			err = l.SyncFileProcess(processParams)
-			if err != nil {
+		if localOperation.Type == consts.OperationPreheat {
+			var cacheJobReq manager.UpdateCacheJobStatusReq
+			if err = sonic.Unmarshal([]byte(localOperation.Body), &cacheJobReq); err != nil {
+				zap.S().Errorf("解析 JSON 失败: %v, 内容: %s", err, jsonStr)
 				return err
+			}
+			if err = l.schedulerDao.UpdateCacheJobStatus(&cacheJobReq); err != nil {
+				return err
+			}
+		} else if localOperation.Type == consts.OperationMount {
+			var mountStatusReq manager.UpdateRepositoryMountStatusReq
+			if err = sonic.Unmarshal([]byte(localOperation.Body), &mountStatusReq); err != nil {
+				zap.S().Errorf("解析 JSON 失败: %v, 内容: %s", err, jsonStr)
+				return err
+			}
+			if err = l.schedulerDao.UpdateRepositoryMountStatus(&mountStatusReq); err != nil {
+				return err
+			}
+		} else {
+			var process data.FileProcessParam
+			if err = sonic.Unmarshal([]byte(localOperation.Body), &process); err != nil {
+				zap.S().Errorf("解析 JSON 失败: %v, 内容: %s", err, jsonStr)
+				return err
+			}
+			processParams = append(processParams, &process)
+			count++
+			if count == batchSize {
+				err = l.SyncFileProcess(processParams)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -163,7 +198,7 @@ func (l *LocalProcessService) readAndSyncFileProcess(filePath string) error {
 	return nil
 }
 
-func (l *LocalProcessService) SyncFileProcess(processParams []*data.FileProcessParam) error {
+func (l *LocalOperationService) SyncFileProcess(processParams []*data.FileProcessParam) error {
 	fileProcessEntries := make([]*manager.FileProcessEntry, 0)
 	for _, param := range processParams {
 		fileProcessEntries = append(fileProcessEntries, &manager.FileProcessEntry{
@@ -217,7 +252,7 @@ func parseFileTime(filename string) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, err
 	}
-	return time.Parse("2006010215", timePrefix)
+	return time.ParseInLocation("2006010215", timePrefix, time.Local)
 }
 
 // 获取至少前1小时的文件（适配 2006010201-xxx/xxx.log 格式）
@@ -251,10 +286,10 @@ func listFilesBeforeLastHour(dirPath string) ([]string, error) {
 	return result, nil
 }
 
-func writeToDailyFile(fileSuffix, data string) error {
+func writeToDailyFile(data string) error {
 	now := time.Now()
 	dateStr := now.Format("2006010201")
-	filename := fmt.Sprintf("%s-%s.log", dateStr, fileSuffix)
+	filename := fmt.Sprintf("%s.log", dateStr)
 	processDir := filepath.Join(config.SysConfig.Server.Repos, "daily_process")
 	if err := os.MkdirAll(processDir, 0755); err != nil {
 		return fmt.Errorf("创建目录失败: %v", err)

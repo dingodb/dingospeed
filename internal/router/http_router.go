@@ -80,7 +80,6 @@ func (r *HttpRouter) routerForScheduler() { // alayanew
 	r.echo.GET("/api/:repoType/:org/:repo/files/:commit/", r.metaHandler.RepositoryFilesHandler)
 	r.echo.GET("/api/:repoType/:org/:repo/files/:commit/:filePath", r.metaHandler.RepositoryFilesHandler)
 
-	r.echo.POST("/api/getPathInfo", r.fileHandler.GetPathInfoHandler)
 	r.echo.GET("/api/fileOffset/:dataType/:org/:repo/:etag/:fileSize", r.fileHandler.GetFileOffset)
 	r.echo.GET("/api/fileProcessSync", r.fileHandler.FileProcessSync)
 

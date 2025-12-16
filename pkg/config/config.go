@@ -17,7 +17,6 @@ package config
 import (
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"sync"
 	"time"
@@ -60,6 +59,7 @@ type ServerConfig struct {
 	Repos      string `json:"repos" yaml:"repos"`
 	HfNetLoc   string `json:"hfNetLoc" yaml:"hfNetLoc"`
 	BpHfNetLoc string `json:"bpHfNetLoc" yaml:"bpHfNetLoc"`
+	XetNetLoc  string `json:"xetNetLoc" yaml:"xetNetLoc"`
 	HfScheme   string `json:"hfScheme" yaml:"hfScheme" validate:"oneof=https http"`
 	Ssl        SSL    `json:"ssl" yaml:"ssl"`
 }
@@ -157,13 +157,19 @@ func (c *Config) GetHFURLBase() string {
 	return fmt.Sprintf("%s://%s", c.GetHfScheme(), c.GetHfNetLoc())
 }
 
-func (c *Config) GetHFURL() (*url.URL, error) {
-	targetURL, err := url.Parse(c.GetHFURLBase())
-	if err != nil {
-		zap.S().Errorf("解析目标URL失败: %v", err)
-		return nil, err
+func (c *Config) GetBpHFURLBase() string {
+	return fmt.Sprintf("%s://%s", c.GetHfScheme(), c.GetBpHfNetLoc())
+}
+
+func (c *Config) GetXetURLBase() string {
+	return fmt.Sprintf("%s://%s", c.GetHfScheme(), c.GetXetNetLoc())
+}
+
+func (c *Config) GetXetNetLoc() string {
+	if c.Server.XetNetLoc == "" {
+		c.Server.XetNetLoc = "cas-bridge.xethub.hf.co"
 	}
-	return targetURL, nil
+	return c.Server.XetNetLoc
 }
 
 func (c *Config) GetMinimumFileSize() int64 {
@@ -175,10 +181,6 @@ func (c *Config) GetSyncProcessInterval() int64 {
 		c.Scheduler.Strategy.SyncProcessInterval = 1
 	}
 	return c.Scheduler.Strategy.SyncProcessInterval
-}
-
-func (c *Config) GetBpHFURLBase() string {
-	return fmt.Sprintf("%s://%s", c.GetHfScheme(), c.GetBpHfNetLoc())
 }
 
 func (c *Config) Online() bool {

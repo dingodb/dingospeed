@@ -202,7 +202,6 @@ func (r *RemoteFileTask) constructFileProcessParam(startPos, endPos int64, statu
 }
 
 func (r *RemoteFileTask) OutResult() {
-	zap.S().Infof("start remote outResult,taskNo:%d, %s/%s", r.TaskNo, r.OrgRepo, r.FileName)
 	for {
 		select {
 		case chunk, ok := <-r.Queue:

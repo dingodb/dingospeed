@@ -58,7 +58,14 @@ func RetryRequest(f func() (*common.Response, error)) (*common.Response, error) 
 	return resp, err
 }
 
-func NewHTTPClient() (*http.Client, error) {
+func NewHTTPClient(method string) (*http.Client, error) {
+	if method == http.MethodHead {
+		return &http.Client{
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse // 阻止跟随重定向
+			},
+			Timeout: config.SysConfig.GetReqTimeOut()}, nil
+	}
 	simpleOnce.Do(
 		func() {
 			simpleClient = &http.Client{Timeout: config.SysConfig.GetReqTimeOut()}
@@ -66,18 +73,15 @@ func NewHTTPClient() (*http.Client, error) {
 	return simpleClient, nil
 }
 
-func NewHTTPClientWithProxy() (*http.Client, error) {
-	proxyOnce.Do(func() {
-		proxyClient = &http.Client{Timeout: config.SysConfig.GetReqTimeOut()}
-		if config.SysConfig.GetHttpProxy() == "" {
-			return
-		}
+func NewHTTPClientWithProxy(method string) (*http.Client, error) {
+	var transport *http.Transport
+	if config.SysConfig.GetHttpProxy() != "" {
 		proxyURL, err := url.Parse(config.SysConfig.GetHttpProxy())
 		if err != nil {
 			zap.S().Errorf("代理地址解析失败: %v", err)
-			return
+			return nil, err
 		}
-		transport := &http.Transport{
+		transport = &http.Transport{
 			Proxy: http.ProxyURL(proxyURL),
 			DialContext: (&net.Dialer{
 				Timeout:   30 * time.Second,
@@ -88,12 +92,24 @@ func NewHTTPClientWithProxy() (*http.Client, error) {
 			ResponseHeaderTimeout: 10 * time.Second,
 			IdleConnTimeout:       90 * time.Second,
 		}
+	}
+	if method == http.MethodHead {
+		proxyHeadClient := &http.Client{
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse // 阻止跟随重定向
+			},
+			Timeout: config.SysConfig.GetReqTimeOut()}
+		proxyHeadClient.Transport = transport
+		return proxyHeadClient, nil
+	}
+	proxyOnce.Do(func() {
+		proxyClient = &http.Client{Timeout: config.SysConfig.GetReqTimeOut()}
 		proxyClient.Transport = transport
 	})
 	return proxyClient, nil
 }
 
-func constructClient() (string, *http.Client, error) {
+func constructClient(method string) (string, *http.Client, error) {
 	var (
 		domain string
 		client *http.Client
@@ -102,16 +118,16 @@ func constructClient() (string, *http.Client, error) {
 	// 代理不可用，且允许代理切换到备用，使用直联。
 	if !ProxyIsAvailable && config.SysConfig.DynamicProxy.Enabled {
 		domain = config.SysConfig.GetBpHFURLBase()
-		client, err = NewHTTPClient()
+		client, err = NewHTTPClient(method)
 	} else {
 		domain = config.SysConfig.GetHFURLBase()
-		client, err = NewHTTPClientWithProxy()
+		client, err = NewHTTPClientWithProxy(method)
 	}
 	return domain, client, err
 }
 
 func Head(requestUri string, headers map[string]string) (*common.Response, error) {
-	domain, client, err := constructClient()
+	domain, client, err := constructClient(http.MethodHead)
 	if err != nil {
 		return nil, fmt.Errorf("construct http client err: %v", err)
 	}
@@ -140,7 +156,7 @@ func doHead(client *http.Client, targetURL string, headers map[string]string) (*
 	}()
 	respHeaders := make(map[string]interface{})
 	for key, values := range resp.Header {
-		respHeaders[key] = values
+		respHeaders[strings.ToLower(key)] = values
 	}
 	return &common.Response{
 		StatusCode: resp.StatusCode,
@@ -149,7 +165,7 @@ func doHead(client *http.Client, targetURL string, headers map[string]string) (*
 }
 
 func Get(requestUri string, headers map[string]string) (*common.Response, error) {
-	domain, client, err := constructClient()
+	domain, client, err := constructClient(http.MethodGet)
 	if err != nil {
 		return nil, fmt.Errorf("construct http client err: %v", err)
 	}
@@ -185,7 +201,7 @@ func doGet(client *http.Client, targetURL string, headers map[string]string) (*c
 
 	respHeaders := make(map[string]interface{})
 	for key, values := range resp.Header {
-		respHeaders[key] = values
+		respHeaders[strings.ToLower(key)] = values
 	}
 
 	return &common.Response{
@@ -201,10 +217,10 @@ func GetStream(domain, uri string, headers map[string]string, f func(r *http.Res
 		err    error
 	)
 	if IsInnerDomain(domain) {
-		client, err = NewHTTPClient()
+		client, err = NewHTTPClient(http.MethodGet)
 		headers[consts.RequestSourceInner] = Itoa(1)
 	} else {
-		domain, client, err = constructClient()
+		domain, client, err = constructClient(http.MethodGet)
 	}
 	if err != nil {
 		return fmt.Errorf("construct http client err: %v", err)
@@ -229,13 +245,13 @@ func doGetStream(client *http.Client, targetURL string, headers map[string]strin
 	defer resp.Body.Close()
 	respHeaders := make(map[string]interface{})
 	for key, value := range resp.Header {
-		respHeaders[key] = value
+		respHeaders[strings.ToLower(key)] = value
 	}
 	return f(resp)
 }
 
 func Post(requestUri string, contentType string, data []byte, headers map[string]string) (*common.Response, error) {
-	domain, client, err := constructClient()
+	domain, client, err := constructClient(http.MethodPost)
 	if err != nil {
 		return nil, fmt.Errorf("construct http client err: %v", err)
 	}
@@ -274,7 +290,7 @@ func doPost(client *http.Client, targetURL string, contentType string, data []by
 
 	respHeaders := make(map[string]interface{})
 	for key, values := range resp.Header {
-		respHeaders[key] = values
+		respHeaders[strings.ToLower(key)] = values
 	}
 
 	return &common.Response{
@@ -321,15 +337,19 @@ func ResponseStream(c echo.Context, fileName string, headers map[string]string, 
 }
 
 func ForwardRequest(originalReq echo.Context) (*http.Response, error) {
-	domain, client, err := constructClient()
+	domain, client, err := constructClient(http.MethodGet)
 	if err != nil {
 		return nil, fmt.Errorf("construct http client err: %v", err)
 	}
+	reqUri := originalReq.Request().URL.Path
+	// if strings.Contains(reqUri, "/xet-bridge-us/") {
+	// 	domain = config.SysConfig.GetXetURLBase()
+	// }
 	targetURL, err := url.Parse(domain)
 	if err != nil {
 		return nil, fmt.Errorf("url.Parse err: %v", err)
 	}
-	forwardPath := targetURL.Path + originalReq.Request().URL.Path
+	forwardPath := targetURL.Path + reqUri
 	forwardURL := &url.URL{
 		Scheme:   targetURL.Scheme,
 		Host:     targetURL.Host,
