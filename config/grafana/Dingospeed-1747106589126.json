@@ -88,7 +88,7 @@
         {
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "sum by (job) (sum(request_total_cnt{source=~\"^($source)$\"}))",
+          "expr": "sum by (app) (sum(request_total_cnt{source=~\"^($source)$\"}))",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "legendFormat": "__auto",
@@ -154,7 +154,7 @@
         {
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "sum by(job)(request_success_cnt{source=~\"^($source)$\"})",
+          "expr": "sum by(app)(request_success_cnt{source=~\"^($source)$\"})",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "legendFormat": "__auto",
@@ -220,7 +220,7 @@
         {
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "sum by (job) (request_fail_cnt{source=~\"^($source)$\"})",
+          "expr": "sum by (app) (request_fail_cnt{source=~\"^($source)$\"})",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "legendFormat": "__auto",
@@ -286,7 +286,7 @@
         {
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "sum by (job) (sum(request_too_many_cnt{source=~\"^($source)$\"}) or vector(0))",
+          "expr": "sum by (app) (sum(request_too_many_cnt{source=~\"^($source)$\"}) or vector(0))",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "legendFormat": "__auto",
@@ -352,7 +352,7 @@
         {
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "sum by (job) (count(request_model_cnt{source=~\"^($source)$\"}))",
+          "expr": "sum by (app) (count(request_model_cnt{source=~\"^($source)$\"}))",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "legendFormat": "__auto",
@@ -418,7 +418,7 @@
         {
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "sum by (job) (count(request_dataset_cnt{source=~\"^($source)$\"}))",
+          "expr": "sum by (app) (count(request_dataset_cnt{source=~\"^($source)$\"}))",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "legendFormat": "__auto",
@@ -484,7 +484,7 @@
         {
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "sum by (job) (request_remote_byte{source=~\"^($source)$\"} / 1048576)",
+          "expr": "sum by (app) (request_remote_byte{source=~\"^($source)$\"} / 1048576)",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "legendFormat": "__auto",
@@ -550,7 +550,7 @@
         {
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "sum by (job) (request_response_byte{source=~\"^($source)$\"} / 1048576)",
+          "expr": "sum by (app) (request_response_byte{source=~\"^($source)$\"} / 1048576)",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
           "legendFormat": "__auto",
@@ -663,7 +663,7 @@
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "sum by (job) (request_total_cnt{source=~\"^($source)$\"})",
+          "expr": "sum by (app) (request_total_cnt{source=~\"^($source)$\"})",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
@@ -681,7 +681,7 @@
           "disableTextWrap": false,
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum by (job) (request_success_cnt{source=~\"^($source)$\"})",
+          "expr": "sum by (app) (request_success_cnt{source=~\"^($source)$\"})",
           "format": "time_series",
           "fullMetaSearch": false,
           "hide": false,
@@ -886,7 +886,7 @@
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "sum by (job) (request_too_many_cnt{source=~\"^($source)$\"})",
+          "expr": "sum by (app) (request_too_many_cnt{source=~\"^($source)$\"})",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
@@ -903,7 +903,7 @@
           },
           "disableTextWrap": false,
           "editorMode": "code",
-          "expr": "sum by (job) (request_fail_cnt{source=~\"^($source)$\"})",
+          "expr": "sum by (app) (request_fail_cnt{source=~\"^($source)$\"})",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
@@ -1415,15 +1415,15 @@
             "$__all"
           ]
         },
-        "definition": "label_values(request_total_cnt,job)",
+        "definition": "label_values(request_total_cnt,app)",
         "includeAll": true,
         "label": "所属环境",
         "multi": true,
-        "name": "job",
+        "name": "app",
         "options": [],
         "query": {
           "qryType": 1,
-          "query": "label_values(request_total_cnt,job)",
+          "query": "label_values(request_total_cnt,app)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 1,

@@ -40,7 +40,7 @@ func NewSysService(schedulerDao *dao.SchedulerDao) *SysService {
 			if config.SysConfig.DiskClean.Enabled {
 				go sysSvc.cycleCheckDiskUsage()
 			}
-			if config.SysConfig.DynamicProxy.Enabled {
+			if config.SysConfig.DynamicProxy.HttpProxyConnTest {
 				go sysSvc.cycleTestProxyConnectivity()
 			}
 		})
@@ -203,6 +203,9 @@ func (s *SysService) cycleTestProxyConnectivity() {
 	for {
 		select {
 		case <-ticker.C:
+			if config.SysConfig.GetHttpProxy() == "" {
+				return
+			}
 			testProxyConnectivity()
 		}
 	}
@@ -215,6 +218,7 @@ var (
 	dialTimeout         = 3 * time.Second
 	continuousFailCount int
 	hasSentFailureMsg   bool
+	mu                  sync.Mutex
 )
 
 func testProxyConnectivity() {
@@ -276,6 +280,8 @@ func handleProxyTestResponse(client *http.Client, req *http.Request, proxyURL *u
 }
 
 func handleProxyTestSuccess() {
+	mu.Lock()
+	defer mu.Unlock()
 	continuousFailCount = 0
 	hasSentFailureMsg = false
 	if !util.ProxyIsAvailable {
@@ -285,6 +291,8 @@ func handleProxyTestSuccess() {
 }
 
 func handleContinuousFailure(statusCode int) {
+	mu.Lock()
+	defer mu.Unlock()
 	continuousFailCount++
 	if continuousFailCount >= config.SysConfig.GetMaxContinuousFails() && !hasSentFailureMsg {
 		util.ProxyIsAvailable = false

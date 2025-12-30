@@ -147,6 +147,7 @@ type DiskClean struct {
 type DynamicProxy struct {
 	Enabled            bool   `json:"enabled" yaml:"enabled"`
 	HttpProxy          string `json:"httpProxy" yaml:"httpProxy"`
+	HttpProxyConnTest  bool   `json:"httpProxyConnTest" yaml:"httpProxyConnTest"`
 	HttpProxyName      string `json:"httpProxyName" yaml:"httpProxyName"`
 	TimePeriod         int    `json:"timePeriod" yaml:"timePeriod"`
 	MaxContinuousFails int    `json:"maxContinuousFails" yaml:"maxContinuousFails"`
@@ -369,9 +370,6 @@ func Scan(path string) (*Config, error) {
 
 	if c.Download.RemoteFileRangeSize%c.Download.BlockSize != 0 {
 		return nil, myerr.New("RemoteFileRangeSize must be a multiple of BlockSize")
-	}
-	if c.DynamicProxy.Enabled && c.DynamicProxy.HttpProxy == "" {
-		return nil, myerr.New("HttpProxy must be specified when enable is true")
 	}
 	validate := validator.New()
 	err = validate.Struct(&c)

@@ -70,6 +70,7 @@ diskClean:
 dynamicProxy:
     enabled: true    #是否启用动态代理，当hfNetLoc配置的地址访问异常时，会自动切换到bpHfNetLoc。
     httpProxy: http://127.0.0.1:7890   #http://127.0.0.1:7890，科学上网代理地址
+    httpProxyConnTest: true
     httpProxyName: "马鞍山服务器"
     timePeriod: 60 #定期检测代理是否可用时间周期，单位秒（S）
     maxContinuousFails: 5 #连续失败次数超过该值，则认为代理不可用
