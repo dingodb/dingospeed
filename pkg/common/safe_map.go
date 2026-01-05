@@ -40,6 +40,13 @@ func (sm *SafeMap[K, V]) Get(key K) (V, bool) {
 	return value, exists
 }
 
+func (sm *SafeMap[K, V]) Exist(key K) bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	_, exists := sm.m[key]
+	return exists
+}
+
 func (sm *SafeMap[K, V]) Delete(key K) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()

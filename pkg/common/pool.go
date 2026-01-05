@@ -44,6 +44,7 @@ type Pool struct {
 	persist  bool
 	size     int
 	wg       sync.WaitGroup
+	mu       sync.Mutex
 }
 
 // NewPool 创建新协程池
@@ -80,12 +81,21 @@ func (p *Pool) worker() {
 	}
 }
 
+func (p *Pool) exist(taskNo int) bool {
+	return p.taskMap.Exist(taskNo)
+}
+
 func (p *Pool) GetTask(taskNo int) (Task, bool) {
 	return p.taskMap.Get(taskNo)
 }
 
 // Submit 提交任务
 func (p *Pool) Submit(ctx context.Context, task Task) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.persist && p.exist(task.GetTaskNo()) {
+		return nil
+	}
 	select {
 	case p.taskChan <- task:
 		if p.persist {
@@ -98,6 +108,11 @@ func (p *Pool) Submit(ctx context.Context, task Task) error {
 }
 
 func (p *Pool) SubmitForTimeout(ctx context.Context, task Task) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.persist && p.exist(task.GetTaskNo()) {
+		return nil
+	}
 	select {
 	case p.taskChan <- task:
 		if p.persist {

@@ -49,8 +49,15 @@ func (m *MountCacheTask) DoTask() {
 	}
 	defer logF.Close()
 	hfEndpoint := fmt.Sprintf("http://%s:%d", config.SysConfig.Server.Host, config.SysConfig.Server.Port)
-	cmd := exec.Command("hf", "download", "--repo-type",
-		repoType, orgRepo, "--local-dir", localModelDir, "--token", getToken(m.Authorization))
+	token := getToken(m.Authorization)
+	var cmd *exec.Cmd
+	if token != "" {
+		cmd = exec.Command("hf", "download", "--repo-type",
+			repoType, orgRepo, "--local-dir", localModelDir, "--token", token)
+	} else {
+		cmd = exec.Command("hf", "download", "--repo-type",
+			repoType, orgRepo, "--local-dir", localModelDir)
+	}
 	cmd.Env = append(os.Environ(), fmt.Sprintf("HF_ENDPOINT=%s", hfEndpoint))
 	cmd.Stdout = logF
 	cmd.Stderr = logF

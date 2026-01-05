@@ -99,12 +99,16 @@ func NewHTTPClientWithProxy(method string) (*http.Client, error) {
 				return http.ErrUseLastResponse // 阻止跟随重定向
 			},
 			Timeout: config.SysConfig.GetReqTimeOut()}
-		proxyHeadClient.Transport = transport
+		if transport != nil {
+			proxyHeadClient.Transport = transport
+		}
 		return proxyHeadClient, nil
 	}
 	proxyOnce.Do(func() {
 		proxyClient = &http.Client{Timeout: config.SysConfig.GetReqTimeOut()}
-		proxyClient.Transport = transport
+		if transport != nil {
+			proxyClient.Transport = transport
+		}
 	})
 	return proxyClient, nil
 }
