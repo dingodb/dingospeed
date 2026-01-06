@@ -23,21 +23,23 @@ import (
 )
 
 type HttpRouter struct {
-	echo            *echo.Echo
-	fileHandler     *handler.FileHandler
-	metaHandler     *handler.MetaHandler
-	sysHandler      *handler.SysHandler
-	cacheJobHandler *handler.CacheJobHandler
+	echo              *echo.Echo
+	fileHandler       *handler.FileHandler
+	metaHandler       *handler.MetaHandler
+	sysHandler        *handler.SysHandler
+	cacheJobHandler   *handler.CacheJobHandler
+	modelscopeHandler *handler.ModelscopeHandler
 }
 
 func NewHttpRouter(echo *echo.Echo, fileHandler *handler.FileHandler, metaHandler *handler.MetaHandler,
-	sysHandler *handler.SysHandler, cacheJobHandler *handler.CacheJobHandler) *HttpRouter {
+	sysHandler *handler.SysHandler, cacheJobHandler *handler.CacheJobHandler, modelscopeHandler *handler.ModelscopeHandler) *HttpRouter {
 	r := &HttpRouter{
-		echo:            echo,
-		fileHandler:     fileHandler,
-		metaHandler:     metaHandler,
-		sysHandler:      sysHandler,
-		cacheJobHandler: cacheJobHandler,
+		echo:              echo,
+		fileHandler:       fileHandler,
+		metaHandler:       metaHandler,
+		sysHandler:        sysHandler,
+		cacheJobHandler:   cacheJobHandler,
+		modelscopeHandler: modelscopeHandler,
 	}
 	r.initRouter()
 	return r
@@ -54,6 +56,7 @@ func (r *HttpRouter) initRouter() {
 	r.routerForCacheJob()
 
 	r.routerForSpeed()
+	r.routerForModelscope()
 }
 
 func (r *HttpRouter) routerForSpeed() { // alayanew
@@ -90,4 +93,13 @@ func (r *HttpRouter) routerForCacheJob() { // alayanew
 	r.echo.POST("/api/cacheJob/stop", r.cacheJobHandler.StopCacheJobHandler)
 	r.echo.POST("/api/cacheJob/resume", r.cacheJobHandler.ResumeCacheJobHandler)
 	r.echo.POST("/api/cacheJob/realtime", r.cacheJobHandler.RealtimeCacheJobHandler)
+}
+
+func (r *HttpRouter) routerForModelscope() { // modelscope
+	r.echo.GET("/api/v1/:repoType/:org/:repo", r.modelscopeHandler.ModelInfoHandler)
+	r.echo.GET("/api/v1/:repoType/:org/:repo/revisions", r.modelscopeHandler.RevisionsHandler)
+	r.echo.GET("/api/v1/:repoType/:org/:repo/repo/files", r.modelscopeHandler.FileListHandler)
+	r.echo.GET("/api/v1/:repoType/:org/:repo/repo", r.modelscopeHandler.FileDownloadHandler)
+	r.echo.GET("/api/v1/:repoType/:org/:repo/repo/tree", r.modelscopeHandler.FileTreeHandler)
+	r.echo.GET("/api/v1/datasets/:datasetId/repo/tree", r.modelscopeHandler.DatasetFileTreeHandler)
 }

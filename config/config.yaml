@@ -75,3 +75,12 @@ dynamicProxy:
     timePeriod: 60 #定期检测代理是否可用时间周期，单位秒（S）
     maxContinuousFails: 5 #连续失败次数超过该值，则认为代理不可用
     webhook: https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=73662ac1-1055-48a7-8c89-37964b5f4fdc111 # 企业微信机器人Webhook地址
+
+modelscope:
+    modelCacheRoot: ./repos/modelscope/models  # 模型缓存根目录
+    datasetCacheRoot: ./repos/modelscope/datasets  # 数据集缓存根目录
+    officialBaseURL: https://www.modelscope.cn  # ModelScope官方基础地址
+    chunkSize: 8388608  # 8MB分块，16*1024*1024的数值结果
+    maxRetry: 5  # 超时重试次数
+    retryDelay: 3  # 重试间隔，单位秒（S）（原配置为5*time.Second，YAML中简化为数值+注释）
+    minFileSize: 1  # 最小缓存文件大小，单位字节（B）
