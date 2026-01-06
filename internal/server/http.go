@@ -80,6 +80,7 @@ func NewEngine() *echo.Echo {
 	r := echo.New()
 	middleware.InitMiddlewareConfig()
 	r.Use(middleware.QueueLimitMiddleware)
+	r.Use(middleware.CORSMiddleware())
 
 	t := &Template{
 		templates: template.Must(template.ParseFS(templatesFS, "templates/*.html")),
