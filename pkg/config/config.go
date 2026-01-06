@@ -46,6 +46,7 @@ type Config struct {
 	DynamicProxy     DynamicProxy     `json:"dynamicProxy" yaml:"dynamicProxy"`
 	Scheduler        Scheduler        `json:"scheduler" yaml:"scheduler"`
 	mu               sync.RWMutex
+	Modelscope       Modelscope `yaml:"modelscope"`
 }
 
 type ServerConfig struct {
@@ -152,6 +153,17 @@ type DynamicProxy struct {
 	TimePeriod         int    `json:"timePeriod" yaml:"timePeriod"`
 	MaxContinuousFails int    `json:"maxContinuousFails" yaml:"maxContinuousFails"`
 	Webhook            string `json:"webhook " yaml:"webhook"`
+}
+
+type Modelscope struct {
+	ProxyPort        string `yaml:"proxyPort"`
+	ModelCacheRoot   string `yaml:"modelCacheRoot"`
+	DatasetCacheRoot string `yaml:"datasetCacheRoot"`
+	OfficialBaseURL  string `yaml:"officialBaseURL"`
+	ChunkSize        int64  `yaml:"chunkSize"`
+	MaxRetry         int    `yaml:"maxRetry"`
+	RetryDelay       int    `yaml:"retryDelay"`
+	MinFileSize      int64  `yaml:"minFileSize"`
 }
 
 func (c *Config) GetHFURLBase() string {

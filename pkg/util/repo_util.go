@@ -30,6 +30,7 @@ import (
 	"dingospeed/pkg/common"
 
 	"github.com/bytedance/sonic"
+	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 )
 
@@ -141,11 +142,16 @@ func IsFile(path string) bool {
 
 // GetFileSize 获取文件大小
 func GetFileSize(path string) int64 {
-	fh, err := os.Stat(path)
+	fileInfo, err := os.Stat(path)
 	if err != nil {
-		fmt.Printf("读取文件%s失败, err: %s\n", path, err)
+		if os.IsNotExist(err) {
+			zap.S().Infof("文件不存在: %s", path)
+			return 0
+		}
+		zap.S().Errorf("读取文件大小失败: %s, err: %v", path, err)
+		return 0
 	}
-	return fh.Size()
+	return fileInfo.Size()
 }
 
 func ReadDir(dir string) ([]string, error) {

@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net"
+	"net/http"
 	"strings"
 
 	"dingospeed/pkg/config"
@@ -73,5 +74,25 @@ func nextRequest(c echo.Context, next echo.HandlerFunc) error {
 		return next(c)
 	default:
 		return util.ErrorTooManyRequest(c)
+	}
+}
+
+// CORSMiddleware 跨域中间件（适配Echo框架）
+func CORSMiddleware() echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			// 设置跨域头
+			c.Response().Header().Set("Access-Control-Allow-Origin", "*")
+			c.Response().Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS, HEAD")
+			c.Response().Header().Set("Access-Control-Allow-Headers", "*")
+			c.Response().Header().Set("Access-Control-Expose-Headers", "*")
+
+			// 处理OPTIONS预检请求
+			if c.Request().Method == http.MethodOptions {
+				return c.NoContent(http.StatusOK)
+			}
+
+			return next(c)
+		}
 	}
 }
