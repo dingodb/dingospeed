@@ -83,7 +83,6 @@ func (p *CacheJobService) CreateCacheJob(c echo.Context, jobReq *query.CreateCac
 		}
 		if err = p.cachePool.SubmitForTimeout(ctx, task); err != nil {
 			p.schedulerDao.ExecUpdateCacheJobStatus(int(cacheJob.Id), consts.RunningStatusJobWait, jobReq.InstanceId, "", "", consts.TaskMoreErrMsg, 0)
-			return 0, err
 		}
 	} else if jobReq.Type == consts.CacheTypeMount {
 		cacheTask.TaskNo = int(jobReq.RepositoryId)
@@ -93,7 +92,6 @@ func (p *CacheJobService) CreateCacheJob(c echo.Context, jobReq *query.CreateCac
 		}
 		if err := p.cachePool.SubmitForTimeout(ctx, task); err != nil {
 			p.schedulerDao.ExecUpdateRepositoryMountStatus(cacheTask.TaskNo, consts.RunningStatusJobWait, consts.TaskMoreErrMsg)
-			return 0, err
 		}
 	} else {
 		defer cancelFunc()
@@ -155,9 +153,8 @@ func (p *CacheJobService) ResumeCacheJob(c echo.Context, resumeCacheJobReq *quer
 			Authorization: authorization,
 			UsedStorage:   uint64(resumeCacheJobReq.UsedStorage),
 		}
-		if err := p.cachePool.SubmitForTimeout(ctx, task); err != nil {
+		if err = p.cachePool.SubmitForTimeout(ctx, task); err != nil {
 			p.schedulerDao.ExecUpdateCacheJobStatus(int(resumeCacheJobReq.Id), consts.RunningStatusJobWait, resumeCacheJobReq.InstanceId, "", "", consts.TaskMoreErrMsg, 0)
-			return err
 		}
 	}
 	return nil

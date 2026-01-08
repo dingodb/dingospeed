@@ -183,6 +183,7 @@ func (l *LocalOperationService) readAndSyncFileProcess(filePath string) error {
 				if err != nil {
 					return err
 				}
+				count = 0
 			}
 		}
 	}
