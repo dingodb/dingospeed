@@ -7,7 +7,7 @@ server:
     metrics: true
     online: true #true表示本地找不到，去hfNetLoc地址查找并下载模型数据，false表示本地如果没有，直接返回没有
     repos: ./repos
-    hfNetLoc: huggingface.co   # huggingface.co
+    hfNetLoc: hf-mirror.com   # huggingface.co
     bpHfNetLoc: hf-mirror.com #hf-mirror.com
     hfScheme: https
     ssl:
@@ -16,7 +16,7 @@ server:
         caFile: ./config/ssl/ca.crt
 
 scheduler:
-    mode: cluster    #运行的两种模式：standalone&cluster,default:standalone
+    mode: standalone    #运行的两种模式：standalone&cluster,default:standalone
     addr: 10.230.203.240:19091   # 调度器地址 10.230.204.102:19091
     strategy:                       #在cluster模型下，文件调度策略
         minimumFileSize: 0          # 文件参与调度最小值，单位字节
@@ -26,7 +26,8 @@ scheduler:
         host: 10.230.203.240
         port: 8090
         heartbeatPeriod: 5          # 心跳周期，单位秒
-    publicDomain: http://hfmirror.mas.zetyun.cn:8082
+    publicDomain: http://hfmirror.mas.zetyun.cn:8082  #用于在Alayanew上文件下载的链接地址，通常为离线的域名，即8082。
+    linkDomain: http://hfmirror.mas.zetyun.cn:8082    #用于的huggingface_hub调用/tree/main接口时替换的link地址，需和用户配置hf-endpoint域名保持一致。
 
 download:
     blockSize: 8388608           #默认文件块大小为8MB（8388608），单位字节，1048576（1MB）

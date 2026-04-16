@@ -107,6 +107,7 @@ type Scheduler struct {
 	Strategy     Strategy  `json:"strategy" yaml:"strategy"`
 	Discovery    Discovery `json:"discovery" yaml:"discovery"`
 	PublicDomain string    `json:"publicDomain" yaml:"publicDomain"`
+	LinkDomain   string    `json:"linkDomain" yaml:"linkDomain"`
 }
 
 type Strategy struct {
@@ -370,6 +371,9 @@ func (c *Config) SetDefaults() {
 		c.DiskClean.CollectTimePeriod = 1
 	}
 	c.Scheduler.OriginMode = c.Scheduler.Mode
+	if c.Scheduler.LinkDomain == "" {
+		c.Scheduler.LinkDomain = c.Scheduler.PublicDomain
+	}
 }
 
 func Scan(path string) (*Config, error) {

@@ -47,8 +47,8 @@ func TestFileWrite2(t *testing.T) {
 
 }
 
-// func TestFileWrite3(t *testing.T) {
-// 	size := -18
-// 	s := make([]byte, (size+7)/8)
-// 	fmt.Println(len(s))
-// }
+func TestFileWrite3(t *testing.T) {
+	size := -14
+	s := make([]byte, (size+7)/8)
+	fmt.Println(len(s))
+}

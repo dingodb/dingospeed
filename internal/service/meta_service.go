@@ -15,9 +15,11 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 
 	"dingospeed/internal/dao"
 	"dingospeed/pkg/common"
@@ -103,7 +105,7 @@ func (m *MetaService) RepoRefs(c echo.Context, repoType, org, repo string) error
 	var bodyStreamChan = make(chan []byte, consts.RespChanSize)
 	bodyStreamChan <- cacheContent.OriginContent
 	close(bodyStreamChan)
-	return util.ResponseStream(c, orgRepo, cacheContent.Headers, bodyStreamChan)
+	return util.ResponseStream(context.Background(), c, orgRepo, cacheContent.Headers, bodyStreamChan, nil)
 }
 
 func (m *MetaService) ForwardToNewSite(c echo.Context) error {
@@ -114,9 +116,26 @@ func (m *MetaService) ForwardToNewSite(c echo.Context) error {
 		return util.ErrorProxyError(c)
 	}
 	defer resp.Body.Close()
+
+	// 获取当前请求路径
+	var flag bool
+	reqPath := c.Request().URL.Path
+	if strings.Contains(reqPath, "/tree/") && strings.Contains(reqPath, "/api/") {
+		flag = true
+	}
 	response := c.Response()
 	for k, v := range resp.Header {
-		response.Header()[k] = v
+		if flag && k == "Link" {
+			originalLink := strings.Join(v, ", ")
+			newLink := strings.ReplaceAll(
+				originalLink,
+				"https://huggingface.co",
+				config.SysConfig.Scheduler.LinkDomain,
+			)
+			response.Header()[k] = []string{newLink}
+		} else {
+			response.Header()[k] = v
+		}
 	}
 	response.WriteHeader(resp.StatusCode)
 	_, err = io.Copy(response, resp.Body)

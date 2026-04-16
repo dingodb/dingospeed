@@ -114,7 +114,7 @@ func (m *MetaDao) GetMetadata(repoType, orgRepo, revision, method, authorization
 	lock := m.lockDao.getMetaDataReqLock(orgRepoKey)
 	lock.Lock()
 	defer lock.Unlock()
-	commitSha, err := m.fileDao.GetFileCommitSha(repoType, orgRepo, revision, authorization)
+	commitSha, err := m.fileDao.GetFileCommitSha(repoType, orgRepo, revision, authorization, "meta")
 	if err != nil {
 		return nil, err
 	}

@@ -66,7 +66,7 @@ func (f *FileDao) CheckCommitHf(repoType, orgRepo, commit, authorization string)
 	return resp.StatusCode, myerr.New("request commit err")
 }
 
-func (f *FileDao) GetFileCommitSha(repoType, orgRepo, commit, authorization string) (string, error) {
+func (f *FileDao) GetFileCommitSha(repoType, orgRepo, commit, authorization string, source string) (string, error) {
 	metaShaKey := GetMetaShaRepoKey(orgRepo, commit, authorization)
 	if v, ok := f.baseData.Cache.Get(metaShaKey); ok {
 		return v.(string), nil
@@ -76,30 +76,37 @@ func (f *FileDao) GetFileCommitSha(repoType, orgRepo, commit, authorization stri
 		err       error
 	)
 	if config.SysConfig.Online() {
-		code, sha, err := f.getCommitHfRemote(repoType, orgRepo, commit, authorization)
-		if err != nil {
-			return "", myerr.NewAppendCode(code, fmt.Sprintf("request fail.%v", err))
-		}
-		if code != http.StatusOK && code != http.StatusTemporaryRedirect {
-			zap.S().Errorf("getFileCommitSha %s code:%d", orgRepo, code)
-			if code == http.StatusNotFound {
-				return "", myerr.NewAppendCode(code, "未找到该资源。")
-			} else if code == http.StatusUnauthorized || code == http.StatusForbidden {
-				return "", myerr.NewAppendCode(code, "没有该资源的访问权限，请联系管理员。")
-			} else {
-				return "", myerr.NewAppendCode(code, fmt.Sprintf("请求资源失败.(%d)", code))
-			}
-		} else {
-			commitSha = sha
-		}
-		f.baseData.Cache.Set(metaShaKey, commitSha, config.SysConfig.GetDefaultExpiration())
-		f.baseData.Cache.Set(GetMetaShaRepoKey(orgRepo, commitSha, authorization), commitSha, config.SysConfig.GetDefaultExpiration())
-		return commitSha, nil
+		goto remoteRequestMeta
 	}
 	commitSha, err = f.GetCommitHfOffline(repoType, orgRepo, commit)
 	if err != nil {
-		zap.S().Errorf("getFileCommitSha GetCommitHfOffline err.%v", err)
+		if source == "file" {
+			// 若只是发起文件下载（先在线后离线），将不会校验meta文件是否存在，没有就创建，主要是看文件本身是否存在。
+			goto remoteRequestMeta
+		}
+		zap.S().Warnf("getFileCommitSha GetCommitHfOffline err.%v", err)
 		return "", myerr.NewAppendCode(http.StatusNotFound, fmt.Sprintf("%s is not found", orgRepo))
+	}
+	f.baseData.Cache.Set(metaShaKey, commitSha, config.SysConfig.GetDefaultExpiration())
+	f.baseData.Cache.Set(GetMetaShaRepoKey(orgRepo, commitSha, authorization), commitSha, config.SysConfig.GetDefaultExpiration())
+	return commitSha, nil
+
+remoteRequestMeta:
+	code, sha, err := f.getCommitHfRemote(repoType, orgRepo, commit, authorization)
+	if err != nil {
+		return "", myerr.NewAppendCode(code, fmt.Sprintf("request fail.%v", err))
+	}
+	if code != http.StatusOK && code != http.StatusTemporaryRedirect {
+		zap.S().Errorf("getFileCommitSha %s code:%d", orgRepo, code)
+		if code == http.StatusNotFound {
+			return "", myerr.NewAppendCode(code, "未找到该资源。")
+		} else if code == http.StatusUnauthorized || code == http.StatusForbidden {
+			return "", myerr.NewAppendCode(code, "没有该资源的访问权限，请联系管理员。")
+		} else {
+			return "", myerr.NewAppendCode(code, fmt.Sprintf("请求资源失败.(%d)", code))
+		}
+	} else {
+		commitSha = sha
 	}
 	f.baseData.Cache.Set(metaShaKey, commitSha, config.SysConfig.GetDefaultExpiration())
 	f.baseData.Cache.Set(GetMetaShaRepoKey(orgRepo, commitSha, authorization), commitSha, config.SysConfig.GetDefaultExpiration())
@@ -176,7 +183,7 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, orgRepo, commit, fi
 	pathInfo, err := f.GetPathsInfo(hfUri, repoType, orgRepo, commit, authorization, fileName)
 	if err != nil {
 		if e, ok := err.(myerr.Error); ok {
-			zap.S().Errorf("GetPathsInfo code:%d, err:%v", e.StatusCode(), err)
+			zap.S().Warnf("GetPathsInfo code:%d, err:%v", e.StatusCode(), err)
 			return util.ErrorEntryUnknown(c, e.StatusCode(), e.Error())
 		}
 		zap.S().Errorf("GetPathsInfo err:%v", err)
@@ -448,8 +455,10 @@ func (f *FileDao) FileChunkGet(c echo.Context, taskParam *downloader.TaskParam, 
 	taskParam.Context = ctx
 	taskParam.ResponseChan = responseChan
 	taskParam.Cancel = cancel
-	go f.downloaderDao.FileDownload(startPos, endPos, isInnerRequest, taskParam)
-	if err := util.ResponseStream(c, fmt.Sprintf("%s/%s", taskParam.OrgRepo, taskParam.FileName), respHeaders, responseChan); err != nil {
+	fileErrCh := make(chan error, 1)
+	fileName := fmt.Sprintf("%s/%s", taskParam.OrgRepo, taskParam.FileName)
+	go f.downloaderDao.FileDownload(fileErrCh, startPos, endPos, isInnerRequest, taskParam)
+	if err := util.ResponseStream(ctx, c, fileName, respHeaders, responseChan, fileErrCh); err != nil {
 		zap.S().Errorf("FileChunkGet stream err.%v", err)
 		return util.ErrorProxyTimeout(c)
 	}

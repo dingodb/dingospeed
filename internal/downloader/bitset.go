@@ -27,6 +27,9 @@ type Bitset struct {
 
 // NewBitset 创建一个新的 Bitset 对象
 func NewBitset(size uint64) *Bitset {
+	if size < 0 {
+		size = DEFAULT_BLOCK_MASK_MAX
+	}
 	return &Bitset{
 		size: size,
 		bits: make([]byte, (size+7)/8),

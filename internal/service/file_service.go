@@ -37,7 +37,7 @@ func NewFileService(fileDao *dao.FileDao) *FileService {
 func (f *FileService) FileHeadCommon(c echo.Context, repoType, orgRepo, commit, filePath string) error {
 	zap.S().Infof("exec file head:%s/%s/%s/%s, remoteAdd:%s", repoType, orgRepo, commit, filePath, c.Request().RemoteAddr)
 	authorization := c.Request().Header.Get("authorization")
-	commitSha, err := f.fileDao.GetFileCommitSha(repoType, orgRepo, commit, authorization)
+	commitSha, err := f.fileDao.GetFileCommitSha(repoType, orgRepo, commit, authorization, "file")
 	if err != nil {
 		if e, ok := err.(myerr.Error); ok {
 			return util.ErrorEntryUnknown(c, e.StatusCode(), e.Error())
@@ -50,7 +50,7 @@ func (f *FileService) FileHeadCommon(c echo.Context, repoType, orgRepo, commit, 
 func (f *FileService) FileGetCommon(c echo.Context, repoType, orgRepo, commit, filePath string) error {
 	zap.S().Infof("exec file get:%s/%s/%s/%s, remoteAdd:%s", repoType, orgRepo, commit, filePath, c.Request().RemoteAddr)
 	authorization := c.Request().Header.Get("authorization")
-	commitSha, err := f.fileDao.GetFileCommitSha(repoType, orgRepo, commit, authorization)
+	commitSha, err := f.fileDao.GetFileCommitSha(repoType, orgRepo, commit, authorization, "file")
 	if err != nil {
 		if e, ok := err.(myerr.Error); ok {
 			return util.ErrorEntryUnknown(c, e.StatusCode(), e.Error())

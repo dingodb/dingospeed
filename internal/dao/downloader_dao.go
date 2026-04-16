@@ -17,6 +17,7 @@ package dao
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"dingospeed/pkg/common"
 	"dingospeed/pkg/config"
 	"dingospeed/pkg/consts"
+	myerr "dingospeed/pkg/error"
 	"dingospeed/pkg/proto/manager"
 	"dingospeed/pkg/util"
 
@@ -41,22 +43,28 @@ func NewDownloaderDao(schedulerDao *SchedulerDao) *DownloaderDao {
 }
 
 // 整个文件
-func (d *DownloaderDao) FileDownload(startPos, endPos int64, isInnerRequest bool, taskParam *downloader.TaskParam) {
+func (d *DownloaderDao) FileDownload(chanErr chan error, startPos, endPos int64, isInnerRequest bool, taskParam *downloader.TaskParam) {
 	var (
 		wg sync.WaitGroup
 	)
+	defer close(chanErr)
 	defer close(taskParam.ResponseChan)
 	dingCacheManager := downloader.GetInstance()
 	dingFile, err := dingCacheManager.GetDingFile(taskParam.BlobsFile, taskParam.FileSize)
 	if err != nil {
 		zap.S().Errorf("GetDingFile err.%v", err)
+		chanErr <- myerr.NewAppendCode(http.StatusInternalServerError, "Get DingFile err")
 		return
 	}
 	defer func() {
 		dingCacheManager.ReleasedDingFile(taskParam.BlobsFile)
 	}()
 	taskParam.DingFile = dingFile
-	tasks := d.constructTask(startPos, endPos, isInnerRequest, taskParam)
+	tasks, err := d.constructTask(startPos, endPos, isInnerRequest, taskParam)
+	if err != nil {
+		chanErr <- err
+		return
+	}
 	wg.Add(1)
 	go func() {
 		defer func() {
@@ -85,21 +93,24 @@ func (d *DownloaderDao) FileDownload(startPos, endPos int64, isInnerRequest bool
 	wg.Wait() // 等待协程池所有远程下载任务执行完毕
 }
 
-func (d *DownloaderDao) constructTask(startPos, endPos int64, isInnerRequest bool, taskParam *downloader.TaskParam) []common.DownloadTask {
+func (d *DownloaderDao) constructTask(startPos, endPos int64, isInnerRequest bool, taskParam *downloader.TaskParam) ([]common.DownloadTask, error) {
 	var (
-		tasks         []common.DownloadTask
-		ctx           = taskParam.Context
-		existPosition bool
-		curPos        int64
+		tasks        []common.DownloadTask
+		ctx          = taskParam.Context
+		fileComplete bool
+		curPos       int64
 	)
 	// 小于这个值的文件将不参与调度
 	if taskParam.FileSize <= config.SysConfig.GetMinimumFileSize() {
 		goto localTask
 	}
 	// 分析下载类型是否全部存在，若文件不完整，返回当前已缓存的最大偏移量
-	existPosition, curPos = analysisFilePosition(taskParam.DingFile, startPos, endPos)
+	fileComplete, curPos = analysisFilePosition(taskParam.DingFile, startPos, endPos)
+	if !fileComplete && !config.SysConfig.Online() { // 文件不完整，且当前节点为离线
+		return nil, myerr.NewAppendCode(http.StatusNotFound, "model file is not exist")
+	}
 	// isInnerRequest为true，即内部请求，是已经被调度过后，设置为内部域名的请求，这种请求将不会再次参与调度，直接做下载即可。
-	if !isInnerRequest && config.SysConfig.IsCluster() && !existPosition {
+	if !isInnerRequest && config.SysConfig.IsCluster() && !fileComplete {
 		if response, err := d.getRequestDomainScheduler(taskParam.DataType, taskParam.OrgRepo, taskParam.FileName, taskParam.Etag, curPos, endPos, taskParam.FileSize); err != nil {
 			zap.S().Errorf("getRequestDomainScheduler err.%v", err)
 			goto localTask
@@ -125,7 +136,7 @@ func (d *DownloaderDao) constructTask(startPos, endPos int64, isInnerRequest boo
 					afterTasks := getContiguousRanges(response.MaxOffset, endPos, taskParam)
 					tasks = append(tasks, afterTasks...)
 				}
-				return tasks
+				return tasks, nil
 			} else {
 				goto localTask
 			}
@@ -137,7 +148,7 @@ func (d *DownloaderDao) constructTask(startPos, endPos int64, isInnerRequest boo
 localTask:
 	taskParam.Domain = config.SysConfig.GetHFURLBase()
 	tasks = getContiguousRanges(startPos, endPos, taskParam)
-	return tasks
+	return tasks, nil
 }
 
 func (d *DownloaderDao) getRequestDomainScheduler(dataType, orgRepo, fileName, etag string, startPos, endPos, fileSize int64) (*manager.SchedulerFileResponse, error) {
@@ -197,7 +208,7 @@ func analysisFilePosition(dingFile *downloader.DingCache, startPos, endPos int64
 		return true, startPos
 	}
 	if startPos < 0 || endPos <= startPos || endPos > dingFile.GetFileSize() {
-		zap.S().Errorf("Invalid startPos/endPos: path=%s, startPos=%d, endPos=%d", dingFile.GetPath(), startPos, endPos)
+		zap.S().Errorf("Invalid startPos/endPos: path=%s, startPos=%d, endPos=%d, filesize:%d", dingFile.GetPath(), startPos, endPos, dingFile.GetFileSize())
 		return false, startPos
 	}
 	startBlock := startPos / dingFile.GetBlockSize()

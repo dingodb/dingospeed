@@ -16,6 +16,7 @@ package util
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -28,6 +29,7 @@ import (
 	"dingospeed/pkg/common"
 	"dingospeed/pkg/config"
 	"dingospeed/pkg/consts"
+	myerr "dingospeed/pkg/error"
 	"dingospeed/pkg/prom"
 
 	"github.com/avast/retry-go"
@@ -304,18 +306,26 @@ func doPost(client *http.Client, targetURL string, contentType string, data []by
 	}, nil
 }
 
-func ResponseStream(c echo.Context, fileName string, headers map[string]string, content <-chan []byte) error {
+func ResponseStream(ctx context.Context, c echo.Context, fileName string, headers map[string]string, content <-chan []byte, fileErrCh chan error) error {
 	c.Response().Header().Set("Content-Type", "text/event-stream")
 	c.Response().Header().Set("Cache-Control", "no-cache")
 	c.Response().Header().Set("Connection", "keep-alive")
 	for k, v := range headers {
 		c.Response().Header().Set(k, v)
 	}
-	c.Response().WriteHeader(http.StatusOK)
+	if fileErrCh != nil {
+		if err := <-fileErrCh; err != nil {
+			if e, ok := err.(myerr.Error); ok {
+				return c.String(e.StatusCode(), err.Error())
+			}
+			return ErrorProxyError(c)
+		}
+	}
 	flusher, ok := c.Response().Writer.(http.Flusher)
 	if !ok {
 		return c.String(http.StatusInternalServerError, "Streaming unsupported!")
 	}
+	c.Response().WriteHeader(http.StatusOK)
 	for {
 		select {
 		case b, ok := <-content:
@@ -336,6 +346,8 @@ func ResponseStream(c echo.Context, fileName string, headers map[string]string, 
 				}
 			}
 			flusher.Flush()
+		case <-ctx.Done():
+			return c.String(http.StatusInternalServerError, ctx.Err().Error())
 		}
 	}
 }
@@ -346,9 +358,6 @@ func ForwardRequest(originalReq echo.Context) (*http.Response, error) {
 		return nil, fmt.Errorf("construct http client err: %v", err)
 	}
 	reqUri := originalReq.Request().URL.Path
-	// if strings.Contains(reqUri, "/xet-bridge-us/") {
-	// 	domain = config.SysConfig.GetXetURLBase()
-	// }
 	targetURL, err := url.Parse(domain)
 	if err != nil {
 		return nil, fmt.Errorf("url.Parse err: %v", err)
