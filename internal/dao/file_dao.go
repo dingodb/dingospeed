@@ -227,18 +227,25 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, orgRepo, commit, fi
 
 func constructRespHeader(c echo.Context, pathInfo *common.PathsInfo, commit, fileName string) (map[string]string, string, int64, int64) {
 	var startPos, endPos int64
+	var clientHasRange bool
 	if pathInfo.Size > 0 { // There exists a file of size 0
 		var headRange = c.Request().Header.Get("Range")
-		if headRange == "" {
-			headRange = fmt.Sprintf("bytes=%d-%d", 0, pathInfo.Size-1)
+		defaultEndPos := pathInfo.Size - 1
+		if headRange != "" {
+			clientHasRange = true
+		} else {
+			headRange = fmt.Sprintf("bytes=%d-%d", 0, defaultEndPos)
 		}
-		startPos, endPos = parseRangeParams(headRange, pathInfo.Size)
+		startPos, endPos = parseRangeParams(headRange, defaultEndPos)
 		endPos = endPos + 1
 	} else if pathInfo.Size == 0 {
 		zap.S().Warnf("file %s size: %d", fileName, pathInfo.Size)
 	}
 	respHeaders := map[string]string{}
 	respHeaders[consts.HUGGINGFACE_HEADER_CONTENT_LENGTH] = util.Itoa(endPos - startPos)
+	if clientHasRange && pathInfo.Size > 0 {
+		respHeaders["Content-Range"] = fmt.Sprintf("bytes %d-%d/%d", startPos, endPos-1, pathInfo.Size)
+	}
 	if commit != "" {
 		respHeaders[strings.ToLower(consts.HUGGINGFACE_HEADER_X_REPO_COMMIT)] = commit
 	}
@@ -455,10 +462,11 @@ func (f *FileDao) FileChunkGet(c echo.Context, taskParam *downloader.TaskParam, 
 	taskParam.Context = ctx
 	taskParam.ResponseChan = responseChan
 	taskParam.Cancel = cancel
-	fileErrCh := make(chan error, 1)
 	fileName := fmt.Sprintf("%s/%s", taskParam.OrgRepo, taskParam.FileName)
-	go f.downloaderDao.FileDownload(fileErrCh, startPos, endPos, isInnerRequest, taskParam)
-	if err := util.ResponseStream(ctx, c, fileName, respHeaders, responseChan, fileErrCh); err != nil {
+	if err := f.downloaderDao.FileDownload(startPos, endPos, isInnerRequest, taskParam); err != nil {
+		return util.MultipleErrorProxyError(err, c)
+	}
+	if err := util.ResponseStream(c, fileName, respHeaders, responseChan); err != nil {
 		zap.S().Errorf("FileChunkGet stream err.%v", err)
 		return util.ErrorProxyTimeout(c)
 	}
@@ -526,7 +534,7 @@ func (f *FileDao) GetFileOffset(dataType string, org string, repo string, etag s
 	return curPos
 }
 
-func parseRangeParams(fileRange string, fileSize int64) (int64, int64) {
+func parseRangeParams(fileRange string, defaultEndPos int64) (int64, int64) {
 	if strings.Contains(fileRange, "/") {
 		split := strings.SplitN(fileRange, "/", 2)
 		fileRange = split[0]
@@ -548,7 +556,7 @@ func parseRangeParams(fileRange string, fileSize int64) (int64, int64) {
 	if s2 != 0 {
 		endPos = s2
 	} else {
-		endPos = fileSize - 1
+		endPos = defaultEndPos
 	}
 	return startPos, endPos
 }

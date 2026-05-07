@@ -15,7 +15,6 @@
 package service
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"sort"
@@ -105,7 +104,7 @@ func (m *MetaService) RepoRefs(c echo.Context, repoType, org, repo string) error
 	var bodyStreamChan = make(chan []byte, consts.RespChanSize)
 	bodyStreamChan <- cacheContent.OriginContent
 	close(bodyStreamChan)
-	return util.ResponseStream(context.Background(), c, orgRepo, cacheContent.Headers, bodyStreamChan, nil)
+	return util.ResponseStream(c, orgRepo, cacheContent.Headers, bodyStreamChan)
 }
 
 func (m *MetaService) ForwardToNewSite(c echo.Context) error {

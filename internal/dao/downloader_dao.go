@@ -43,54 +43,52 @@ func NewDownloaderDao(schedulerDao *SchedulerDao) *DownloaderDao {
 }
 
 // 整个文件
-func (d *DownloaderDao) FileDownload(chanErr chan error, startPos, endPos int64, isInnerRequest bool, taskParam *downloader.TaskParam) {
-	var (
-		wg sync.WaitGroup
-	)
-	defer close(chanErr)
-	defer close(taskParam.ResponseChan)
+func (d *DownloaderDao) FileDownload(startPos, endPos int64, isInnerRequest bool, taskParam *downloader.TaskParam) error {
 	dingCacheManager := downloader.GetInstance()
 	dingFile, err := dingCacheManager.GetDingFile(taskParam.BlobsFile, taskParam.FileSize)
 	if err != nil {
 		zap.S().Errorf("GetDingFile err.%v", err)
-		chanErr <- myerr.NewAppendCode(http.StatusInternalServerError, "Get DingFile err")
-		return
+		return myerr.NewAppendCode(http.StatusInternalServerError, "Get DingFile err")
 	}
-	defer func() {
-		dingCacheManager.ReleasedDingFile(taskParam.BlobsFile)
-	}()
 	taskParam.DingFile = dingFile
 	tasks, err := d.constructTask(startPos, endPos, isInnerRequest, taskParam)
 	if err != nil {
-		chanErr <- err
-		return
+		return err
 	}
-	wg.Add(1)
 	go func() {
+		defer close(taskParam.ResponseChan)
 		defer func() {
-			wg.Done()
+			dingCacheManager.ReleasedDingFile(taskParam.BlobsFile)
 		}()
-		for i := 0; i < len(tasks); i++ {
-			if taskParam.Context.Err() != nil {
-				break
-			}
-			task := tasks[i]
-			if i == 0 {
-				task.GetResponseChan() <- []byte{} // 先建立长连接
-			}
-			task.OutResult()
-		}
-	}()
-	if len(tasks) > 0 {
+		var wg sync.WaitGroup
 		wg.Add(1)
 		go func() {
 			defer func() {
 				wg.Done()
 			}()
-			doTask(taskParam.Context, tasks)
+			for i := 0; i < len(tasks); i++ {
+				if taskParam.Context.Err() != nil {
+					break
+				}
+				task := tasks[i]
+				if i == 0 {
+					task.GetResponseChan() <- []byte{} // 先建立长连接
+				}
+				task.OutResult()
+			}
 		}()
-	}
-	wg.Wait() // 等待协程池所有远程下载任务执行完毕
+		if len(tasks) > 0 {
+			wg.Add(1)
+			go func() {
+				defer func() {
+					wg.Done()
+				}()
+				doTask(taskParam.Context, tasks)
+			}()
+		}
+		wg.Wait() // 等待协程池所有远程下载任务执行完毕
+	}()
+	return nil
 }
 
 func (d *DownloaderDao) constructTask(startPos, endPos int64, isInnerRequest bool, taskParam *downloader.TaskParam) ([]common.DownloadTask, error) {
@@ -107,7 +105,7 @@ func (d *DownloaderDao) constructTask(startPos, endPos int64, isInnerRequest boo
 	// 分析下载类型是否全部存在，若文件不完整，返回当前已缓存的最大偏移量
 	fileComplete, curPos = analysisFilePosition(taskParam.DingFile, startPos, endPos)
 	if !fileComplete && !config.SysConfig.Online() { // 文件不完整，且当前节点为离线
-		return nil, myerr.NewAppendCode(http.StatusNotFound, "model file is not exist")
+		return nil, myerr.NewAppendCode(http.StatusNotFound, "Entry not found")
 	}
 	// isInnerRequest为true，即内部请求，是已经被调度过后，设置为内部域名的请求，这种请求将不会再次参与调度，直接做下载即可。
 	if !isInnerRequest && config.SysConfig.IsCluster() && !fileComplete {
@@ -237,7 +235,7 @@ func getContiguousRanges(startPos, endPos int64, taskParam *downloader.TaskParam
 	if startPos == 0 && endPos == 0 {
 		return
 	}
-	if startPos < 0 || endPos <= startPos || endPos > dingFile.GetFileSize() {
+	if startPos < 0 || endPos <= startPos || (endPos-1) > dingFile.GetFileSize() {
 		zap.S().Errorf("Invalid pos path=%s, startPos=%d, endPos=%d", dingFile.GetPath(), startPos, endPos)
 		return
 	}

@@ -15,7 +15,6 @@
 package handler
 
 import (
-	"context"
 	"net/http"
 	"strings"
 
@@ -69,7 +68,7 @@ func (handler *MetaHandler) GetMetadataHandler(c echo.Context) error {
 		var bodyStreamChan = make(chan []byte, consts.RespChanSize)
 		bodyStreamChan <- cacheContent.OriginContent
 		close(bodyStreamChan)
-		err = util.ResponseStream(context.Background(), c, orgRepo, cacheContent.Headers, bodyStreamChan, nil)
+		err = util.ResponseStream(c, orgRepo, cacheContent.Headers, bodyStreamChan)
 		if err != nil {
 			return err
 		}

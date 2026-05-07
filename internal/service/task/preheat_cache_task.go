@@ -140,9 +140,7 @@ func (p *PreheatCacheTask) startPreheat(hfUri, orgRepo, fileName, commit, etag, 
 		return p.result(ctx, responseChan)
 	})
 	eg.Go(func() error {
-		fileErrCh := make(chan error, 1)
-		p.DownloaderDao.FileDownload(fileErrCh, offset, fileSize, false, taskParam)
-		if err := <-fileErrCh; err != nil {
+		if err := p.DownloaderDao.FileDownload(offset, fileSize, false, taskParam); err != nil {
 			return err
 		}
 		return nil

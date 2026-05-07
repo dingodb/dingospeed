@@ -16,7 +16,6 @@ package util
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"io"
 	"net"
@@ -29,7 +28,6 @@ import (
 	"dingospeed/pkg/common"
 	"dingospeed/pkg/config"
 	"dingospeed/pkg/consts"
-	myerr "dingospeed/pkg/error"
 	"dingospeed/pkg/prom"
 
 	"github.com/avast/retry-go"
@@ -306,26 +304,25 @@ func doPost(client *http.Client, targetURL string, contentType string, data []by
 	}, nil
 }
 
-func ResponseStream(ctx context.Context, c echo.Context, fileName string, headers map[string]string, content <-chan []byte, fileErrCh chan error) error {
+func ResponseStream(c echo.Context, fileName string, headers map[string]string, content <-chan []byte) error {
 	c.Response().Header().Set("Content-Type", "text/event-stream")
 	c.Response().Header().Set("Cache-Control", "no-cache")
 	c.Response().Header().Set("Connection", "keep-alive")
 	for k, v := range headers {
+		// 流式响应不应预设Content-Length，因为数据是流式传输的，无法保证字节数与预估值一致。
+		// 若实际传输字节数与Content-Length不符，客户端会报错（如curl: (18) transfer closed with N bytes remaining to read）。
 		c.Response().Header().Set(k, v)
 	}
-	if fileErrCh != nil {
-		if err := <-fileErrCh; err != nil {
-			if e, ok := err.(myerr.Error); ok {
-				return c.String(e.StatusCode(), err.Error())
-			}
-			return ErrorProxyError(c)
-		}
+	// 根据 headers 中是否包含 Content-Range 来决定状态码
+	statusCode := http.StatusOK
+	if c.Response().Header().Get("Content-Range") != "" {
+		statusCode = http.StatusPartialContent
 	}
+	c.Response().WriteHeader(statusCode)
 	flusher, ok := c.Response().Writer.(http.Flusher)
 	if !ok {
 		return c.String(http.StatusInternalServerError, "Streaming unsupported!")
 	}
-	c.Response().WriteHeader(http.StatusOK)
 	for {
 		select {
 		case b, ok := <-content:
@@ -346,8 +343,6 @@ func ResponseStream(ctx context.Context, c echo.Context, fileName string, header
 				}
 			}
 			flusher.Flush()
-		case <-ctx.Done():
-			return c.String(http.StatusInternalServerError, ctx.Err().Error())
 		}
 	}
 }

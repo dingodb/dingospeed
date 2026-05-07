@@ -206,7 +206,7 @@ func (r *RemoteFileTask) OutResult() {
 		select {
 		case chunk, ok := <-r.Queue:
 			if !ok {
-				zap.S().Debugf("end remote outResult close. taskNo:%d, %s/%s", r.TaskNo, r.OrgRepo, r.FileName)
+				zap.S().Debugf("close remote outResult. taskNo:%d, %s/%s", r.TaskNo, r.OrgRepo, r.FileName)
 				return
 			}
 			select {
@@ -216,7 +216,7 @@ func (r *RemoteFileTask) OutResult() {
 				return
 			}
 		case <-r.Context.Done():
-			zap.S().Debugf("end remote outResult fileName:%s/%s,err:%v", r.OrgRepo, r.FileName, r.Context.Err())
+			zap.S().Debugf("close remote outResult fileName:%s/%s,err:%v", r.OrgRepo, r.FileName, r.Context.Err())
 			return
 		}
 	}
@@ -239,7 +239,9 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 	if r.Authorization != "" {
 		headers["authorization"] = r.Authorization
 	}
-	headers["range"] = fmt.Sprintf("bytes=%d-%d", startPos, endPos-1)
+	if startPos > 0 || endPos < r.DingFile.GetFileSize() {
+		headers["range"] = fmt.Sprintf("bytes=%d-%d", startPos, endPos-1)
+	}
 	for i := 0; i < attempts; {
 		if _, err = util.RetryRequest(func() (*common.Response, error) {
 			err = util.GetStream(r.Domain, r.Uri, headers, func(resp *http.Response) error {
@@ -276,6 +278,12 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 						}
 						if err != nil {
 							if err == io.EOF {
+								if int64(chunkByteLen) < (endPos - startPos) {
+									// 数据不完整，将EOF视为读取错误以触发重试/断点续传
+									zap.S().Errorf("file:%s/%s, taskNo:%d, premature EOF: expected %d bytes, got %d", r.OrgRepo, r.FileName, r.TaskNo, endPos-startPos, chunkByteLen)
+									headers["range"] = fmt.Sprintf("bytes=%d-%d", startPos+int64(chunkByteLen), endPos-1)
+									return fmt.Errorf("premature EOF: expected %d bytes, got %d", endPos-startPos, chunkByteLen)
+								}
 								return nil
 							}
 							zap.S().Errorf("file:%s/%s, taskNo:%d, statusCode:%d, chunkByteLen:%d, %v", r.OrgRepo, r.FileName, r.TaskNo, resp.StatusCode, chunkByteLen, err)

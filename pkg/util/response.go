@@ -77,10 +77,10 @@ func ErrorEntryUnknown(ctx echo.Context, statusCode int, msg string) error {
 
 func ErrorEntryNotFound(ctx echo.Context) error {
 	headers := map[string]string{
-		"x-error-code":    "EntryNotFound",
+		"X-Error-Code":    "EntryNotFound",
 		"x-error-message": "Entry not found",
 	}
-	return Response(ctx, http.StatusNotFound, headers, nil)
+	return Response(ctx, http.StatusNotFound, headers, map[string]string{"error": "Entry not found"})
 }
 
 func ErrorRevisionNotFound(ctx echo.Context, revision string) error {
@@ -108,6 +108,22 @@ func ErrorProxyError(ctx echo.Context) error {
 		"x-error-message": "Proxy error",
 	}
 	return Response(ctx, http.StatusInternalServerError, headers, nil)
+}
+
+func MultipleErrorProxyError(err error, ctx echo.Context) error {
+	if err != nil {
+		if e, ok := err.(myerr.Error); ok {
+			statusCode := e.StatusCode()
+			if statusCode == http.StatusNotFound {
+				return ErrorEntryNotFound(ctx)
+			} else {
+				return ErrorProxyError(ctx)
+			}
+		} else {
+			return ErrorProxyError(ctx)
+		}
+	}
+	return nil
 }
 
 func ErrorMethodError(ctx echo.Context) error {

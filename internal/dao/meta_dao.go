@@ -134,9 +134,13 @@ func (m *MetaDao) GetMetadata(repoType, orgRepo, revision, method, authorization
 			}
 		}
 	} else {
-		if cacheContent, err = m.fileDao.ReadCacheRequest(apiMetaPath); err != nil {
-			zap.S().Errorf("ReadCacheRequest err.%v", err)
-			return nil, err
+		if util.FileExists(apiMetaPath) {
+			if cacheContent, err = m.fileDao.ReadCacheRequest(apiMetaPath); err != nil {
+				zap.S().Errorf("ReadCacheRequest err.%v", err)
+				return nil, err
+			}
+		} else {
+			return nil, myerr.NewAppendCode(http.StatusNotFound, fmt.Sprintf("%s not exist", orgRepo))
 		}
 	}
 	return cacheContent, nil
