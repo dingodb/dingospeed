@@ -137,6 +137,10 @@ func (s *SysService) checkDiskUsage() {
 		}
 		filePath := file.Path
 		fileSize := file.Info.Size()
+		if isProtectedLocalUploadCacheFile(baseRepoPath, filePath) {
+			zap.S().Infof("Skip local upload cache file during disk clean: %s", filePath)
+			continue
+		}
 
 		if s.Client != nil {
 			s.deleteRecordByFilePath(baseRepoPath, filePath, instanceID)
@@ -158,6 +162,25 @@ func (s *SysService) checkDiskUsage() {
 	}
 	currentSizeH = util.ConvertBytesToHumanReadable(currentSize)
 	zap.S().Infof("Cleaning finished. Limit: %s, Current: %s.\n", limitSizeH, currentSizeH)
+}
+
+func isProtectedLocalUploadCacheFile(baseRepoPath, filePath string) bool {
+	relPath, err := filepath.Rel(baseRepoPath, filePath)
+	if err != nil {
+		return false
+	}
+	parts := strings.Split(relPath, string(filepath.Separator))
+	if len(parts) < 4 || parts[0] != "files" {
+		return false
+	}
+	if parts[1] != "models" && parts[1] != "datasets" {
+		return false
+	}
+	namespace := config.SysConfig.Upload.Namespace
+	if namespace == "" {
+		namespace = "dingo-local"
+	}
+	return parts[2] == namespace
 }
 
 func (s *SysService) deleteRecordByFilePath(baseRepoPath, filePath, instanceID string) {

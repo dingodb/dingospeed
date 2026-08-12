@@ -46,6 +46,7 @@ type Config struct {
 	DiskClean        DiskClean        `json:"diskClean" yaml:"diskClean"`
 	DynamicProxy     DynamicProxy     `json:"dynamicProxy" yaml:"dynamicProxy"`
 	Scheduler        Scheduler        `json:"scheduler" yaml:"scheduler"`
+	Upload           Upload           `json:"upload" yaml:"upload"`
 	mu               sync.RWMutex
 	Modelscope       Modelscope `yaml:"modelscope"`
 }
@@ -162,6 +163,16 @@ type Modelscope struct {
 	ChunkSize       int64  `yaml:"chunkSize"`
 	MaxRetry        int    `yaml:"maxRetry"`
 	RetryDelay      int    `yaml:"retryDelay"`
+}
+
+type Upload struct {
+	Host                          string `json:"host" yaml:"host"`
+	Port                          int    `json:"port" yaml:"port"`
+	Token                         string `json:"token" yaml:"token"`
+	Namespace                     string `json:"namespace" yaml:"namespace"`
+	ConcurrentLimit               int    `json:"concurrentLimit" yaml:"concurrentLimit"`
+	StagingRetentionHours         int    `json:"stagingRetentionHours" yaml:"stagingRetentionHours"`
+	StagingCleanupIntervalMinutes int    `json:"stagingCleanupIntervalMinutes" yaml:"stagingCleanupIntervalMinutes"`
 }
 
 func (c *Config) GetHFURLBase() string {
@@ -313,6 +324,20 @@ func (c *Config) GetWebhook() string {
 	return c.DynamicProxy.Webhook
 }
 
+func (c *Config) GetUploadStagingRetention() time.Duration {
+	if c.Upload.StagingRetentionHours == 0 {
+		c.Upload.StagingRetentionHours = 24 * 7
+	}
+	return time.Duration(c.Upload.StagingRetentionHours) * time.Hour
+}
+
+func (c *Config) GetUploadStagingCleanupInterval() time.Duration {
+	if c.Upload.StagingCleanupIntervalMinutes == 0 {
+		c.Upload.StagingCleanupIntervalMinutes = 60
+	}
+	return time.Duration(c.Upload.StagingCleanupIntervalMinutes) * time.Minute
+}
+
 func (c *Config) IsCluster() bool {
 	return c.GetSchedulerModel() == consts.SchedulerModeCluster
 }
@@ -373,6 +398,24 @@ func (c *Config) SetDefaults() {
 	c.Scheduler.OriginMode = c.Scheduler.Mode
 	if c.Scheduler.LinkDomain == "" {
 		c.Scheduler.LinkDomain = c.Scheduler.PublicDomain
+	}
+	if c.Upload.Host == "" {
+		c.Upload.Host = "127.0.0.1"
+	}
+	if c.Upload.Port == 0 {
+		c.Upload.Port = 8091
+	}
+	if c.Upload.Namespace == "" {
+		c.Upload.Namespace = "dingo-local"
+	}
+	if c.Upload.ConcurrentLimit == 0 {
+		c.Upload.ConcurrentLimit = 4
+	}
+	if c.Upload.StagingRetentionHours == 0 {
+		c.Upload.StagingRetentionHours = 24 * 7
+	}
+	if c.Upload.StagingCleanupIntervalMinutes == 0 {
+		c.Upload.StagingCleanupIntervalMinutes = 60
 	}
 }
 

@@ -26,6 +26,7 @@ import (
 	myerr "dingospeed/pkg/error"
 	"dingospeed/pkg/util"
 
+	"github.com/bytedance/sonic"
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
 )
@@ -143,6 +144,36 @@ func (m *MetaDao) GetMetadata(repoType, orgRepo, revision, method, authorization
 			return nil, myerr.NewAppendCode(http.StatusNotFound, fmt.Sprintf("%s not exist", orgRepo))
 		}
 	}
+	cacheContent, err = m.ensureLocalMetadataID(orgRepo, cacheContent)
+	if err != nil {
+		return nil, err
+	}
+	return cacheContent, nil
+}
+
+func (m *MetaDao) ensureLocalMetadataID(orgRepo string, cacheContent *common.CacheContent) (*common.CacheContent, error) {
+	if cacheContent == nil || !IsLocalOrgRepo(orgRepo) || len(cacheContent.OriginContent) == 0 {
+		return cacheContent, nil
+	}
+	var metadata map[string]interface{}
+	if err := sonic.Unmarshal(cacheContent.OriginContent, &metadata); err != nil {
+		return nil, err
+	}
+	if id, ok := metadata["id"].(string); ok && id != "" {
+		return cacheContent, nil
+	}
+	metadata["id"] = orgRepo
+	body, err := sonic.Marshal(metadata)
+	if err != nil {
+		return nil, err
+	}
+	headers := make(map[string]string, len(cacheContent.Headers)+1)
+	for k, v := range cacheContent.Headers {
+		headers[k] = v
+	}
+	headers["content-length"] = fmt.Sprintf("%d", len(body))
+	cacheContent.Headers = headers
+	cacheContent.OriginContent = body
 	return cacheContent, nil
 }
 

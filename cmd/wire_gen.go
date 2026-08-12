@@ -30,10 +30,13 @@ func wireApp(configConfig *config.Config) (*app.App, func(), error) {
 	baseData := data.NewBaseData()
 	lockDao := dao.NewLockDao(baseData)
 	fileDao := dao.NewFileDao(downloaderDao, baseData, lockDao)
+	uploadDao := dao.NewUploadDao(fileDao, lockDao)
 	fileService := service.NewFileService(fileDao)
+	uploadService := service.NewUploadService(uploadDao)
 	sysService := service.NewSysService(schedulerDao)
 	localOperationService := service.NewLocalOperationService(schedulerDao)
 	fileHandler := handler.NewFileHandler(fileService, sysService, localOperationService)
+	uploadHandler := handler.NewUploadHandler(uploadService)
 	metaDao := dao.NewMetaDao(fileDao, lockDao, baseData)
 	metaService := service.NewMetaService(fileDao, metaDao)
 	metaHandler := handler.NewMetaHandler(metaService)
@@ -44,9 +47,13 @@ func wireApp(configConfig *config.Config) (*app.App, func(), error) {
 	modelscopeHandler := handler.NewModelscopeHandler(modelscopeService)
 	httpRouter := router.NewHttpRouter(echo, fileHandler, metaHandler, sysHandler, cacheJobHandler, modelscopeHandler)
 	httpServer := server.NewServer(configConfig, echo, httpRouter)
+	uploadEcho := server.NewUploadEngine()
+	uploadRouter := router.NewUploadRouter(uploadEcho, uploadHandler)
+	uploadServer := server.NewUploadServer(configConfig, uploadRouter)
+	uploadCleanupServer := server.NewUploadCleanupServer(uploadDao)
 	schedulerService := service.NewSchedulerService(schedulerDao)
 	schedulerServer := server.NewSchedulerServer(schedulerService, sysService, localOperationService)
-	appApp := newApp(httpServer, schedulerServer)
+	appApp := newApp(httpServer, uploadServer, uploadCleanupServer, schedulerServer)
 	return appApp, func() {
 	}, nil
 }

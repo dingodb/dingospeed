@@ -75,6 +75,13 @@ func (f *FileDao) GetFileCommitSha(repoType, orgRepo, commit, authorization stri
 		commitSha string
 		err       error
 	)
+	if IsLocalOrgRepo(orgRepo) {
+		commitSha, err = f.GetCommitHfOffline(repoType, orgRepo, commit)
+		if err != nil {
+			return "", myerr.NewAppendCode(http.StatusNotFound, fmt.Sprintf("%s is not found", orgRepo))
+		}
+		return commitSha, nil
+	}
 	if config.SysConfig.Online() {
 		goto remoteRequestMeta
 	}
@@ -300,7 +307,7 @@ func (f *FileDao) ConstructBlobsAndFileFile(blobsFile, filesPath string) (err er
 				} else {
 					util.ReName(filesPath, blobsFile)
 				}
-				if err = util.CreateSymlinkIfNotExists(blobsFile, filesPath); err != nil {
+				if err = util.CreateLinkOrCopyIfNotExists(blobsFile, filesPath); err != nil {
 					zap.S().Errorf("filesPath:%s is not link.%v", filesPath, err)
 					return err
 				}
@@ -312,12 +319,35 @@ func (f *FileDao) ConstructBlobsAndFileFile(blobsFile, filesPath string) (err er
 			zap.S().Errorf("create filesPath:%s err.%v", filesPath, err)
 			return err
 		}
-		if err = util.CreateSymlinkIfNotExists(blobsFile, filesPath); err != nil {
+		if err = util.CreateLinkOrCopyIfNotExists(blobsFile, filesPath); err != nil {
 			zap.S().Errorf("filesPath:%s is not link.%v", filesPath, err)
 			return err
 		}
 	}
 	return
+}
+
+// ReadLocalManifest 读取本地仓库某个快照的完整文件清单。
+// 快照标识是内容的确定性摘要，同一个 commit 的清单不会再变，因此可以安全缓存。
+func (f *FileDao) ReadLocalManifest(repoType, orgRepo, commit string) ([]LocalManifestFile, error) {
+	cacheKey := fmt.Sprintf("localManifest/%s/%s/%s", repoType, orgRepo, commit)
+	if f.baseData != nil {
+		if v, ok := f.baseData.Cache.Get(cacheKey); ok {
+			return v.([]LocalManifestFile), nil
+		}
+	}
+	b, err := util.ReadFileToBytes(LocalManifestPath(repoType, orgRepo, commit))
+	if err != nil {
+		return nil, err
+	}
+	var manifest []LocalManifestFile
+	if err = sonic.Unmarshal(b, &manifest); err != nil {
+		return nil, err
+	}
+	if f.baseData != nil {
+		f.baseData.Cache.Set(cacheKey, manifest, config.SysConfig.GetDefaultExpiration())
+	}
+	return manifest, nil
 }
 
 func (f *FileDao) GetPathsInfo(hfUri, repoType, orgRepo, commit, authorization string, pathFileName string) (*common.PathsInfo, error) {
@@ -326,6 +356,29 @@ func (f *FileDao) GetPathsInfo(hfUri, repoType, orgRepo, commit, authorization s
 		return nil, fmt.Errorf("pathFileName is null, %s/%s", orgRepo, commit)
 	}
 	apiPathInfoPath := fmt.Sprintf("%s/api/%s/%s/paths-info/%s/%s/paths-info_post.json", config.SysConfig.Repos(), repoType, orgRepo, commit, pathFileName)
+	if IsLocalOrgRepo(orgRepo) {
+		// 本地仓库的文件信息从该快照的清单派生，不依赖逐文件落盘的 paths-info 缓存。
+		manifest, err := f.ReadLocalManifest(repoType, orgRepo, commit)
+		if err != nil {
+			return nil, myerr.NewAppendCode(http.StatusNotFound, "local manifest not found")
+		}
+		for _, item := range manifest {
+			if item.Path != pathFileName {
+				continue
+			}
+			return &common.PathsInfo{
+				Type: "file",
+				Oid:  item.Sha256,
+				Size: item.Size,
+				Path: item.Path,
+				Lfs: common.Lfs{
+					Oid:  item.Sha256,
+					Size: item.Size,
+				},
+			}, nil
+		}
+		return nil, myerr.NewAppendCode(http.StatusNotFound, "local path info not found")
+	}
 	// 对每个用户检测是否有权限，在线、离线都检测，都需要携带token。
 	filePathInfoKey := GetFilePathInfoKey(repoType, orgRepo, authorization)
 	_, granted := f.baseData.Cache.Get(filePathInfoKey)
@@ -483,7 +536,7 @@ func (f *FileDao) WriteCacheRequest(apiPath string, statusCode int, headers map[
 		Headers:    headers,
 		Content:    hex.EncodeToString(content),
 	}
-	return util.WriteDataToFile(apiPath, cacheContent)
+	return util.WriteDataToFileAtomic(apiPath, cacheContent)
 }
 
 func (f *FileDao) ExistApiPathFile(apiPath string) bool {

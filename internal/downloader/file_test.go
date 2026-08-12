@@ -16,6 +16,7 @@ package downloader
 
 import (
 	"fmt"
+	"path/filepath"
 	"testing"
 
 	"go.uber.org/zap"
@@ -24,7 +25,7 @@ import (
 func TestFileWrite(t *testing.T) {
 	var dingFile *DingCache
 	var err error
-	savePath := "cachefile"
+	savePath := filepath.Join(t.TempDir(), "cachefile")
 	fileSize := int64(8388608)
 	blockSize := int64(8388608)
 	if dingFile, err = NewDingCache(savePath, blockSize); err != nil {

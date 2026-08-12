@@ -15,6 +15,15 @@ server:
         crtFile: ./config/ssl/client.crt
         caFile: ./config/ssl/ca.crt
 
+upload:
+    host: 127.0.0.1
+    port: 8091
+    token: ""
+    namespace: dingo-local
+    concurrentLimit: 4
+    stagingRetentionHours: 168
+    stagingCleanupIntervalMinutes: 60
+
 scheduler:
     mode: standalone    #运行的两种模式：standalone&cluster,default:standalone
     addr: 10.230.203.240:19091   # 调度器地址 10.230.204.102:19091
