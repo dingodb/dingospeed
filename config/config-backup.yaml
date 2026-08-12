@@ -19,6 +19,7 @@ upload:
     stagingRetentionHours: 168
     stagingCleanupIntervalMinutes: 60
     publishMaxFiles: 1000
+    orphanRetentionHours: 168
 
 scheduler:
     mode: cluster    #运行的两种模式：standalone&cluster,default:standalone

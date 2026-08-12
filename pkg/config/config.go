@@ -174,6 +174,17 @@ type Upload struct {
 	StagingRetentionHours         int    `json:"stagingRetentionHours" yaml:"stagingRetentionHours"`
 	StagingCleanupIntervalMinutes int    `json:"stagingCleanupIntervalMinutes" yaml:"stagingCleanupIntervalMinutes"`
 	PublishMaxFiles               int    `json:"publishMaxFiles" yaml:"publishMaxFiles"`
+	OrphanRetentionHours          int    `json:"orphanRetentionHours" yaml:"orphanRetentionHours"`
+}
+
+// GetUploadOrphanRetention 是“已完整落盘但还没被任何清单引用”的内容的保留期。
+// 取值必须明显大于一次完整批量上传的正常耗时：一个大模型分批传完再发布，
+// 中间可能跨小时甚至跨天（含中断续传），期限太短会把还等着发布的内容删掉。
+func (c *Config) GetUploadOrphanRetention() time.Duration {
+	if c.Upload.OrphanRetentionHours <= 0 {
+		return 24 * 7 * time.Hour
+	}
+	return time.Duration(c.Upload.OrphanRetentionHours) * time.Hour
 }
 
 // GetUploadPublishMaxFiles 是单次批量发布的清单条目数上限，与已验证的单仓库文件数
@@ -429,6 +440,9 @@ func (c *Config) SetDefaults() {
 	}
 	if c.Upload.PublishMaxFiles == 0 {
 		c.Upload.PublishMaxFiles = 1000
+	}
+	if c.Upload.OrphanRetentionHours == 0 {
+		c.Upload.OrphanRetentionHours = 24 * 7
 	}
 }
 
