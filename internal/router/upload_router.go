@@ -24,6 +24,7 @@ func NewUploadRouter(uploadEcho UploadEcho, uploadHandler *handler.UploadHandler
 func (r *UploadRouter) initRouter() {
 	r.echo.GET("/api/local-upload-progress/:repoType/:org/:repo/:revision/*", r.uploadHandler.QueryProgress)
 	r.echo.POST("/api/local-upload/:repoType/:org/:repo/:revision/*", r.uploadHandler.UploadWholeFile)
+	r.echo.POST("/api/local-publish/:repoType/:org/:repo/:revision", r.uploadHandler.PublishFiles)
 }
 
 func (r *UploadRouter) Echo() *echo.Echo {

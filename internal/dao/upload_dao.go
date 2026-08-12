@@ -38,6 +38,37 @@ type LocalUploadParam struct {
 	Sha256    string
 	Overwrite bool
 	Start     *int64
+	// Deferred 为 true 表示本次上传只把内容落盘，不重建清单、不产生新的快照标识、
+	// 不改变版本标签指向。内容要等一次显式发布（PublishFiles）才对下载侧可见。
+	Deferred bool
+}
+
+// LocalPublishParam 是一次批量发布的入参。发布清单由调用方在请求里完整声明，
+// 服务端不记忆“哪些上传属于哪一批”——理由与“不另建进度状态”完全一致：
+// 独立状态与实际落盘内容之间必然出现不一致，而清单三个字段本来就是上传时的必填项。
+type LocalPublishParam struct {
+	RepoType  string
+	Org       string
+	Repo      string
+	Revision  string
+	Overwrite bool
+	Files     []LocalManifestFile
+}
+
+type LocalPublishResult struct {
+	RepoType string `json:"repoType"`
+	Repo     string `json:"repo"`
+	Revision string `json:"revision"`
+	Commit   string `json:"commit"`
+	// Published 是本批次声明的条目数，FileCount 是合并后该版本的文件总数。
+	Published int `json:"published"`
+	FileCount int `json:"fileCount"`
+	Added     int `json:"added"`
+	Replaced  int `json:"replaced"`
+	Unchanged int `json:"unchanged"`
+	// Changed 为 false 表示合并后清单与当前清单完全相同，快照标识保持不变、未重写元数据。
+	Changed bool   `json:"changed"`
+	Status  string `json:"status"`
 }
 
 type LocalUploadResult struct {
@@ -161,6 +192,26 @@ func (u *UploadDao) UploadWholeFile(param LocalUploadParam, body io.Reader) (*Lo
 
 	revisionLockKey := fmt.Sprintf("upload-revision:%s:%s:%s", param.RepoType, orgRepo, param.Revision)
 
+	// 暂缓生效的上传完全不碰版本清单：它只把内容写进按摘要寻址的 blob 空间，
+	// 而 blob 位置与仓库内路径无关，所以“这个路径已存在别的内容”在这一步
+	// 结构上还不构成冲突。覆盖判定统一留到发布时按整批处理（BR-5）。
+	if param.Deferred {
+		reused, err := u.materializeBlob(param, orgRepo, body)
+		if err != nil {
+			return nil, err
+		}
+		return &LocalUploadResult{
+			RepoType:   param.RepoType,
+			Repo:       orgRepo,
+			Revision:   param.Revision,
+			FilePath:   param.FilePath,
+			Size:       param.Size,
+			Sha256:     param.Sha256,
+			Status:     "staged",
+			BlobReused: reused,
+		}, nil
+	}
+
 	// 第一段临界区：只读当前清单做冲突/幂等判定，判定完立即释放，
 	// 这样同一版本下的不同文件可以并行写内容（FR-7 6.7.2.2）。
 	fastPath, err := u.precheck(revisionLockKey, param, orgRepo)
@@ -199,7 +250,7 @@ func (u *UploadDao) UploadWholeFile(param LocalUploadParam, body io.Reader) (*Lo
 	if err != nil {
 		return nil, err
 	}
-	if err = u.writeEffectiveMetadata(param, commit, manifest); err != nil {
+	if err = u.writeEffectiveMetadata(param.RepoType, orgRepo, param.Revision, commit, manifest); err != nil {
 		return nil, err
 	}
 	return &LocalUploadResult{
@@ -213,6 +264,142 @@ func (u *UploadDao) UploadWholeFile(param LocalUploadParam, body io.Reader) (*Lo
 		Status:     "effective",
 		BlobReused: reused,
 	}, nil
+}
+
+// PublishFiles 把一批已经完整落盘的文件一次性纳入版本清单，只产生一个快照标识。
+//
+// 与逐个上传的等价性靠“共用同一套清单合并与标识计算”保证（见 nextCommitBatch）：
+// 只要合并后的清单相同，快照标识就必然逐字符相同，两条路径进系统的内容不会被
+// 客户端当成两个不同的版本。
+func (u *UploadDao) PublishFiles(param LocalPublishParam) (*LocalPublishResult, error) {
+	orgRepo := util.GetOrgRepo(param.Org, param.Repo)
+
+	// 发布之间必须明确拒绝而不是排队（BR-4.2.1），所以这里用 try-enter 而不是版本锁。
+	publishKey := fmt.Sprintf("upload-publish:%s:%s:%s", param.RepoType, orgRepo, param.Revision)
+	if !tryEnterLocalUpload(publishKey) {
+		return nil, localUploadError{
+			status: http.StatusConflict,
+			code:   "PUBLISH_IN_PROGRESS",
+			msg:    "another publish is already in progress for this revision",
+		}
+	}
+	defer leaveLocalUpload(publishKey)
+
+	// 版本锁与即时生效上传共用同一把：两者都要“读清单 → 合并 → 写回”，
+	// 不共用就会各自基于陈旧清单重建，后写的覆盖先写的。
+	revisionLockKey := fmt.Sprintf("upload-revision:%s:%s:%s", param.RepoType, orgRepo, param.Revision)
+	uploadRevisionLocks.Lock(revisionLockKey)
+	defer uploadRevisionLocks.Unlock(revisionLockKey)
+
+	if err := u.verifyPublishContent(param, orgRepo); err != nil {
+		return nil, err
+	}
+
+	currentCommit, currentManifest := u.currentManifestOf(param.RepoType, orgRepo, param.Revision)
+	added, replaced, unchanged, err := classifyPublishItems(currentManifest, param)
+	if err != nil {
+		return nil, err
+	}
+
+	commit, manifest, err := u.nextCommitBatch(currentManifest, param.Files)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &LocalPublishResult{
+		RepoType:  param.RepoType,
+		Repo:      orgRepo,
+		Revision:  param.Revision,
+		Commit:    commit,
+		Published: len(param.Files),
+		FileCount: len(manifest),
+		Added:     added,
+		Replaced:  replaced,
+		Unchanged: unchanged,
+	}
+
+	// 合并后与当前清单完全一致：标识保持不变，不重写任何元数据（BR-2.3）。
+	if commit == currentCommit {
+		result.Changed = false
+		result.Status = "unchanged"
+		return result, nil
+	}
+
+	if err = u.writeEffectiveMetadata(param.RepoType, orgRepo, param.Revision, commit, manifest); err != nil {
+		return nil, err
+	}
+	result.Changed = true
+	result.Status = "published"
+	return result, nil
+}
+
+// verifyPublishContent 逐条确认发布清单声明的内容确实完整躺在磁盘上。
+// 发布清单是调用方声明的，不能信：少传了一个文件、传了一半就中断、内容被外部删掉，
+// 都会让清单进入“有记录但没文件”的破损状态，而那正是生效语义明令不允许出现的。
+func (u *UploadDao) verifyPublishContent(param LocalPublishParam, orgRepo string) error {
+	repos := config.SysConfig.Repos()
+	var missing, mismatched []string
+	for _, item := range param.Files {
+		blobPath := localBlobPath(param.RepoType, orgRepo, item.Sha256)
+		if err := ensureLocalUploadPathSafe(repos, blobPath); err != nil {
+			return err
+		}
+		complete, size, err := inspectCompleteBlob(blobPath, -1)
+		if err != nil {
+			return err
+		}
+		if !complete {
+			missing = append(missing, item.Path)
+			continue
+		}
+		if size != item.Size {
+			mismatched = append(mismatched, fmt.Sprintf("%s (declared %d, staged %d)", item.Path, item.Size, size))
+		}
+	}
+	if len(missing) > 0 {
+		return localUploadError{
+			status: http.StatusConflict,
+			code:   "PUBLISH_CONTENT_NOT_READY",
+			msg:    fmt.Sprintf("content is not fully uploaded for: %s", strings.Join(missing, ", ")),
+		}
+	}
+	if len(mismatched) > 0 {
+		return localUploadError{
+			status: http.StatusConflict,
+			code:   "PUBLISH_CONTENT_MISMATCH",
+			msg:    fmt.Sprintf("declared size does not match uploaded content for: %s", strings.Join(mismatched, ", ")),
+		}
+	}
+	return nil
+}
+
+// classifyPublishItems 统计本批次相对当前清单的新增/覆盖/无变化，并在需要显式覆盖时拒绝。
+// 覆盖声明作用于整次发布：只要有一条冲突就整次拒绝，不做部分发布——
+// 部分发布会重新引入批量本来要消除的中间态，调用方也无从判断哪些生效了。
+func classifyPublishItems(current []LocalManifestFile, param LocalPublishParam) (added, replaced, unchanged int, err error) {
+	var conflicts []string
+	for _, item := range param.Files {
+		existing, ok := findManifestFile(current, item.Path)
+		switch {
+		case !ok:
+			added++
+		case existing.Sha256 == item.Sha256 && existing.Size == item.Size:
+			unchanged++
+		case !param.Overwrite:
+			conflicts = append(conflicts, item.Path)
+		default:
+			replaced++
+		}
+	}
+	if len(conflicts) > 0 {
+		return 0, 0, 0, localUploadError{
+			status: http.StatusConflict,
+			code:   "PUBLISH_OVERWRITE_REQUIRED",
+			msg: fmt.Sprintf("these files already exist with different content; set overwrite=true to replace them: %s",
+				strings.Join(conflicts, ", ")),
+		}
+	}
+	return added, replaced, unchanged, nil
 }
 
 // precheck 在版本锁下做覆盖冲突判定与幂等快路径判定。
@@ -673,25 +860,40 @@ func stagedBlobIdentity(root, stagePath string) (repoType, orgRepo, sha string, 
 }
 
 func (u *UploadDao) currentManifest(param LocalUploadParam) (string, []LocalManifestFile) {
-	currentCommit, _ := u.fileDao.GetCommitHfOffline(param.RepoType, util.GetOrgRepo(param.Org, param.Repo), param.Revision)
+	return u.currentManifestOf(param.RepoType, util.GetOrgRepo(param.Org, param.Repo), param.Revision)
+}
+
+func (u *UploadDao) currentManifestOf(repoType, orgRepo, revision string) (string, []LocalManifestFile) {
+	currentCommit, _ := u.fileDao.GetCommitHfOffline(repoType, orgRepo, revision)
 	if currentCommit != "" {
-		return currentCommit, u.readManifest(param.RepoType, util.GetOrgRepo(param.Org, param.Repo), currentCommit)
+		return currentCommit, u.readManifest(repoType, orgRepo, currentCommit)
 	}
 	return "", nil
 }
 
 func (u *UploadDao) nextCommit(current []LocalManifestFile, uploaded LocalManifestFile) (string, []LocalManifestFile, error) {
+	return u.nextCommitBatch(current, []LocalManifestFile{uploaded})
+}
+
+// nextCommitBatch 把一批文件合并进当前清单并算出新的快照标识。
+//
+// 单文件上传与批量发布**必须**共用这一个实现。清单的合并、排序与序列化只要出现
+// 第二份写法，同一批内容走两条路径就会算出不同的标识，客户端会把它们当成两个版本
+// 白白重下一遍；而这种偏差在单独测批量时完全测不出来，因为批量路径自己是自洽的。
+func (u *UploadDao) nextCommitBatch(current, uploaded []LocalManifestFile) (string, []LocalManifestFile, error) {
 	manifest := append([]LocalManifestFile(nil), current...)
-	replaced := false
-	for i := range manifest {
-		if manifest[i].Path == uploaded.Path {
-			manifest[i] = uploaded
-			replaced = true
-			break
+	for _, item := range uploaded {
+		replaced := false
+		for i := range manifest {
+			if manifest[i].Path == item.Path {
+				manifest[i] = item
+				replaced = true
+				break
+			}
 		}
-	}
-	if !replaced {
-		manifest = append(manifest, uploaded)
+		if !replaced {
+			manifest = append(manifest, item)
+		}
 	}
 	sort.Slice(manifest, func(i, j int) bool {
 		return manifest[i].Path < manifest[j].Path
@@ -719,9 +921,8 @@ func (u *UploadDao) readManifest(repoType, orgRepo, commit string) []LocalManife
 // 每次上传只写固定的 3 个文件，与该版本已有多少文件无关。
 // 逐条落 paths-info、逐条建 resolve 链接会让逐个上传 N 个文件的代价变成 O(N²)
 // 个文件系统对象（N=1000 时约一百万个），且其中绝大多数永远不会被读到。
-func (u *UploadDao) writeEffectiveMetadata(param LocalUploadParam, commit string, manifest []LocalManifestFile) error {
-	orgRepo := util.GetOrgRepo(param.Org, param.Repo)
-	manifestPath := LocalManifestPath(param.RepoType, orgRepo, commit)
+func (u *UploadDao) writeEffectiveMetadata(repoType, orgRepo, revision, commit string, manifest []LocalManifestFile) error {
+	manifestPath := LocalManifestPath(repoType, orgRepo, commit)
 	if err := ensureLocalUploadPathSafe(config.SysConfig.Repos(), manifestPath); err != nil {
 		return err
 	}
@@ -731,10 +932,10 @@ func (u *UploadDao) writeEffectiveMetadata(param LocalUploadParam, commit string
 	if err := util.WriteDataToFileAtomic(manifestPath, manifest); err != nil {
 		return err
 	}
-	if err := u.writeMeta(param.RepoType, orgRepo, commit, commit, manifest); err != nil {
+	if err := u.writeMeta(repoType, orgRepo, commit, commit, manifest); err != nil {
 		return err
 	}
-	return u.writeMeta(param.RepoType, orgRepo, param.Revision, commit, manifest)
+	return u.writeMeta(repoType, orgRepo, revision, commit, manifest)
 }
 
 func (u *UploadDao) writeMeta(repoType, orgRepo, revision, commit string, manifest []LocalManifestFile) error {
