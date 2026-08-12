@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"strings"
 
+	"dingospeed/internal/dao"
 	"dingospeed/internal/service"
 	"dingospeed/pkg/consts"
 	myerr "dingospeed/pkg/error"
@@ -74,6 +75,35 @@ func (handler *MetaHandler) GetMetadataHandler(c echo.Context) error {
 		}
 	}
 	return nil
+}
+
+func (handler *MetaHandler) GetRepoTreeHandler(c echo.Context) error {
+	repoType := c.Param("repoType")
+	org := c.Param("org")
+	repo := c.Param("repo")
+	revision := c.Param("revision")
+	pathInRepo := c.Param("*")
+	orgRepo := util.GetOrgRepo(org, repo)
+	c.Set(consts.PromOrgRepo, orgRepo)
+	if _, ok := consts.RepoTypesMapping[repoType]; !ok {
+		zap.S().Errorf("repoType:%s is not exist RepoTypesMapping", repoType)
+		return util.ErrorPageNotFound(c)
+	}
+	if org == "" && repo == "" {
+		zap.S().Errorf("org and repo is null")
+		return util.ErrorRepoNotFound(c)
+	}
+	if !dao.IsLocalOrgRepo(orgRepo) {
+		return handler.metaService.ForwardToNewSite(c)
+	}
+	tree, err := handler.metaService.GetRepoTree(repoType, orgRepo, revision, pathInRepo, strings.EqualFold(c.QueryParam("recursive"), "true"), c.Request().Header.Get("authorization"))
+	if err != nil {
+		if e, ok := err.(myerr.Error); ok {
+			return util.ErrorEntryUnknown(c, e.StatusCode(), e.Error())
+		}
+		return util.ErrorProxyError(c)
+	}
+	return c.JSON(http.StatusOK, tree)
 }
 
 func (handler *MetaHandler) WhoamiV2Handler(c echo.Context) error {

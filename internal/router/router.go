@@ -18,4 +18,4 @@ import (
 	"github.com/google/wire"
 )
 
-var RouterProvider = wire.NewSet(NewHttpRouter)
+var RouterProvider = wire.NewSet(NewHttpRouter, NewUploadRouter)

@@ -15,6 +15,8 @@
 package service
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"sort"
@@ -37,6 +39,14 @@ type MetaService struct {
 	metaDao *dao.MetaDao
 }
 
+type RepoTreeItem struct {
+	Type string      `json:"type"`
+	Path string      `json:"path"`
+	Oid  string      `json:"oid"`
+	Size int64       `json:"size,omitempty"`
+	Lfs  *common.Lfs `json:"lfs,omitempty"`
+}
+
 func NewMetaService(fileDao *dao.FileDao, metaDao *dao.MetaDao) *MetaService {
 	return &MetaService{
 		fileDao: fileDao,
@@ -47,6 +57,65 @@ func NewMetaService(fileDao *dao.FileDao, metaDao *dao.MetaDao) *MetaService {
 func (m *MetaService) GetMetadata(repoType, orgRepo, revision, method, authorization string) (*common.CacheContent, error) {
 	zap.S().Debugf("GetMetadata:%s/%s/%s/%s", repoType, orgRepo, revision, method)
 	return m.metaDao.GetMetadata(repoType, orgRepo, revision, method, authorization)
+}
+
+func (m *MetaService) GetRepoTree(repoType, orgRepo, revision, pathInRepo string, recursive bool, authorization string) ([]RepoTreeItem, error) {
+	commitSha, err := m.fileDao.GetFileCommitSha(repoType, orgRepo, revision, authorization, "meta")
+	if err != nil {
+		return nil, err
+	}
+	manifest, err := m.fileDao.ReadLocalManifest(repoType, orgRepo, commitSha)
+	if err != nil {
+		return nil, err
+	}
+
+	prefix := strings.Trim(pathInRepo, "/")
+	items := make([]RepoTreeItem, 0, len(manifest))
+	seenDirs := map[string]struct{}{}
+	for _, file := range manifest {
+		if prefix != "" && file.Path != prefix && !strings.HasPrefix(file.Path, prefix+"/") {
+			continue
+		}
+		if !recursive {
+			rest := strings.TrimPrefix(file.Path, prefix)
+			rest = strings.TrimPrefix(rest, "/")
+			if idx := strings.Index(rest, "/"); idx >= 0 {
+				dirPath := rest[:idx]
+				if prefix != "" {
+					dirPath = prefix + "/" + dirPath
+				}
+				if _, ok := seenDirs[dirPath]; ok {
+					continue
+				}
+				seenDirs[dirPath] = struct{}{}
+				items = append(items, RepoTreeItem{Type: "directory", Path: dirPath, Oid: stableTreeID(dirPath)})
+				continue
+			}
+		}
+		items = append(items, RepoTreeItem{
+			Type: "file",
+			Path: file.Path,
+			Oid:  file.Sha256,
+			Size: file.Size,
+			Lfs: &common.Lfs{
+				Oid:         file.Sha256,
+				Size:        file.Size,
+				PointerSize: 0,
+			},
+		})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Type != items[j].Type {
+			return items[i].Type == "directory"
+		}
+		return items[i].Path < items[j].Path
+	})
+	return items, nil
+}
+
+func stableTreeID(path string) string {
+	sum := sha256.Sum256([]byte(path))
+	return hex.EncodeToString(sum[:])
 }
 
 func (m *MetaService) WhoamiV2(c echo.Context) error {
@@ -150,6 +219,9 @@ func (m *MetaService) RepositoryFiles(repoType, orgRepo, commit, filePath string
 		pathsInfoShaDir += fmt.Sprintf("/%s", filePath)
 	}
 	downloadLinkRoot := fmt.Sprintf("%s/%s/%s/resolve/%s", config.SysConfig.Scheduler.PublicDomain, repoType, orgRepo, commit)
+	if dao.IsLocalOrgRepo(orgRepo) {
+		return m.localRepositoryFiles(repoType, orgRepo, commit, filePath, downloadLinkRoot)
+	}
 	if b := util.FileExists(pathsInfoShaDir); !b {
 		log.Warnf("pathsInfoShaDir is not exitst.%s", pathsInfoShaDir)
 		return nil, fmt.Errorf("file not exists")
@@ -179,6 +251,48 @@ func (m *MetaService) RepositoryFiles(repoType, orgRepo, commit, filePath string
 		sortNodes(fileDescribes)
 		return fileDescribes, nil
 	}
+}
+
+// localRepositoryFiles 列出本地仓库某个快照下某一级目录的内容。
+// 与公开仓库不同，这里没有逐文件落盘的 paths-info 目录可供遍历，
+// 目录结构直接从清单里的路径推导。
+func (m *MetaService) localRepositoryFiles(repoType, orgRepo, commit, filePath, downloadLinkRoot string) ([]*FileDescribe, error) {
+	manifest, err := m.fileDao.ReadLocalManifest(repoType, orgRepo, commit)
+	if err != nil {
+		log.Warnf("local manifest is not exist. %s/%s/%s", repoType, orgRepo, commit)
+		return nil, fmt.Errorf("file not exists")
+	}
+	prefix := strings.Trim(filePath, "/")
+	fileDescribes := make([]*FileDescribe, 0)
+	seenDirs := map[string]struct{}{}
+	for _, item := range manifest {
+		if prefix != "" && item.Path != prefix && !strings.HasPrefix(item.Path, prefix+"/") {
+			continue
+		}
+		rest := strings.TrimPrefix(strings.TrimPrefix(item.Path, prefix), "/")
+		if rest == "" {
+			continue
+		}
+		if idx := strings.Index(rest, "/"); idx >= 0 {
+			dirName := rest[:idx]
+			if _, ok := seenDirs[dirName]; ok {
+				continue
+			}
+			seenDirs[dirName] = struct{}{}
+			fileDescribes = append(fileDescribes, &FileDescribe{Name: dirName, IsDir: true})
+			continue
+		}
+		fileDescribes = append(fileDescribes, &FileDescribe{
+			Name: rest,
+			Size: item.Size,
+			Link: fmt.Sprintf("%s/%s", downloadLinkRoot, item.Path),
+		})
+	}
+	if len(fileDescribes) == 0 {
+		return nil, fmt.Errorf("file not exists")
+	}
+	sortNodes(fileDescribes)
+	return fileDescribes, nil
 }
 
 func sortNodes(nodes []*FileDescribe) {

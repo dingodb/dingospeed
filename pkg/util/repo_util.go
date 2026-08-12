@@ -18,20 +18,18 @@ import (
 	"encoding/gob"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"dingospeed/pkg/common"
 
 	"github.com/bytedance/sonic"
 	"go.uber.org/zap"
-	"golang.org/x/sys/unix"
 )
 
 var (
@@ -226,6 +224,45 @@ func CreateSymlinkIfNotExists(src, dst string) error {
 	return err
 }
 
+func CreateLinkOrCopyIfNotExists(src, dst string) error {
+	symlinkLock.Lock()
+	defer symlinkLock.Unlock()
+	if _, err := os.Lstat(dst); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	dstDir := filepath.Dir(dst)
+	relSrc, err := filepath.Rel(dstDir, src)
+	if err != nil {
+		return fmt.Errorf("计算相对路径失败: %v", err)
+	}
+	if err = os.Symlink(relSrc, dst); err == nil {
+		return nil
+	}
+	if err = os.Link(src, dst); err == nil {
+		return nil
+	}
+	return copyFile(src, dst)
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	if _, err = io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Sync()
+}
+
 func ReadFileToBytes(filename string) ([]byte, error) {
 	return os.ReadFile(filename)
 }
@@ -243,6 +280,38 @@ func WriteDataToFile(filename string, data interface{}) error {
 	_, err = file.Write(jsonData)
 	if err != nil {
 		return fmt.Errorf("写入文件出错: %w", err)
+	}
+	return nil
+}
+
+func WriteDataToFileAtomic(filename string, data interface{}) error {
+	jsonData, err := sonic.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("JSON 编码出错: %w", err)
+	}
+	if err = MakeDirs(filename); err != nil {
+		return err
+	}
+	dir := filepath.Dir(filename)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(filename)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("创建临时文件出错: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err = tmp.Write(jsonData); err != nil {
+		tmp.Close()
+		return fmt.Errorf("写入临时文件出错: %w", err)
+	}
+	if err = tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("同步临时文件出错: %w", err)
+	}
+	if err = tmp.Close(); err != nil {
+		return fmt.Errorf("关闭临时文件出错: %w", err)
+	}
+	if err = os.Rename(tmpName, filename); err != nil {
+		return fmt.Errorf("替换文件出错: %w", err)
 	}
 	return nil
 }
@@ -314,38 +383,7 @@ func GetFolderSize(folderPath string) (int64, error) {
 }
 
 func getFilePhysicalSize(info os.FileInfo, path string) (int64, error) {
-	switch runtime.GOOS {
-	case "linux":
-		return getLinuxFilePhysicalSize(info)
-	case "darwin":
-		return getDarwinFilePhysicalSize(info, path)
-	default:
-		return 0, fmt.Errorf("不支持的操作系统：%s", runtime.GOOS)
-	}
-}
-
-func getLinuxFilePhysicalSize(info os.FileInfo) (int64, error) {
-	statT, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return 0, fmt.Errorf("无法转换为 syscall.Stat_t，实际类型：%T", info.Sys())
-	}
-
-	return statT.Blocks * 512, nil
-}
-
-func getDarwinFilePhysicalSize(info os.FileInfo, path string) (int64, error) {
-	if statUnix, ok := info.Sys().(*unix.Stat_t); ok {
-		return statUnix.Blocks * 512, nil
-	}
-
-	if statSyscall, ok := info.Sys().(*syscall.Stat_t); ok {
-		return statSyscall.Blocks * 512, nil
-	}
-
-	return 0, fmt.Errorf(
-		"无法转换为 unix.Stat_t 或 syscall.Stat_t，文件：%s，实际类型：%T",
-		path, info.Sys(),
-	)
+	return info.Size(), nil
 }
 
 // FileWithPath 自定义结构体，用于存储文件信息和对应的路径
@@ -356,25 +394,7 @@ type FileWithPath struct {
 
 // getAccessTime 跨平台获取文件访问时间
 func getAccessTime(info os.FileInfo) time.Time {
-	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-		if ts, ok := tryGetAtime(stat); ok {
-			return time.Unix(ts.Sec, ts.Nsec)
-		}
-	}
-	// 若无法获取访问时间，使用修改时间替代
 	return info.ModTime()
-}
-
-// tryGetAtime 尝试不同方式获取文件访问时间
-func tryGetAtime(stat *syscall.Stat_t) (syscall.Timespec, bool) {
-	if v, ok := interface{}(stat).(interface{ Atimespec() syscall.Timespec }); ok {
-		return v.Atimespec(), true
-	}
-	if v, ok := interface{}(stat).(interface{ Atim() syscall.Timespec }); ok {
-		return v.Atim(), true
-	}
-
-	return syscall.Timespec{}, false
 }
 
 // SortFilesByAccessTime 按文件访问时间对指定路径下的文件进行正序排序

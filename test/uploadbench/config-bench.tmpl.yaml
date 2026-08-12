@@ -1,0 +1,74 @@
+server:
+    mode: release
+    host: 127.0.0.1
+    port: 18090
+    pprof: true
+    pprofPort: 16060
+    metrics: true
+    online: false
+    repos: __REPOS__
+    hfNetLoc: hf-mirror.com
+    bpHfNetLoc: hf-mirror.com
+    hfScheme: https
+
+upload:
+    host: 127.0.0.1
+    port: 18091
+    token: bench-token
+    namespace: dingo-local
+    concurrentLimit: __LIMIT__
+    stagingRetentionHours: 168
+    stagingCleanupIntervalMinutes: 10080
+
+scheduler:
+    mode: standalone
+    addr: 127.0.0.1:19091
+    strategy:
+        minimumFileSize: 0
+        syncProcessInterval: 100
+    discovery:
+        instanceId: bench-01
+        host: 127.0.0.1
+        port: 18090
+        heartbeatPeriod: 5
+    publicDomain: http://127.0.0.1:18090
+    linkDomain: http://127.0.0.1:18090
+
+download:
+    blockSize: __BLOCKSIZE__
+    reqTimeout: 0
+    respChunkSize: 2048
+    respChanSize: 30
+    remoteFileBufferSize: 8388608
+    remoteFileRangeSize: 0
+    remoteFileRangeWaitTime: 0
+    goroutineMaxNumPerFile: 8
+
+cache:
+    defaultExpiration: __CACHEEXP__
+    cleanupInterval: __CACHECLEAN__
+    readBlock:
+        enabled: false
+        collectTimePeriod: 5
+        prefetchMemoryUsedThreshold: 90
+        prefetchBlocks: 16
+        prefetchBlockTTL: 30
+    mountModelDir: __REPOS__/mount
+
+retry:
+    delay: 1
+    attempts: 3
+
+log:
+    maxSize: 20
+    maxBackups: 3
+    maxAge: 7
+
+tokenBucketLimit:
+    handlerCapacity: 50
+
+diskClean:
+    enabled: false
+    cacheSizeLimit: 41781441855488
+    cacheCleanStrategy: "LRU"
+    collectTimePeriod: 1

@@ -83,7 +83,7 @@ func CORSMiddleware() echo.MiddlewareFunc {
 		return func(c echo.Context) error {
 			// 设置跨域头
 			c.Response().Header().Set("Access-Control-Allow-Origin", "*")
-			c.Response().Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS, HEAD")
+			c.Response().Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS, HEAD")
 			c.Response().Header().Set("Access-Control-Allow-Headers", "*")
 			c.Response().Header().Set("Access-Control-Expose-Headers", "*")
 
