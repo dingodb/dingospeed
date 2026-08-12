@@ -666,41 +666,57 @@
 > 沿用主文档 §12 的方式：**分环交付，每环验收通过后才进入下一环，不允许提前实现后续环的内容。**
 > 环号接续主文档（环 1~环 4 已完成）。
 
-### 环 5：暂缓生效与发布主干
+### 环 5：暂缓生效与发布主干（已完成）
 
 **目标**：证明"一批文件能一次性生效，且结果与逐个上传完全等价"。等价性是这个增量能否成立的唯一关键问题，必须最先回答。
 
-**做什么**
+**完成状态**：已收尾。以下能力均已实现并有自动化用例：
 
 | # | 内容 | 对应需求 |
 |---|---|---|
-| 1 | 上传接口的暂缓生效声明 | BR-1.1 / §3.1.2 |
-| 2 | 发布能力（清单入参、无状态） | BR-1.2 / BR-1.3 |
-| 3 | 发布前置校验：每个文件内容确实完整落盘 | 坑 批-2 / §9.4 |
-| 4 | 清单合并语义，与单文件共用同一套清单/标识实现 | BR-2.2 / 坑 批-4 / 坑 批-6 |
-| 5 | 发布的原子生效与版本级互斥（与即时生效上传共用同一把锁） | BR-4 / 坑 批-7 |
-| 6 | 覆盖与幂等语义 | BR-5 |
-| 7 | 错误分类 | BR-7 |
-| 8 | 发布接口只监听本机回环、共用上传凭证 | §4.1 |
+| 1 | 上传接口的暂缓生效声明：查询参数 `defer=true`，响应 `status=staged` 且不返回快照标识 | BR-1.1 / §3.1.2 |
+| 2 | 发布接口 `POST /api/local-publish/:repoType/:org/:repo/:revision`，请求体是完整发布清单，服务端不记忆批次 | BR-1.2 / BR-1.3 |
+| 3 | 发布前置校验：逐条确认内容完整落盘，缺内容或大小不符整次拒绝并列出路径 | 坑 批-2 / §9.4 |
+| 4 | 清单合并语义；合并、排序、序列化与标识计算由 `nextCommitBatch` 单点实现，单文件路径退化为 `len==1` 的调用 | BR-2.2 / 坑 批-4 / 坑 批-6 |
+| 5 | 发布原子生效；发布之间用 try-enter 明确拒绝，发布与即时生效上传共用同一把版本锁 | BR-4 / 坑 批-7 |
+| 6 | 覆盖声明作用于整批；合并后清单无变化时标识保持不变且不重写元数据 | BR-5 / BR-2.3 |
+| 7 | 错误分类：`PUBLISH_CONTENT_NOT_READY` / `PUBLISH_CONTENT_MISMATCH` / `PUBLISH_OVERWRITE_REQUIRED` / `PUBLISH_IN_PROGRESS` / `PUBLISH_INVALID_ARGUMENT` / `PUBLISH_BODY_TOO_LARGE` | BR-7 |
+| 8 | 发布接口注册在既有上传监听上（仅回环），共用 `X-Dingo-Upload-Token` | §4.1 |
+| 9 | 新增配置项 `upload.publishMaxFiles`（默认 1000），超上限明确拒绝 | BR-4.3 |
 
-**明确不做（留给环 6）**
+**验收记录**
 
-待发布内容的回收、1000 文件规模与性能对比测量、交付文档收尾、主文档限制表更新。
+| 验收项 | 结果 |
+|---|---|
+| 1. 基线 | `go build ./...` 与 `go test ./...` 通过；主文档环 1~4 的测试断言未被修改 |
+| 2. §9.1 等价性 | `TestPublishIsEquivalentToSequentialUploads`：6 个文件（含三级子目录）两条路径的快照标识逐字符相同、清单一致、blob 内容逐字节一致。端到端复验见下 |
+| 3. §9.2 完整性 | `TestPublishMergesInsteadOfReplacing`、`TestPublishMergesWithImmediateUploads` |
+| 4. §9.3 中间态不可见 | `TestStagedUploadsAreInvisibleUntilPublish`：暂存期间版本标签、清单、磁盘元数据均无变化；发布 5 个文件只产生 1 个快照标识（对照组产生 5 个） |
+| 5. §9.4 前置校验 | `TestPublishRejectsContentThatIsNotReady`、`TestRejectedPublishLeavesEffectiveRevisionUntouched`、`TestValidatePublishParamListShape`（空清单 / 超上限 / 重复路径） |
+| 6. §9.5 覆盖与幂等 | `TestPublishOverwriteAndIdempotency`：含"新增 + 覆盖 + 无变化"混合批次的分类统计 |
+| 7. §9.7 并发 | `TestConcurrentPublishOfSameRevisionIsRejected`、`TestConcurrentPublishAndImmediateUploadKeepBothFiles`、`TestPublishToDifferentRevisionsIsIndependent` |
+| 8. §9.8 续传不退化 | `TestDeferredUploadSupportsResume`、`TestDeferredResumeWithDifferentContentStillFailsHash` |
+| 9. §9.10 安全 | `TestValidatePublishParamRejectionMatrix`：4 个字段 × 10 种逃逸形式，且覆盖"逃逸路径不是清单第一条"的情况；`TestPublishTokenHandling` 三类凭证失败可区分。发布接口注册在环 2 已实测过的回环监听上，未新增任何对外监听 |
+| 10. §9.12 回归 | 既有测试全部通过；`TestUploadWithoutDeferStillPublishesImmediately` 确认不带 `defer` 时行为不变 |
+
+**端到端验证（真实进程 + 通用 HTTP 客户端）**
+
+用真实二进制起服务，`curl` 走完整链路，**在线与离线两种配置各跑一遍，40 项检查全部通过**，脚本见 [../test/publish-e2e/run-e2e.sh](../test/publish-e2e/run-e2e.sh)：
+
+- 暂缓生效上传 5 个文件（含三级子目录、20MB 跨块大文件）→ 发布前元数据与文件均返回 404、磁盘上零元数据 → 一条 curl 发布 → 只产生 1 个快照标识；
+- 同一组文件在另一个仓库逐个即时生效上传，**两个仓库的快照标识逐字符相同**，对照组产生 5 个快照标识；
+- 整仓元数据 `sha` 等于发布标识、`siblings` 一个不少；逐文件下载逐字节一致；分段下载（开头 / 中间 / 末尾）内容正确；
+- 追加一批 → 老文件仍在且内容正确、标识更新；覆盖未声明时 409 且标识不变，声明后客户端拿到新内容；
+- 发布清单含未上传文件 → 409 `PUBLISH_CONTENT_NOT_READY` 且错误信息指出路径；
+- 数据集类型同样通过；公开模型元数据链路未受影响。
+
+> **在线模式必须验证**：本增量改的是元数据写入时机，而"在线模式下先向上游求证"正是主文档坑 1 的成因。只在离线模式下验证是不可接受的。
+
+**本环仍不做（留给环 6）**
+
+待发布内容的回收、1000 文件规模与性能对比测量、发布的崩溃一致性验证、交付文档收尾、主文档限制表更新。
 
 > 本环产出**会积累不被回收的待发布内容**，验收时请注意手工清理，且不要放入长期运行的环境。
-
-**验收标准（全部通过才算完成）**
-
-1. `go build ./...` 与 `go test ./...` 可正常运行，主文档环 1~4 的测试断言未被修改。
-2. §9.1 等价性：两条路径的快照标识**逐字符相同**，整仓拉取逐字节一致。← 最关键
-3. §9.2 完整性：批量发布 + 二次追加发布，文件全部都在。
-4. §9.3 中间态不可见，且批量发布 N 个文件只产生 1 个快照标识。
-5. §9.4 发布前置校验全部用例通过，拒绝后无任何副作用。
-6. §9.5 覆盖与幂等全部用例通过。
-7. §9.7 并发全部用例通过。
-8. §9.8 断点续传在暂缓生效路径下不退化。
-9. §9.10 安全：发布接口从另一台机器连不上；发布清单的路径逃逸矩阵全部拒绝。
-10. §9.12 回归：现有单文件上传行为逐字节不变，公开模型下载不受影响。
 
 ### 环 6：回收与收尾
 

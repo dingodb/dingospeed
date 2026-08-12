@@ -173,6 +173,16 @@ type Upload struct {
 	ConcurrentLimit               int    `json:"concurrentLimit" yaml:"concurrentLimit"`
 	StagingRetentionHours         int    `json:"stagingRetentionHours" yaml:"stagingRetentionHours"`
 	StagingCleanupIntervalMinutes int    `json:"stagingCleanupIntervalMinutes" yaml:"stagingCleanupIntervalMinutes"`
+	PublishMaxFiles               int    `json:"publishMaxFiles" yaml:"publishMaxFiles"`
+}
+
+// GetUploadPublishMaxFiles 是单次批量发布的清单条目数上限，与已验证的单仓库文件数
+// 规模指标对齐。超过该值必须明确拒绝，不做静默截断。
+func (c *Config) GetUploadPublishMaxFiles() int {
+	if c.Upload.PublishMaxFiles <= 0 {
+		return 1000
+	}
+	return c.Upload.PublishMaxFiles
 }
 
 func (c *Config) GetHFURLBase() string {
@@ -416,6 +426,9 @@ func (c *Config) SetDefaults() {
 	}
 	if c.Upload.StagingCleanupIntervalMinutes == 0 {
 		c.Upload.StagingCleanupIntervalMinutes = 60
+	}
+	if c.Upload.PublishMaxFiles == 0 {
+		c.Upload.PublishMaxFiles = 1000
 	}
 }
 

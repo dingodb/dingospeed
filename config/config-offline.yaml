@@ -18,6 +18,7 @@ upload:
     concurrentLimit: 4
     stagingRetentionHours: 168
     stagingCleanupIntervalMinutes: 60
+    publishMaxFiles: 1000
 
 download:
     blockSize: 8388608           #默认文件块大小为8MB（8388608），单位字节，1048576（1MB）

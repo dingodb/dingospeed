@@ -23,6 +23,7 @@ upload:
     concurrentLimit: 4
     stagingRetentionHours: 168
     stagingCleanupIntervalMinutes: 60
+    publishMaxFiles: 1000
 
 scheduler:
     mode: standalone    #运行的两种模式：standalone&cluster,default:standalone

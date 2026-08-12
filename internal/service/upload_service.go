@@ -71,6 +71,61 @@ func (u *UploadService) UploadWholeFile(param dao.LocalUploadParam, rawSize, raw
 	return result, nil
 }
 
+// PublishFiles 让一批已经完整落盘的文件一次性生效。
+func (u *UploadService) PublishFiles(param dao.LocalPublishParam, token string) (*dao.LocalPublishResult, error) {
+	if err := validateUploadToken(token); err != nil {
+		return nil, err
+	}
+	if err := validatePublishParam(param); err != nil {
+		return nil, uploadError{status: 400, code: "PUBLISH_INVALID_ARGUMENT", msg: err.Error()}
+	}
+	zap.S().Infof("local publish start: %s/%s/%s revision=%s files=%d overwrite=%t",
+		param.RepoType, param.Org, param.Repo, param.Revision, len(param.Files), param.Overwrite)
+	result, err := u.uploadDao.PublishFiles(param)
+	if err != nil {
+		if _, ok := err.(interface{ StatusCode() int }); ok {
+			return nil, err
+		}
+		return nil, uploadError{status: 500, code: "PUBLISH_INTERNAL_ERROR", msg: err.Error()}
+	}
+	zap.S().Infof("local publish done: %s/%s/%s revision=%s commit=%s status=%s added=%d replaced=%d unchanged=%d total=%d",
+		param.RepoType, param.Org, param.Repo, param.Revision, result.Commit, result.Status,
+		result.Added, result.Replaced, result.Unchanged, result.FileCount)
+	return result, nil
+}
+
+func validatePublishParam(param dao.LocalPublishParam) error {
+	if err := validateRepoLocator(param.RepoType, param.Org, param.Repo, param.Revision); err != nil {
+		return err
+	}
+	if len(param.Files) == 0 {
+		return fmt.Errorf("files is required and must not be empty")
+	}
+	if maxFiles := config.SysConfig.GetUploadPublishMaxFiles(); len(param.Files) > maxFiles {
+		return fmt.Errorf("too many files in one publish: %d, max %d", len(param.Files), maxFiles)
+	}
+	maxSize := int64(downloader.DEFAULT_BLOCK_MASK_MAX) * config.SysConfig.Download.BlockSize
+	seen := make(map[string]struct{}, len(param.Files))
+	for _, item := range param.Files {
+		if err := validateFileLocator(item.Path, item.Sha256); err != nil {
+			return err
+		}
+		if item.Size < 0 {
+			return fmt.Errorf("size is invalid for %s", item.Path)
+		}
+		if item.Size > maxSize {
+			return fmt.Errorf("size of %s exceeds cache format limit: max %d bytes", item.Path, maxSize)
+		}
+		// 同一路径在一份清单里出现两次，说明调用方的清单本身就是错的。
+		// 择一或者后者覆盖前者会让调用方拿到成功响应，生效的却不是他以为的那个文件。
+		if _, ok := seen[item.Path]; ok {
+			return fmt.Errorf("duplicate path in publish list: %s", item.Path)
+		}
+		seen[item.Path] = struct{}{}
+	}
+	return nil
+}
+
 func (u *UploadService) QueryProgress(param dao.LocalUploadParam, token string) (*dao.LocalUploadProgress, error) {
 	if err := validateUploadToken(token); err != nil {
 		return nil, err
@@ -111,31 +166,44 @@ func ParseResumeStart(raw string) (*int64, error) {
 }
 
 func validateUploadLocator(param dao.LocalUploadParam) error {
-	if param.RepoType != "models" && param.RepoType != "datasets" {
+	if err := validateRepoLocator(param.RepoType, param.Org, param.Repo, param.Revision); err != nil {
+		return err
+	}
+	return validateFileLocator(param.FilePath, param.Sha256)
+}
+
+// validateRepoLocator 校验定位到某一个仓库版本的四个字段。批量发布没有单个文件路径，
+// 但这四个字段一样会参与磁盘路径拼接，校验不能因为“换了个入口”就少做一遍。
+func validateRepoLocator(repoType, org, repo, revision string) error {
+	if repoType != "models" && repoType != "datasets" {
 		return fmt.Errorf("repoType must be models or datasets")
 	}
-	if param.Org != config.SysConfig.Upload.Namespace {
+	if org != config.SysConfig.Upload.Namespace {
 		return fmt.Errorf("org must be %s", config.SysConfig.Upload.Namespace)
 	}
-	if !validRepoSegment(param.Org) || !validRepoSegment(param.Repo) || !validRepoSegment(param.Revision) {
+	if !validRepoSegment(org) || !validRepoSegment(repo) || !validRepoSegment(revision) {
 		return fmt.Errorf("org, repo, and revision must be safe relative path segments")
 	}
-	if param.FilePath == "" || strings.Contains(param.FilePath, "\\") {
+	return nil
+}
+
+func validateFileLocator(filePath, sha string) error {
+	if filePath == "" || strings.Contains(filePath, "\\") {
 		return fmt.Errorf("filePath is invalid")
 	}
-	clean := path.Clean(param.FilePath)
-	if clean == "." || strings.HasPrefix(clean, "../") || clean == ".." || path.IsAbs(param.FilePath) || clean != param.FilePath {
+	clean := path.Clean(filePath)
+	if clean == "." || strings.HasPrefix(clean, "../") || clean == ".." || path.IsAbs(filePath) || clean != filePath {
 		return fmt.Errorf("filePath must be a clean relative path")
 	}
-	if len(param.FilePath) > maxFilePathLen {
+	if len(filePath) > maxFilePathLen {
 		return fmt.Errorf("filePath is too long: max %d characters", maxFilePathLen)
 	}
-	for _, part := range strings.Split(param.FilePath, "/") {
+	for _, part := range strings.Split(filePath, "/") {
 		if !validFileNameSegment(part) {
 			return fmt.Errorf("filePath contains an unsafe segment: %q", part)
 		}
 	}
-	if !sha256Pattern.MatchString(param.Sha256) {
+	if !sha256Pattern.MatchString(sha) {
 		return fmt.Errorf("sha256 must be a 64-character lowercase hex string")
 	}
 	return nil
