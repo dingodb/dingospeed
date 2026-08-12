@@ -129,9 +129,15 @@ var localUploadInFlight = struct {
 // 上传期间的互斥必须自己持有，不能放进带 TTL 的缓存里：
 // 大文件上传远超缓存过期时间，锁对象一旦过期就会被重建，互斥会静默失效。
 var (
+	// 加锁顺序固定为 repo → revision → blob，反向获取会死锁。
+	uploadRepoLocks     = newKeyedMutex()
 	uploadRevisionLocks = newKeyedMutex()
 	uploadBlobLocks     = newKeyedMutex()
 )
+
+func uploadRepoLockKey(repoType, orgRepo string) string {
+	return fmt.Sprintf("upload-repo:%s:%s", repoType, orgRepo)
+}
 
 type keyedMutexEntry struct {
 	mu   sync.Mutex
@@ -230,6 +236,10 @@ func (u *UploadDao) UploadWholeFile(param LocalUploadParam, body io.Reader) (*Lo
 
 	// 第二段临界区：重建清单、算快照标识、写元数据。必须重新读取清单，
 	// 否则并发上传的另一个文件会被基于陈旧清单的重建覆盖掉（坑 8）。
+	// 与批量发布一样先取仓库锁，把内容与清单的绑定挡在回收任务之外。
+	repoLockKey := uploadRepoLockKey(param.RepoType, orgRepo)
+	uploadRepoLocks.Lock(repoLockKey)
+	defer uploadRepoLocks.Unlock(repoLockKey)
 	uploadRevisionLocks.Lock(revisionLockKey)
 	defer uploadRevisionLocks.Unlock(revisionLockKey)
 
@@ -284,6 +294,12 @@ func (u *UploadDao) PublishFiles(param LocalPublishParam) (*LocalPublishResult, 
 		}
 	}
 	defer leaveLocalUpload(publishKey)
+
+	// 仓库锁把“确认内容在盘上”和“把它写进清单”圈成一个整体，回收任务也持有它。
+	// 少了这把锁，回收就可能挤进这两步中间，让清单指向一个刚被删掉的 blob。
+	repoLockKey := uploadRepoLockKey(param.RepoType, orgRepo)
+	uploadRepoLocks.Lock(repoLockKey)
+	defer uploadRepoLocks.Unlock(repoLockKey)
 
 	// 版本锁与即时生效上传共用同一把：两者都要“读清单 → 合并 → 写回”，
 	// 不共用就会各自基于陈旧清单重建，后写的覆盖先写的。
@@ -811,6 +827,141 @@ func (u *UploadDao) CleanupExpiredStagedUploads(retention time.Duration) (int, e
 	return removed, err
 }
 
+// CleanupUnreferencedBlobs 回收“已经完整落盘、但不被任何清单引用”的内容。
+//
+// 这是批量发布引入的一类新残留：暂缓生效的上传成功后内容就完整躺在盘上了，
+// 但那次发布可能永远不会来（脚本挂了、批次被放弃、换了别的清单）。它既不是
+// 未完成的暂存文件（暂存清理够不着），又在本地命名空间里（防淘汰保护着它），
+// 现有机制下会无限累积。
+//
+// 反过来，误删的代价极高：本地命名空间是自研内容的**唯一发布源**，删了就没有了。
+// 所以判定“未被引用”时要扫遍该仓库下**所有**快照的清单，而不只是版本标签当前
+// 指向的那一个——记录过旧标识的客户端仍然能解析到旧快照。
+func (u *UploadDao) CleanupUnreferencedBlobs(retention time.Duration) (int, error) {
+	if retention <= 0 {
+		retention = 7 * 24 * time.Hour
+	}
+	repos := config.SysConfig.Repos()
+	root := filepath.Join(repos, "files")
+	cutoff := time.Now().Add(-retention)
+	removed := 0
+
+	repoBlobs, err := collectLocalBlobs(root)
+	if err != nil {
+		return 0, err
+	}
+	for repoKey, blobs := range repoBlobs {
+		repoType, orgRepo := repoKey.repoType, repoKey.orgRepo
+		count, cleanErr := u.cleanupRepoBlobs(repos, repoType, orgRepo, blobs, cutoff)
+		removed += count
+		if cleanErr != nil {
+			return removed, cleanErr
+		}
+	}
+	return removed, nil
+}
+
+type localRepoKey struct {
+	repoType string
+	orgRepo  string
+}
+
+// collectLocalBlobs 只收集本地命名空间下的 blob。公开模型的缓存与自研内容共用
+// 同一棵目录树，漏掉这个判断就会把公开缓存也当成“未被引用”删掉，
+// 那是在改动磁盘清理对公开模型的既有行为。
+func collectLocalBlobs(root string) (map[localRepoKey][]string, error) {
+	result := make(map[localRepoKey][]string)
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if entry.IsDir() || strings.HasSuffix(entry.Name(), localUploadStageSuffix) {
+			return nil
+		}
+		repoType, orgRepo, sha, ok := stagedBlobIdentity(root, path)
+		if !ok || !IsLocalOrgRepo(orgRepo) {
+			return nil
+		}
+		key := localRepoKey{repoType: repoType, orgRepo: orgRepo}
+		result[key] = append(result[key], sha)
+		return nil
+	})
+	if os.IsNotExist(err) {
+		return result, nil
+	}
+	return result, err
+}
+
+func (u *UploadDao) cleanupRepoBlobs(repos, repoType, orgRepo string, blobs []string, cutoff time.Time) (int, error) {
+	// 仓库锁挡住并发的发布：引用集合在这把锁下算出来之后就不会再被追加引用。
+	repoLockKey := uploadRepoLockKey(repoType, orgRepo)
+	uploadRepoLocks.Lock(repoLockKey)
+	defer uploadRepoLocks.Unlock(repoLockKey)
+
+	referenced, err := u.referencedShas(repos, repoType, orgRepo)
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, sha := range blobs {
+		if _, ok := referenced[sha]; ok {
+			continue
+		}
+		blobPath := localBlobPath(repoType, orgRepo, sha)
+		blobKey := fmt.Sprintf("upload-blob:%s:%s:%s", repoType, orgRepo, sha)
+		uploadBlobLocks.Lock(blobKey)
+		info, statErr := os.Stat(blobPath)
+		switch {
+		case statErr != nil && os.IsNotExist(statErr):
+			uploadBlobLocks.Unlock(blobKey)
+			continue
+		case statErr != nil:
+			uploadBlobLocks.Unlock(blobKey)
+			return removed, statErr
+		case info.ModTime().After(cutoff):
+			// 保留期内：可能正等着一次还没发出来的发布，留着。
+			uploadBlobLocks.Unlock(blobKey)
+			continue
+		}
+		// 同一个 sha 可能还有一个正在续传的暂存文件，那份由暂存清理按自己的
+		// 保留期处理，这里只回收已经完整的那一份。
+		rmErr := os.Remove(blobPath)
+		uploadBlobLocks.Unlock(blobKey)
+		if rmErr != nil && !os.IsNotExist(rmErr) {
+			return removed, rmErr
+		}
+		removed++
+		zap.S().Infof("[UPLOAD-CLEANUP] reclaimed unreferenced upload content: %s/%s sha=%s", repoType, orgRepo, sha)
+	}
+	return removed, nil
+}
+
+// referencedShas 收集该仓库下所有快照清单引用到的内容摘要。
+// 扫的是全部 commit 清单，不是版本标签当前指向的那一份。
+func (u *UploadDao) referencedShas(repos, repoType, orgRepo string) (map[string]struct{}, error) {
+	referenced := make(map[string]struct{})
+	revisionRoot := filepath.Join(repos, "api", repoType, filepath.FromSlash(orgRepo), "revision")
+	entries, err := os.ReadDir(revisionRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return referenced, nil
+		}
+		return nil, err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		for _, item := range u.readManifest(repoType, orgRepo, entry.Name()) {
+			referenced[item.Sha256] = struct{}{}
+		}
+	}
+	return referenced, nil
+}
+
 func (u *UploadDao) RunStagedUploadCleanup(ctx context.Context) {
 	interval := config.SysConfig.GetUploadStagingCleanupInterval()
 	if interval <= 0 {
@@ -826,10 +977,16 @@ func (u *UploadDao) RunStagedUploadCleanup(ctx context.Context) {
 			removed, err := u.CleanupExpiredStagedUploads(config.SysConfig.GetUploadStagingRetention())
 			if err != nil {
 				zap.S().Warnf("cleanup expired staged uploads failed: %v", err)
+			} else if removed > 0 {
+				zap.S().Infof("cleanup expired staged uploads removed %d file(s)", removed)
+			}
+			reclaimed, err := u.CleanupUnreferencedBlobs(config.SysConfig.GetUploadOrphanRetention())
+			if err != nil {
+				zap.S().Warnf("reclaim unreferenced upload content failed: %v", err)
 				continue
 			}
-			if removed > 0 {
-				zap.S().Infof("cleanup expired staged uploads removed %d file(s)", removed)
+			if reclaimed > 0 {
+				zap.S().Infof("reclaimed %d unreferenced upload content file(s)", reclaimed)
 			}
 		}
 	}
