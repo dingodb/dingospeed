@@ -471,13 +471,21 @@ func Scan(path string) (*Config, error) {
 		}
 		return nil, err
 	}
-	SysConfig = &c // 设置全局配置变量
-
-	marshal, err := yaml.Marshal(c)
+	marshal, err := marshalConfigForLog(&c)
 	if err != nil {
 		return nil, err
 	}
 	log.Info(string(marshal))
+	SysConfig = &c // 设置全局配置变量
 	SystemInfo = &model.SystemInfo{}
 	return &c, nil
+}
+
+func marshalConfigForLog(c *Config) ([]byte, error) {
+	token := c.Upload.Token
+	c.Upload.Token = "<redacted>"
+	defer func() {
+		c.Upload.Token = token
+	}()
+	return yaml.Marshal(c)
 }

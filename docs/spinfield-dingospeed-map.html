@@ -1,0 +1,537 @@
+<title>spinfield × dingospeed 链路示意图</title>
+
+<style>
+  :root {
+    --paper:    #F4F6F8;
+    --surface:  #FFFFFF;
+    --sunk:     #EAEEF2;
+    --ink:      #161A20;
+    --muted:    #5D6874;
+    --faint:    #8A94A1;
+    --rule:     #D5DBE2;
+    --rule-2:   #BDC6D0;
+    --sf:       #9A5316;
+    --sf-bg:    #FBF1E7;
+    --ds:       #0B6A66;
+    --ds-bg:    #E6F2F1;
+    --warn:     #8C3A2E;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:   #12151A;
+      --surface: #1A1F26;
+      --sunk:    #22272F;
+      --ink:     #E6EAEF;
+      --muted:   #9BA5B2;
+      --faint:   #6F7987;
+      --rule:    #2B323B;
+      --rule-2:  #3D4650;
+      --sf:      #E09A4F;
+      --sf-bg:   #2A2015;
+      --ds:      #45B8B2;
+      --ds-bg:   #122A29;
+      --warn:    #E08878;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper:   #12151A;
+    --surface: #1A1F26;
+    --sunk:    #22272F;
+    --ink:     #E6EAEF;
+    --muted:   #9BA5B2;
+    --faint:   #6F7987;
+    --rule:    #2B323B;
+    --rule-2:  #3D4650;
+    --sf:      #E09A4F;
+    --sf-bg:   #2A2015;
+    --ds:      #45B8B2;
+    --ds-bg:   #122A29;
+    --warn:    #E08878;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: ui-sans-serif, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 56px 28px 88px;
+    display: flex;
+    flex-direction: column;
+    gap: 44px;
+  }
+
+  .eyebrow {
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin: 0 0 10px;
+  }
+
+  h1 {
+    font-size: clamp(26px, 3.4vw, 38px);
+    line-height: 1.18;
+    letter-spacing: -0.02em;
+    font-weight: 660;
+    margin: 0 0 14px;
+    text-wrap: balance;
+  }
+
+  h2 {
+    font-size: 19px;
+    letter-spacing: -0.01em;
+    font-weight: 640;
+    margin: 0 0 4px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .lede { max-width: 68ch; color: var(--muted); margin: 0; }
+  .lede strong { color: var(--ink); font-weight: 600; }
+
+  section { display: flex; flex-direction: column; gap: 18px; }
+
+  figure { margin: 0; display: flex; flex-direction: column; gap: 12px; }
+
+  .canvas {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: 18px;
+    overflow-x: auto;
+  }
+  .canvas svg { display: block; min-width: 720px; max-width: 100%; height: auto; color: var(--ink); }
+
+  figcaption { font-size: 13px; color: var(--muted); max-width: 76ch; }
+
+  /* ---- SVG element styling (page-level, so tokens resolve in both themes) ---- */
+  .node       { fill: var(--surface); stroke: var(--rule-2); stroke-width: 1.25; }
+  .node-sf    { fill: var(--sf-bg);   stroke: var(--sf);     stroke-width: 1.4; }
+  .node-ds    { fill: var(--ds-bg);   stroke: var(--ds);     stroke-width: 1.4; }
+  .node-disk  { fill: var(--sunk);    stroke: var(--rule-2); stroke-width: 1.25; }
+  .boundary   { fill: none; stroke: var(--rule-2); stroke-width: 1.25; stroke-dasharray: 7 5; }
+
+  .t-title    { fill: var(--ink);   font-size: 14px; font-weight: 640; }
+  .t-title-sm { fill: var(--ink);   font-size: 12.5px; font-weight: 640; }
+  .t-sub      { fill: var(--muted); font-size: 11px; }
+  .t-mono     { fill: var(--muted); font-family: ui-monospace, Consolas, monospace; font-size: 10.5px; }
+  .t-mono-sm  { fill: var(--faint); font-family: ui-monospace, Consolas, monospace; font-size: 9.5px; }
+  .t-label    { fill: var(--ink);   font-size: 11px; font-weight: 560; }
+  .t-note     { fill: var(--faint); font-size: 10.5px; }
+  .t-sf       { fill: var(--sf);    font-size: 11px; font-weight: 620; }
+  .t-ds       { fill: var(--ds);    font-size: 11px; font-weight: 620; }
+  .t-warn     { fill: var(--warn);  font-size: 11px; font-weight: 600; }
+
+  .flow-bytes { stroke: var(--ink);  stroke-width: 2.6; fill: none; }
+  .flow-ctrl  { stroke: var(--muted); stroke-width: 1.3; fill: none; }
+  .flow-poll  { stroke: var(--muted); stroke-width: 1.3; fill: none; stroke-dasharray: 5 4; }
+  .flow-seam  { stroke: var(--warn); stroke-width: 2.6; fill: none; }
+
+  .num-bg     { fill: var(--surface); stroke: var(--rule-2); stroke-width: 1.1; }
+  .num-tx     { fill: var(--ink); font-size: 10.5px; font-weight: 680; }
+
+  /* ---- legend ---- */
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 26px; font-size: 12.5px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 8px; }
+  .swatch { width: 26px; height: 0; border-top-style: solid; flex: none; }
+  .sw-bytes { border-top-width: 2.6px; border-top-color: var(--ink); }
+  .sw-ctrl  { border-top-width: 1.3px; border-top-color: var(--muted); }
+  .sw-poll  { border-top-width: 1.3px; border-top-color: var(--muted); border-top-style: dashed; }
+
+  /* ---- tables ---- */
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 18px; }
+
+  .panel { border: 1px solid var(--rule); border-radius: 3px; background: var(--surface); overflow: hidden; }
+  .panel > header {
+    padding: 11px 16px;
+    border-bottom: 1px solid var(--rule);
+    font-size: 13px;
+    font-weight: 640;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  .panel > header .who {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-weight: 500;
+  }
+  .p-sf > header { background: var(--sf-bg); color: var(--sf); border-bottom-color: var(--sf); }
+  .p-ds > header { background: var(--ds-bg); color: var(--ds); border-bottom-color: var(--ds); }
+  .panel ul { margin: 0; padding: 14px 16px 16px 32px; display: flex; flex-direction: column; gap: 7px; font-size: 13.5px; }
+  .panel li::marker { color: var(--faint); }
+  .panel li b { font-weight: 600; }
+
+  .tbl-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 3px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; min-width: 620px; font-size: 13.5px; }
+  th, td { text-align: left; padding: 10px 15px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  thead th {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--faint);
+    font-weight: 500;
+    background: var(--sunk);
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  code, .mono { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 0.9em; }
+  code { background: var(--sunk); padding: 1px 5px; border-radius: 2px; color: var(--ink); }
+  .tag-sf { color: var(--sf); font-weight: 620; }
+  .tag-ds { color: var(--ds); font-weight: 620; }
+  .tag-no { color: var(--faint); }
+
+  ol.flow { margin: 0; padding-left: 0; list-style: none; counter-reset: f; display: flex; flex-direction: column; gap: 0; }
+  ol.flow li {
+    counter-increment: f;
+    display: grid;
+    grid-template-columns: 30px 1fr;
+    gap: 14px;
+    padding: 11px 0;
+    border-bottom: 1px solid var(--rule);
+    font-size: 13.5px;
+  }
+  ol.flow li:last-child { border-bottom: 0; }
+  ol.flow li::before {
+    content: counter(f);
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 11px;
+    font-weight: 680;
+    width: 22px; height: 22px;
+    display: grid; place-items: center;
+    border: 1px solid var(--rule-2);
+    border-radius: 50%;
+    color: var(--ink);
+    margin-top: 1px;
+  }
+  ol.flow .what { display: block; }
+  ol.flow .how { display: block; color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+
+  .callout {
+    border-left: 2px solid var(--sf);
+    background: var(--sf-bg);
+    padding: 13px 17px;
+    font-size: 13.5px;
+    border-radius: 0 3px 3px 0;
+  }
+  .callout b { color: var(--sf); }
+
+  footer { border-top: 1px solid var(--rule); padding-top: 16px; font-size: 12.5px; color: var(--faint); }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">环 0 · 链路打通</p>
+    <h1>spinfield × dingospeed：谁在哪台机器上做什么</h1>
+    <p class="lede">
+      一句话：<strong>spinfield 负责"从哪读、给谁看"，dingospeed 负责"怎么存、存成什么"。</strong>
+      字节只走一条路——后端从本机磁盘读出来，直接推给 dingospeed，<strong>全程不经过浏览器</strong>。
+    </p>
+  </header>
+
+  <section>
+    <h2>整体结构与数据流</h2>
+
+    <figure>
+      <div class="canvas">
+        <svg viewBox="0 0 1240 680" role="img"
+             aria-label="环 0 架构图：单台主机上，spinfield 控制台、spinfield 后端与 dingospeed 三个进程；后端从本机源模型目录读取字节并推送给 dingospeed，dingospeed 按 sha256 写入 blob；最终用户从主机外经 8090 端口下载。">
+          <defs>
+            <marker id="ah-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <polygon points="0,1 10,5 0,9" fill="currentColor"></polygon>
+            </marker>
+            <marker id="ah-mut" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+              <polygon points="0,1.5 10,5 0,8.5" fill="currentColor" opacity="0.62"></polygon>
+            </marker>
+          </defs>
+
+          <!-- ============ 最终用户（主机外） ============ -->
+          <rect class="node" x="816" y="14" width="304" height="50" rx="2"></rect>
+          <text class="t-title-sm" x="968" y="35" text-anchor="middle">最终用户（任意机器）</text>
+          <text class="t-mono" x="968" y="52" text-anchor="middle">huggingface_hub · curl</text>
+
+          <!-- ============ 主机边界 ============ -->
+          <rect class="boundary" x="24" y="88" width="1192" height="568" rx="3"></rect>
+          <text class="t-note" x="42" y="110">一台主机 · 环 0 全部跑在本机开发环境</text>
+
+          <!-- ============ 服务层 ============ -->
+          <!-- 浏览器 -->
+          <rect class="node-sf" x="56" y="146" width="224" height="104" rx="2"></rect>
+          <text class="t-title" x="168" y="180" text-anchor="middle">spinfield 控制台</text>
+          <text class="t-mono" x="168" y="200" text-anchor="middle">:3000</text>
+          <text class="t-sub" x="168" y="222" text-anchor="middle">移植自交互原型</text>
+          <text class="t-note" x="168" y="240" text-anchor="middle">只提交路径，不搬字节</text>
+
+          <!-- spinfield 后端 -->
+          <rect class="node-sf" x="396" y="146" width="284" height="104" rx="2"></rect>
+          <text class="t-title" x="538" y="176" text-anchor="middle">spinfield 后端</text>
+          <text class="t-mono" x="538" y="195" text-anchor="middle">adminapi :8082</text>
+          <text class="t-sub" x="538" y="216" text-anchor="middle">读文件 · 算 SHA-256 · 推字节</text>
+          <text class="t-note" x="538" y="236" text-anchor="middle">任务态在内存 · 不依赖 k8s</text>
+
+          <!-- dingospeed -->
+          <rect class="node-ds" x="816" y="146" width="304" height="104" rx="2"></rect>
+          <text class="t-title" x="968" y="176" text-anchor="middle">dingospeed</text>
+          <text class="t-mono" x="968" y="195" text-anchor="middle">:8090 下载 · :8091 上传（仅回环）</text>
+          <text class="t-sub" x="968" y="216" text-anchor="middle">落盘 · 校验 · 去重 · 原子发布</text>
+          <text class="t-note" x="968" y="236" text-anchor="middle">本期零代码改动</text>
+
+          <!-- ============ 磁盘层 ============ -->
+          <!-- 源模型目录 -->
+          <rect class="node-disk" x="396" y="430" width="284" height="142" rx="2"></rect>
+          <text class="t-title-sm" x="538" y="455" text-anchor="middle">源模型目录（用户数据）</text>
+          <text class="t-mono" x="416" y="477">D:\models\qwen3-demo\</text>
+          <text class="t-mono-sm" x="428" y="496">├ config.json</text>
+          <text class="t-mono-sm" x="428" y="513">├ model-00001-of-2.safetensors</text>
+          <text class="t-mono-sm" x="428" y="530">└ sub/tokenizer.json</text>
+          <text class="t-note" x="538" y="556" text-anchor="middle">spinfield 只读 · 绝不删改</text>
+
+          <!-- dingospeed repos -->
+          <rect class="node-disk" x="816" y="430" width="304" height="170" rx="2"></rect>
+          <text class="t-title-sm" x="968" y="455" text-anchor="middle">dingospeed repos/（缓存根）</text>
+          <text class="t-mono" x="836" y="477">blobs/ — 按 sha256 存放</text>
+          <text class="t-mono-sm" x="848" y="496">├ 3a9f… 　config.json 的内容</text>
+          <text class="t-mono-sm" x="848" y="513">└ c71b… 　权重分片的内容</text>
+          <text class="t-mono" x="836" y="536">dingo-local-manifest.json</text>
+          <text class="t-mono" x="836" y="556">revision 元数据 → commit</text>
+          <text class="t-note" x="968" y="582" text-anchor="middle">仓库路径是 resolve 出的虚拟视图</text>
+
+          <!-- ============ 流 ============ -->
+          <!-- ⑧ 外部下载：跨边界 -->
+          <line class="flow-bytes" x1="880" y1="66" x2="880" y2="142" marker-end="url(#ah-ink)"></line>
+          <text class="t-label" x="894" y="100">标准客户端拉取</text>
+          <circle class="num-bg" cx="880" cy="118" r="9.5"></circle>
+          <text class="num-tx" x="880" y="122" text-anchor="middle">8</text>
+
+          <!-- ① 浏览目录 -->
+          <text class="t-label" x="338" y="166" text-anchor="middle">浏览目录</text>
+          <line class="flow-ctrl" x1="282" y1="180" x2="392" y2="180" marker-end="url(#ah-mut)"></line>
+          <circle class="num-bg" cx="338" cy="180" r="9.5"></circle>
+          <text class="num-tx" x="338" y="184" text-anchor="middle">1</text>
+
+          <!-- ② 提交任务 -->
+          <text class="t-label" x="338" y="200" text-anchor="middle">提交任务</text>
+          <line class="flow-ctrl" x1="282" y1="214" x2="392" y2="214" marker-end="url(#ah-mut)"></line>
+          <circle class="num-bg" cx="338" cy="214" r="9.5"></circle>
+          <text class="num-tx" x="338" y="218" text-anchor="middle">2</text>
+
+          <!-- ⑦ 轮询进度 -->
+          <text class="t-label" x="338" y="234" text-anchor="middle">轮询进度</text>
+          <line class="flow-poll" x1="392" y1="248" x2="282" y2="248" marker-end="url(#ah-mut)"></line>
+          <circle class="num-bg" cx="338" cy="248" r="9.5"></circle>
+          <text class="num-tx" x="338" y="252" text-anchor="middle">7</text>
+
+          <!-- ③ 读源文件（两遍） -->
+          <line class="flow-bytes" x1="520" y1="428" x2="520" y2="254" marker-end="url(#ah-ink)"></line>
+          <text class="t-label" x="536" y="330">读两遍</text>
+          <text class="t-note" x="536" y="347">① 算摘要 ② 推送</text>
+          <circle class="num-bg" cx="520" cy="380" r="9.5"></circle>
+          <text class="num-tx" x="520" y="384" text-anchor="middle">3</text>
+
+          <!-- ④ 上传字节 -->
+          <text class="t-label" x="748" y="166" text-anchor="middle">逐文件上传字节</text>
+          <line class="flow-bytes" x1="684" y1="180" x2="812" y2="180" marker-end="url(#ah-ink)"></line>
+          <circle class="num-bg" cx="748" cy="180" r="9.5"></circle>
+          <text class="num-tx" x="748" y="184" text-anchor="middle">4</text>
+
+          <!-- ⑤ 发布清单 -->
+          <text class="t-label" x="748" y="212" text-anchor="middle">发布清单</text>
+          <line class="flow-ctrl" x1="684" y1="226" x2="812" y2="226" marker-end="url(#ah-mut)"></line>
+          <circle class="num-bg" cx="748" cy="226" r="9.5"></circle>
+          <text class="num-tx" x="748" y="230" text-anchor="middle">5</text>
+
+          <!-- ⑥ 写 blob -->
+          <line class="flow-bytes" x1="968" y1="254" x2="968" y2="426" marker-end="url(#ah-ink)"></line>
+          <text class="t-label" x="984" y="330">写 blob</text>
+          <text class="t-note" x="984" y="347">同内容自动复用</text>
+          <circle class="num-bg" cx="968" cy="380" r="9.5"></circle>
+          <text class="num-tx" x="968" y="384" text-anchor="middle">6</text>
+        </svg>
+      </div>
+
+      <div class="legend">
+        <span><i class="swatch sw-bytes"></i> 文件字节</span>
+        <span><i class="swatch sw-ctrl"></i> 控制消息（路径、清单、元信息）</span>
+        <span><i class="swatch sw-poll"></i> 进度轮询</span>
+      </div>
+
+      <figcaption>
+        字节只出现在三段实线上：磁盘 → 后端 → dingospeed → blob。浏览器那一侧全是细线，
+        它从头到尾只传路径和清单。<code>:8091</code> 仅监听回环，所以上传这一跳必须发生在本机。
+      </figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h2>职责分工</h2>
+    <div class="grid2">
+
+      <div class="panel p-sf">
+        <header>spinfield <span class="who">编排侧 · 本期主要改动</span></header>
+        <ul>
+          <li><b>用户与权限</b>、仓库业务状态（dingospeed 完全不涉及）</li>
+          <li><b>目录浏览</b>与文件清单展开</li>
+          <li><b>任务生命周期</b>与进度：创建、状态机、失败原因</li>
+          <li><b>读源文件、算 SHA-256</b>（<code>io.Copy</code> 一行，内存常数）</li>
+          <li><b>推字节、触发发布</b>：N 次上传 + 1 次发布</li>
+          <li>模型元信息（许可、标签、精度…）——dingospeed 不认识这些</li>
+          <li>仓库与容量展示（代理 dingospeed 的接口）</li>
+        </ul>
+      </div>
+
+      <div class="panel p-ds">
+        <header>dingospeed <span class="who">存储侧 · 本期零改动</span></header>
+        <ul>
+          <li><b>按 DingoCache 格式落盘</b>（不是原始文件的副本）</li>
+          <li><b>摘要校验</b>：收完把内容整个读一遍重算，不信声明值</li>
+          <li><b>按 sha256 去重</b>，命中时返回 <code>blobReused</code></li>
+          <li><b>清单合并与 commit 计算</b>（由完整清单确定性算出）</li>
+          <li><b>原子发布</b>：整批一次生效，中途没有半个仓库</li>
+          <li>防淘汰与孤儿回收（<code>dingo-local</code> 排除在缓存淘汰外）</li>
+          <li>对外的 HF 兼容下载服务</li>
+        </ul>
+      </div>
+
+    </div>
+
+    <div class="callout">
+      <b>一条边界必须写死：</b>源文件的清理归 spinfield。dingospeed 对源文件只做打开、读取、关闭三件事——
+      不删除、不移动、不改名。释放空间由持有者做，执行者不做。
+    </div>
+  </section>
+
+  <section>
+    <h2>文件分布</h2>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th>东西</th><th>在哪</th><th>谁写</th><th>生命周期</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>源模型目录（裸权重）</td>
+            <td><code>D:\models\…</code> 本机磁盘</td>
+            <td class="tag-no">用户放置</td>
+            <td>两侧都不删，由用户自理</td>
+          </tr>
+          <tr>
+            <td>上传任务状态与进度</td>
+            <td>spinfield 进程内存（MemStore）</td>
+            <td class="tag-sf">spinfield</td>
+            <td><b>重启即丢</b>，重新提交即可</td>
+          </tr>
+          <tr>
+            <td>模型元信息</td>
+            <td>环 0 只在任务对象里</td>
+            <td class="tag-sf">spinfield</td>
+            <td>环 2 才落 MySQL</td>
+          </tr>
+          <tr>
+            <td>blob 内容（按 sha256）</td>
+            <td><code>dingospeed/repos/</code></td>
+            <td class="tag-ds">dingospeed</td>
+            <td>持久，排除在缓存淘汰之外</td>
+          </tr>
+          <tr>
+            <td>文件清单 + revision 元数据</td>
+            <td><code>dingospeed/repos/</code></td>
+            <td class="tag-ds">dingospeed</td>
+            <td>随每次发布产生新 commit</td>
+          </tr>
+          <tr>
+            <td>已传未发布的暂存内容</td>
+            <td><code>dingospeed/repos/</code></td>
+            <td class="tag-ds">dingospeed</td>
+            <td>对下载方不可见，168 小时后回收</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>数据流逐步</h2>
+    <ol class="flow">
+      <li><span class="what">前端浏览本机目录，用户选中一个模型目录</span><span class="how"><code>GET /admin/v1/local-fs?path=</code> —— 原型里这块已实现，只需把假目录树换成真实返回</span></li>
+      <li><span class="what">提交任务：模型名、版本、源目录、文件相对路径清单</span><span class="how"><code>POST /admin/v1/model-uploads</code> —— 不含字节，也不含摘要；后端先 <code>stat</code> 一遍，任一文件不存在就同步拒绝</span></li>
+      <li><span class="what">逐文件读两遍：先算 SHA-256，紧接着再读一遍用于推送</span><span class="how">第二遍通常还在页缓存里，几乎不花代价——这是"逐文件交错"而不是"先算完全部"的原因</span></li>
+      <li><span class="what">把这个文件的字节推给 dingospeed，声明暂缓生效</span><span class="how"><code>POST /api/local-upload/…?size=&amp;sha256=&amp;defer=true</code> —— 此刻下载方看不到任何变化</span></li>
+      <li><span class="what">全部文件就绪后，一次性发布</span><span class="how"><code>POST /api/local-publish/…</code> 带完整清单 —— 整批原子生效，只产生一个 commit</span></li>
+      <li><span class="what">dingospeed 把内容按 sha256 写入 blob，重算摘要校验，同内容自动复用</span><span class="how">落盘形态与从上游下载缓存下来的完全一致，下载链路原样复用</span></li>
+      <li><span class="what">前端每秒轮询任务快照，显示阶段与逐文件进度</span><span class="how"><code>GET /admin/v1/model-uploads/{taskId}</code> —— 后端自己就是搬运工，进度就是复制循环里的计数器，<b>不需要任何回调协议</b></span></li>
+      <li><span class="what">最终用户用标准客户端拉取，感知不到这个模型和公开模型有任何区别</span><span class="how">走 <code>:8090</code> 的 HF 兼容通道；这也是验收里"内容真的进了 blob"的第二重证据</span></li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>将来拆成两台机器时，变的只有一段</h2>
+
+    <figure>
+      <div class="canvas">
+        <svg viewBox="0 0 1100 200" role="img"
+             aria-label="跨主机演进图：源目录到 spinfield 后端的读取、以及 dingospeed 到 blob 的写入都不变，唯一被拉长的是 spinfield 后端推字节给 dingospeed 的那一段。">
+          <defs>
+            <marker id="ah2-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <polygon points="0,1 10,5 0,9" fill="currentColor"></polygon>
+            </marker>
+          </defs>
+
+          <rect class="node-disk" x="20" y="62" width="182" height="66" rx="2"></rect>
+          <text class="t-title-sm" x="111" y="90" text-anchor="middle">源模型目录</text>
+          <text class="t-note" x="111" y="109" text-anchor="middle">本机 或 dingofs 挂载</text>
+
+          <rect class="node-sf" x="292" y="62" width="200" height="66" rx="2"></rect>
+          <text class="t-title-sm" x="392" y="90" text-anchor="middle">spinfield 后端</text>
+          <text class="t-note" x="392" y="109" text-anchor="middle">读 · 算摘要 · 推送</text>
+
+          <rect class="node-ds" x="612" y="62" width="200" height="66" rx="2"></rect>
+          <text class="t-title-sm" x="712" y="90" text-anchor="middle">dingospeed</text>
+          <text class="t-note" x="712" y="109" text-anchor="middle">落盘 · 校验 · 发布</text>
+
+          <rect class="node-disk" x="902" y="62" width="178" height="66" rx="2"></rect>
+          <text class="t-title-sm" x="991" y="90" text-anchor="middle">blobs</text>
+          <text class="t-note" x="991" y="109" text-anchor="middle">按 sha256</text>
+
+          <line class="flow-bytes" x1="204" y1="95" x2="288" y2="95" marker-end="url(#ah2-ink)"></line>
+          <text class="t-note" x="246" y="83" text-anchor="middle">不变</text>
+
+          <line class="flow-seam" x1="494" y1="95" x2="608" y2="95" marker-end="url(#ah2-ink)"></line>
+          <text class="t-warn" x="551" y="83" text-anchor="middle">被拉长的一段</text>
+
+          <line class="flow-bytes" x1="814" y1="95" x2="898" y2="95" marker-end="url(#ah2-ink)"></line>
+          <text class="t-note" x="856" y="83" text-anchor="middle">不变</text>
+
+          <line class="boundary" x1="551" y1="20" x2="551" y2="176"></line>
+          <text class="t-note" x="551" y="16" text-anchor="middle">将来的主机边界</text>
+          <text class="t-warn" x="551" y="160" text-anchor="middle">⚠ :8091 仅回环</text>
+          <text class="t-note" x="551" y="176" text-anchor="middle">需先建端口转发，或放开监听并补鉴权</text>
+        </svg>
+      </div>
+      <figcaption>
+        字节的"来源"和"去向"是两件独立的事：换主机只影响推送那一段，读文件那一侧一行不动；
+        换成 dingofs 挂载则只影响读取那一段。<b>但跨主机不只是慢一点</b>——上传端口只监听回环，
+        网络边界才是那时的主要问题，带宽不是。
+      </figcaption>
+    </figure>
+  </section>
+
+  <footer>
+    对应 <span class="mono">spinfield-e2e-walkthrough-requirements.md</span> v2.1（环 0）。
+    安全校验、回调协议、乐观锁、dingofs 适配属于目标态，见 <span class="mono">spinfield-integration-requirements.md</span>。
+  </footer>
+
+</div>
