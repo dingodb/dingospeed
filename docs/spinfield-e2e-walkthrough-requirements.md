@@ -2,579 +2,656 @@
 
 | 项目 | 内容 |
 |---|---|
-| 文档版本 | v2.1 |
+| 文档版本 | v2.2 |
 | 日期 | 2026-08-12 |
-| 文档性质 | 增量需求定义（**以"链路是否通"为唯一验收**） |
-| 涉及仓库 | `D:\project\workplace\spinfield`（主要改动）、`D:\project\workplace\ModelManager\dingospeed`（本期零改动） |
-| 读者 | 两侧的实现者 / 编码 Agent |
-| v2.0 变更 | 摘要改由**后端**计算；字节来源改为**后端按路径读本地文件**（不再走浏览器直传）；据此删除前端哈希库依赖与 `PUT files` 接口 |
-| v2.1 变更 | 补充交代 spinfield 侧已有**可运行交互原型**，前端工作性质由"设计实现"修正为"移植接线" |
+| 文档性质 | 增量需求定义（**以两个项目的真实链路是否跑通为唯一验收**） |
+| 涉及仓库 | `D:\project\workplace\spinfield`（主要改动）、`D:\project\workplace\ModelManager\dingospeed`（本期零代码改动） |
+| 读者 | 两侧实现者 / 编码 Agent |
+| v2.0 变更 | 摘要改由后端计算；字节来源改为后端按路径读取本地文件 |
+| v2.1 变更 | 补充 spinfield 侧已有可运行交互原型，明确前端可复用原型中的目录浏览和进度交互 |
+| v2.2 变更 | 按“安全后置、避免过度设计、先跑通两个项目”收缩环 0；删除仓库列表/容量/完整元信息/mock-first 等非闭环工作；修正 `/repos`、本地代理、Windows 路径、启动与冒烟命令；新增“文档与代码冲突处理门禁” |
 
 ---
 
-## 0. 这份文档怎么读
+## 0. 最高原则
 
-### 0.1 与其他文档的关系
+### 0.1 唯一优先级
+
+> **先让 spinfield 从本地目录读取模型，通过 dingospeed 上传并发布，再用标准 `huggingface_hub` 客户端完整下载回来。**
+
+本期只证明两个项目的真实链路能通。安全加固、通用化、完整产品界面、长期部署形态和未来扩展，全部给这个目标让路。
+
+本环成功标准是一次真实、可重复、可独立验证的演示，不是一份面向生产的完整设计。
+
+### 0.2 与其他文档的关系
 
 | 文档 | 关系 |
 |---|---|
-| [spinfield-integration-requirements.md](./spinfield-integration-requirements.md) | **目标态**。安全边界、部署形态、回调协议、乐观锁、残留回收。仍有效，但不是现在要做的事。**本期与它冲突时以本文档为准** |
-| [model-upload-requirements.md](./model-upload-requirements.md)、[batch-upload-requirements.md](./batch-upload-requirements.md) | dingospeed 侧已交付能力的定义。**本期不修改、不放宽其中任何约束** |
-| spinfield `docs/prototype/model-upload-fields.md` | 前端字段与交互设计。**§3.3「修正 1」关于"由浏览器算摘要"的结论已被本文档推翻**，见 §5.4 |
-| spinfield `docs/prototype/model-upload.html` | **可运行的交互原型**（1666 行，浏览器直接打开即可操作）。本期前端是**移植它**，不是重新设计，见 §1.3 与 §6.3 |
+| [spinfield-integration-requirements.md](./spinfield-integration-requirements.md) | 目标态。安全边界、部署形态、回调协议、乐观锁、残留回收仍有价值，但不属于环 0；与本文冲突时以本文为准 |
+| [model-upload-requirements.md](./model-upload-requirements.md)、[batch-upload-requirements.md](./batch-upload-requirements.md) | dingospeed 已交付能力的定义；本期不修改、不放宽其约束 |
+| spinfield `docs/prototype/model-upload-fields.md` | 字段与交互参考，不是环 0 必须完整实现的范围 |
+| spinfield `docs/prototype/model-upload.html` | 可运行交互原型；环 0 只复用目录浏览、启动、进度和完成态需要的部分，不要求完整移植 |
 
-### 0.2 一句话总结
+### 0.3 判断是否跑偏
 
-> **这一环只回答一个问题：从前端指定一个模型目录开始，到它出现在 dingospeed 的 blob 里、并且前端能看见进度和结果，这条链路能不能通。**
->
-> 通了，后面往上加安全、换字节来源、跨主机部署，都是局部替换。不通，前面所有设计都是纸上谈兵。
->
-> **安全校验、通讯实现、部署形态在本期都是次要且可替换的。不要在这一环上花时间做它们。**
+如果某项工作不能直接帮助完成下面这条链路，它就不应阻塞环 0：
 
-### 0.3 判断自己有没有跑偏
+```text
+选择本地目录 → spinfield 后端扫描/算摘要/上传 → dingospeed 发布
+→ 返回 commit → huggingface_hub 下载 → 与源目录逐字节一致
+```
 
-如果你在做以下任何一件事，就是跑偏了：设计回调签名、实现源根白名单、处理乐观锁冲突、适配 dingofs、支持浏览器直传大文件、引入前端哈希库、接入 k8s。
+回调签名、源根白名单、RBAC、乐观锁、断点续传、暂停、完整仓库管理页、五 tab 详情、全量模型元信息、MySQL、Kubernetes、跨主机部署，都不属于环 0。
 
-本环的成功标准是**一次能跑给人看的演示**，不是一份能过评审的设计。
+### 0.4 【最高优先级门禁】文档与真实代码冲突时怎么处理
+
+需求分析不可能提前覆盖已有代码的全部细节。本文中的接口判断、代码结构建议、启动方式和实现推断，都可能在真实阅读或实施时遇到新的代码事实。
+
+任何阅读者或实现 Agent 一旦发现“真实代码/运行结果”与本文存在冲突、本文前提无法确认，或按本文方案继续会明显改变范围，必须遵守以下门禁：
+
+1. **先停止继续实现冲突部分**，不得用猜测、静默改需求或额外抽象绕开矛盾。
+2. 用成本最低的只读检查、现有测试、最小复现或实际请求，验证本文方案的**正确性与可行性**。
+3. 若验证通过，可以继续，并记录验证依据。
+4. 若验证不通过、结论仍不明确，或解决办法会改变本环接口/范围/验收，必须立即停止当前实施会话，明确报告：
+   - 文档怎么写；
+   - 真实代码或运行结果是什么；
+   - 已做过哪些验证；
+   - 冲突会影响什么；
+   - 需要用户决定什么。
+5. **报告后不得自行继续，不得自行选择替代方案，也不得把失败项降级。必须等待需求提出者（本文中的“用户”）发送一条新消息来解决这个矛盾；收到该消息后才能继续。**
+
+这条门禁优先于“尽快完成”“保持会话连续”“按经验做合理假设”等一般执行倾向。它不要求为未来做过度设计，只要求在已发现的事实冲突上不盲目推进。
 
 ---
 
-## 1. 现状盘点
+## 1. 已核实的现状
 
-以下是实际查证过的现状，不是推测。
+### 1.1 dingospeed：上传和发布能力已经存在
 
-### 1.1 dingospeed 侧：需要的能力**已经全部存在**
-
-| 能力 | 现状 | 位置 |
+| 能力 | 现状 | 接口 |
 |---|---|---|
-| 单文件上传（暂缓生效） | **已实现** | `POST /api/local-upload/:repoType/:org/:repo/:revision/*?size=&sha256=&defer=true` |
-| 批量原子发布 | **已实现** | `POST /api/local-publish/:repoType/:org/:repo/:revision` |
-| 上传进度 / 续传偏移 | **已实现** | `GET /api/local-upload-progress/...?sha256=` |
-| 内容按 sha256 寻址、自动去重 | **已实现** | 响应 `blobReused` |
-| 仓库元数据（HF 兼容） | **已实现** | `GET /api/:repoType/:org/:repo/revision/:revision` |
-| 仓库文件树 | **已实现** | `GET /api/:repoType/:org/:repo/tree/:revision` |
-| 仓库列表 | **已实现** | `GET /repos` |
-| 凭证 | 共享 token 请求头 `X-Dingo-Upload-Token` | 配置 `upload.token`，为空则上传关闭 |
-| **磁盘容量查询** | **不存在** | `GET /info` 只有内存与代理状态，没有磁盘用量 |
+| 单文件暂存上传 | 已实现 | `POST /api/local-upload/:repoType/:org/:repo/:revision/*?size=&sha256=&defer=true` |
+| 批量原子发布 | 已实现 | `POST /api/local-publish/:repoType/:org/:repo/:revision` |
+| 上传进度 / 续传偏移 | 已实现，但环 0 不使用 | `GET /api/local-upload-progress/...?sha256=` |
+| 内容按 SHA-256 寻址与去重 | 已实现 | 上传响应 `blobReused` |
+| HF 兼容仓库元数据 | 已实现 | `GET /api/:repoType/:org/:repo/revision/:revision` |
+| HF 兼容仓库文件树 | 已实现 | `GET /api/:repoType/:org/:repo/tree/:revision` |
+| 凭证 | 已实现 | 请求头 `X-Dingo-Upload-Token`；`upload.token` 为空时上传关闭 |
 
-**结论：本期 dingospeed 侧只需要改配置，不需要改代码。**
+#### 已确认的例外：`GET /repos` 不是 JSON API
 
-### 1.2 【硬性约束】dingospeed 没有"多文件上传"接口
+当前 `GET /repos` 渲染并返回 `repos.html`，不能直接作为 spinfield 前端仓库列表的数据源。因此环 0：
 
-这是批量增量文档 §3.1.1 刻意写死的约束，本期**不得试图绕过**：
+- 不代理 `GET /repos`；
+- 不实现通用仓库列表；
+- 不实现仓库容量页和五 tab 详情；
+- 完成态只展示本次任务的 `repo / revision / commit`，并允许按这三个已知值读取元数据和文件树。
 
-> **批量的是"发布"，不是"传输"。文件内容必须继续沿用单文件传输方式：一次 HTTP 调用传一个文件。**
-> 【明确不做】不做 multipart 一个请求塞多个文件、不做 tar / zip 归档上传。
+dingospeed 元数据已经包含 `usedStorage`。未来若恢复容量展示，直接使用该字段，不需要再次汇总文件树。
 
-因此本文档所称的**批量发布流程**指的是：
+**结论：dingospeed 本期只改本机配置，不改代码。**
+
+### 1.2 dingospeed 没有“一个请求传多个文件”的接口
+
+批量的是发布，不是字节传输：
 
 ```text
-for 每个文件:   POST /api/local-upload/...?size=&sha256=&defer=true    ← 一次一个文件的字节
-全部完成后:     POST /api/local-publish/...  {files:[{path,sha256,size},...]}   ← 只带清单，不带字节
+for 每个文件:
+    POST /api/local-upload/...?...&defer=true   # 一次只传一个文件
+
+全部暂存完成后:
+    POST /api/local-publish/...                # 只传清单，不传文件字节
 ```
 
-`local-publish` 确实是多文件接口，但它**只声明清单、不搬运字节**。
+环 0 不新增 multipart、tar、zip 或自定义归档协议。
 
-> **为什么不能有"一次传多个文件"的接口**：dingospeed 按内容寻址，写第一个字节前必须知道该文件的摘要（落点由摘要决定）。任何"一个请求多个文件"的形态要么放弃这个前提，要么得自己发明一套带每文件摘要的归档格式。同时断点续传是按单文件字节偏移定义的，打包传输一旦中断，"从哪继续"就没有简单答案了。
-
-### 1.3 spinfield 侧：需要的东西基本都不存在，但地基是齐的
+### 1.3 spinfield：有控制台和 adminapi 地基，但没有模型上传链路
 
 | 能力 | 现状 |
 |---|---|
-| admin REST API 框架 | **有**。chi 路由，`/admin/v1/*`，Bearer token（`requireToken`），`internal/adminapi/server.go` |
-| 前端控制台 | **有**。React 18 + CRA/craco + Tailwind + react-router，`web/console`，`node_modules` 已装 |
-| 前端数据层抽象 | **有，且非常有利**。`IApiAdapter` 三分支：`MockAdapter` / `AdminApiAdapter` / `ErrorSimAdapter`，由 `REACT_APP_USE_MOCK` 切换 |
-| 流式推送先例 | **有**。`streamPodLogs` 已用 `http.Flusher` 做 SSE |
-| 存储层模式 | **有**。`template.Store` / `release.Store` 等均为 `NewMemStore()` / `NewSQLStore(db)` 双实现，**DSN 为空时自动回退 MemStore** |
-| 模型上传页面 | **不存在**。`pages/` 只有 Deployments / Wizard / Templates / Releases / Zones / Login |
-| 上传任务 API 与状态机 | **不存在** |
-| 模型资产表 / 仓库登记 | **不存在** |
-| 真实用户体系 | **不存在**。全站一枚共享 `SPINFIELD_ADMIN_TOKEN` |
-| 目录浏览接口 | **不存在**。本期需要新增（见 W-1） |
-| **交互原型** | **有，且是能跑的**。`docs/prototype/model-upload.html`，1666 行单文件，含完整交互逻辑 |
+| admin REST API | chi 路由，`/admin/v1/*`，已有 Bearer token 机制 |
+| 控制台 | React 18 + CRA/craco + Tailwind + react-router |
+| 流式推送先例 | 有 SSE，但环 0 使用 1 秒轮询 |
+| 模型上传 API / 状态机 | 不存在 |
+| 模型上传 React 页面 | 不存在 |
+| 交互原型 | 存在：`docs/prototype/model-upload.html` |
+| 无 Kubernetes 的启动方式 | 不存在；现有 main 在创建 adminapi 前会初始化 controller-runtime manager |
 
-#### 🔴 前端不是从零开始——已有一个可运行的交互原型
+#### 已确认的例外：CRA 当前没有 3000 → 8082 代理
 
-`spinfield/docs/prototype/model-upload.html`（94KB / 1666 行）**不是静态效果图，是带交互逻辑的可运行页面**，用浏览器直接打开即可操作。它覆盖：
+真实 adapter 在 `REACT_APP_USE_MOCK=false` 时默认使用同源空地址，但当前 `package.json` / `craco.config.js` 没有开发代理。环 0 必须选择一个真实可运行方式：
 
-| 原型已有 | 元素 id | 与本期的关系 |
-|---|---|---|
-| 四步向导 + 步骤条 + 可回跳门控 | `btn-prev` / `btn-next` / `footer-hint` | **直接对应**本期向导 |
-| **目录浏览器**（面包屑 + 上级 + 子项列表） | `crumbs` / `dirlist` / `btn-up` | 🔴 **正是环 0 路径来源需要的那块**，见下 |
-| 全部模型元信息表单项 | `f-name` / `f-ver` / `f-author` / `f-task` / `f-license` / `f-precision` / `f-engine` / `f-base` / `f-ctx` / `f-params` / `f-readme` / `f-tag` | 字段 id 与字段文档的 key 一一对应 |
-| 文件列表与类型徽标 | `filerows` | 直接对应 |
-| 执行态：阶段条 / 总进度 / 逐文件进度 / 暂停 | `btn-pause` / `btn-simdone` | `btn-simdone` 是模拟完成，接真实后端时替换 |
-| 上传任务列表 | — | 含模拟数据行 |
-| 模型仓库列表 + 详情五 tab | `modelgrid` / `m-tabs` / `mfilerows` / `mverrows` / `mdeployrows` / `mauditrows` | 直接对应 W-7 |
+1. **本地开发推荐**：给 CRA 增加 `http://127.0.0.1:8082` 代理，前端继续使用同源空地址；
+2. 或先构建前端，再由 adminapi 在 8082 同源提供。
 
-**这件事对本期的影响很大**：环 0 的前端工作不是"设计并实现一套界面"，而是**"把已验证过的原型移植进 React 并接上真实接口"**。设计决策（步骤划分、字段布局、状态徽标、错误文案）都已经过评审并在原型里落定，不需要重做。
+环 0 默认采用方案 1。不要仅设置跨域 base URL 后再额外设计 CORS。
 
-**尤其是目录浏览器**：原型里它已经完整实现，只是数据源是硬编码的假目录树（`SRC_ROOT = '/userdata'`，代码注释标着"zone.storage.modelMountPath，各 zone 不同"）。**本期只需把这棵假树换成 `GET /admin/v1/local-fs` 的真实返回**，交互一行不用改。
-
-> 原型当时是按"从已有裸模型转换"这条主路径设计的——**恰好就是本期选定的形态**。v1.0 曾把环 0 定成浏览器直传，反而用不上原型里最完整的那一块。这是改成路径来源之后额外捡到的好处。
-
-### 1.4 本机环境
+### 1.4 本机约束
 
 | 项 | 状态 |
 |---|---|
-| Go | 1.26.5 windows/amd64 ✅ |
-| Node / npm | v24.18.0 / 11.16.0 ✅ |
-| Kubernetes 集群 | **不可用**（`kubectl` 连不上）❌ |
-| MySQL | 不需要（MemStore 回退）✅ |
-| dingofs / 共享挂载 | 无 ❌ |
-
-**没有集群 ⟹ 上传模块不能依赖 k8s（见 §3.2）。**
+| 操作系统 | Windows |
+| Go / Node / npm | 已安装 |
+| Kubernetes | 不可用 |
+| MySQL | 不需要 |
+| dingofs / 共享挂载 | 不需要 |
 
 ---
 
-## 2. 目标
+## 2. 环 0 唯一目标与出口
 
-**唯一目标**：在这台开发机上完成一次演示——
+在本机完成一次演示：
 
-1. 打开 spinfield 控制台，进入模型上传页；
-2. 填模型名与版本，**浏览目录并选中本机上的一个模型目录**；
-3. 点开始，看到进度实时推进（逐文件的算摘要 / 上传状态可见）；
-4. 完成后拿到一个 commit；
-5. 在 dingospeed 的 blob 目录里**确实看到按 sha256 落盘的内容**；
-6. 用标准 `huggingface_hub` 客户端能把这个仓库拉下来，内容逐字节一致；
-7. 在 spinfield 的模型仓库页看到这个仓库、它的文件列表和占用容量。
+1. 启动 dingospeed、spinfield api-only 后端和 spinfield 控制台；
+2. 在最小模型上传页面填写仓库名和 revision，浏览并选择一个本机模型目录；
+3. 启动任务，看到逐文件 hashing / uploading 状态和总进度；
+4. 完成后看到 `repo / revision / commit`；
+5. 在 dingospeed blob 目录看到按 SHA-256 落盘的内容；
+6. 用标准 `huggingface_hub` 客户端从 dingospeed 下载整个仓库，与源目录逐文件、逐字节一致。
 
-**这七步全绿，本环结束。** 任何不服务于这七步的工作都不属于本环。
+**六步全绿，环 0 立即结束。**
+
+仓库管理页、完整元信息、任务历史、去重展示优化等即使尚未完成，也不得阻止环 0 结束。
 
 ---
 
-## 3. 范围
+## 3. 范围与硬约束
 
-### 3.1 【硬性约束】dingospeed 侧零代码改动
+### 3.1 dingospeed 零代码改动
 
-本期 dingospeed 只做配置：
+本期仅配置：
 
 ```yaml
 upload:
     host: 127.0.0.1
     port: 8091
-    token: "dev-token-change-me"     # 必须非空，否则上传接口默认关闭
+    token: "dev-token-change-me"
     namespace: dingo-local
     concurrentLimit: 4
     publishMaxFiles: 1000
 ```
 
-> **为什么写成硬性约束**：dingospeed 侧的上传与发布能力已过环 1~环 6 的完整验收（等价性、原子性、并发、崩溃一致性、1000 文件规模）。本期若动它，等于把一个已验收的东西拖回未验收状态，而链路不通的原因几乎不可能出在这一侧。
->
-> 唯一的缺口是磁盘容量接口，本期**绕过**而不是新增，见 W-7。
+### 3.2 行为约束：spinfield 上传链路必须能脱离 Kubernetes 运行
 
-### 3.2 【硬性约束】上传模块不得依赖 Kubernetes
+要求的是运行结果，不预先锁死代码组织：
 
-`adminapi.Server` 当前持有 `client.Client` 与 `kubernetes.Interface`，而 `cmd/main.go` 通过 controller-runtime manager 构建它们——**这需要一个可达的集群，本机没有**。
+- 模型扫描、哈希、上传、发布不得依赖 Kubernetes 类型或客户端；
+- 新增模型上传路由不得访问 `s.Client` / `s.Clientset`；
+- 必须有不创建 controller-runtime manager、不读取 kubeconfig 即可启动模型上传 API 的入口；
+- 如果采用 `main --api-only`，分支必须发生在 `ctrl.GetConfigOrDie()` / `ctrl.NewManager()` 之前。
 
-**要求**：
+可以用独立包、main 早分支或其他更小的实现。不要为了“一定只有一个二进制”或“一定使用某种包结构”扩大改动。
 
-1. 上传任务的全部逻辑放在一个**独立包**（建议 `internal/modelupload`），**不引用任何 k8s 类型**。
-2. 新增的 admin 路由处理函数**不得触碰 `s.Client` / `s.Clientset`**。
-3. 提供一种**不启动 controller-runtime manager** 就能把 adminapi 跑起来的方式（见 E-1）。
+### 3.3 本期明确不做
 
-> **为什么这是硬性的**：它同时买到两样东西——本机能跑（本期的前提），以及这个模块以后能被单独测试和单独部署。代价接近零，因为上传逻辑本来就和 CRD 没关系。
-
-### 3.3 【明确不做】本期一律不做
-
-| 不做 | 推迟到 |
+| 不做 | 说明 |
 |---|---|
-| 浏览器直传字节（需要 spool，且不是产品主路径） | 环 1 |
-| 前端计算摘要、引入前端哈希库 | **永久不做**，见 §5.4 |
-| 源路径白名单、路径逃逸校验、TOCTOU 防护 | 目标态文档 SR-3 |
-| dingospeed 主动读文件（模式 R）、dingofs 适配 | 目标态文档 SR-1 |
-| 出站进度回调、签名、重试、白名单 | 目标态文档 SR-8 |
-| 基础版本（baseCommit）乐观锁 | 目标态文档 SR-5 |
-| 任务取消、暂停、失败重试、断点续传 | 环 1 |
-| 真实用户体系、RBAC、多租户、组织 | 未排期 |
-| 多 zone、跨 zone 副本与同步 | 未排期 |
-| 模型元信息完整落库与检索、MySQL 持久化 | 环 2 |
-| 任何安全加固 | 环 2 之后 |
+| 浏览器上传文件字节 | 本期只允许后端读取本地目录 |
+| 前端计算 SHA-256 | 本期文件内容不经过浏览器 |
+| 源路径白名单、路径逃逸、TOCTOU 加固 | 安全后置；只保留跑通所需的基本路径正确性 |
+| 断点续传、暂停、取消、重试、任务恢复 | 失败后重新创建任务 |
+| SSE | 1 秒轮询足够 |
+| MySQL、资产表、完整元信息落库 | 使用内存任务对象 |
+| MockAdapter 的模型上传实现 | 直接接真实后端；mock 不是前置门槛 |
+| 任务列表 | 只查询当前任务 |
+| 仓库列表、容量页、五 tab 详情 | `/repos` 不是 JSON，且这些不影响链路 |
+| 四步向导完整移植 | 只复用最小必要交互 |
+| README 表单生成文件 | 目录中真实存在 `README.md` 时按普通文件上传 |
+| Kubernetes、跨主机、dingofs、回调协议 | 后续再做 |
+| 任何生产安全承诺 | 环 0 仅限本机演示 |
 
-> **§3.3 是认真的。** 上面每一条都有正当理由存在，但它们全都**不影响链路通不通**。在链路亮灯之前做它们，等于在没有回路的电路上装保险丝。
+### 3.4 环 0 的仓库写入语义
 
-### 3.4 这个形态为什么将来能跨主机
+环 0 只保证：
 
-本期形态是**后端读本地路径 → HTTP 推给 dingospeed**。它有一个刻意保留的性质：
+- 首次上传一个新的 `repo + revision`；
+- 或对相同 `repo + revision` 重复提交完全相同的目录，得到幂等结果。
 
-**字节的"来源"和"去向"是两件独立的事，中间只有一道缝会被拉长。**
-
-| 部署变化 | 需要改什么 |
-|---|---|
-| 同机（本期） | — |
-| spinfield 与 dingospeed 分机 | **只改 dingospeed 的地址**，读文件那一侧一行不动 |
-| 字节来源换成 dingofs 挂载 | **只改路径**，推送那一侧一行不动 |
-
-> **对比：如果选"dingospeed 自己读路径"（目标态文档的模式 R），跨主机就必须有共享存储，否则方案直接作废。** 本期形态没有这个耦合，因此更适合作为起点。
->
-> ⚠️ **但跨主机不是免费的，也不只是"慢一点"**：dingospeed 的上传端口**只监听回环**（主文档 §4.1 硬性约束）。跨主机需要先过这道闸——建端口转发（交付文档认可的做法），或放开监听并补齐鉴权与 TLS。**网络边界是那时的主要问题，带宽不是。** 本期不解决，但也不得做出任何堵死这条路的设计。
+不同内容覆盖、删除旧文件、冲突策略和 baseCommit 不属于环 0。前端不提供 `conflictPolicy`，spinfield 对 dingospeed 固定使用 `overwrite=false`。
 
 ---
 
-## 4. 链路与数据流
-
-### 4.1 本期形态：后端按路径读本地文件
+## 4. 最小数据流
 
 ```text
 浏览器                    spinfield 后端                      dingospeed
   |                            |                                  |
-  |-- 1. 浏览目录、选中模型目录 -->|                                  |
-  |<-- 目录内容（文件名/大小） ----|                                  |
+  |-- 浏览目录 ---------------->|                                  |
+  |<-- 当前目录条目 ------------|                                  |
   |                            |                                  |
-  |-- 2. 创建任务 -------------->|                                  |
-  |    {模型名, 版本, 源目录, files[相对路径]}                          |
-  |                            |-- 3. 逐个 stat：存在？普通文件？大小？  |
-  |<-- 4. 202 {taskId} --------|      任一不满足 → 同步拒绝，不建任务    |
+  |-- 创建任务 ---------------->|                                  |
+  |   {name, revision, sourceDir}                                  |
+  |                            |-- 同步递归扫描 + stat              |
+  |<-- 202 {taskId,...} -------|   空目录/非法项/超上限则不建任务    |
   |                            |                                  |
-  |                            |   ┌─ 逐文件循环 ──────────────┐    |
-  |                            |   │ 5. open + io.Copy 算 sha256│   |
-  |                            |   │ 6. open + 上传 ────────────┼──>|
-  |                            |   │    POST /api/local-upload  │   |
-  |                            |   │    ?size=&sha256=&defer=true   |
-  |                            |   │<───────────────────────────┼───|
-  |                            |   │    201 {staged, blobReused}│   |
-  |                            |   └────────────────────────────┘   |
-  |-- 7. 轮询进度 -------------->|                                  |
-  |<-- {phase, doneBytes, files[]}                                 |
+  |                            |   对每个文件串行：                  |
+  |                            |   1. 读取并计算 SHA-256             |
+  |                            |   2. 再次打开并流式上传 ---------->|
+  |                            |      defer=true                   |
+  |                            |<-- staged / blobReused -----------|
   |                            |                                  |
-  |                            |-- 8. 一次性发布 ----------------->|
-  |                            |    POST /api/local-publish       |
-  |                            |    {files:[{path,sha256,size}]}  |
-  |                            |<-- 201 {commit, fileCount} ------|
-  |<-- 9. 终态 {commit} -------|                                  |
+  |-- 每秒轮询任务 ------------>|                                  |
+  |<-- 状态/进度/文件状态 -------|                                  |
+  |                            |                                  |
+  |                            |-- local-publish 清单 ------------>|
+  |                            |<-- commit ------------------------|
+  |<-- succeeded + commit -----|                                  |
 ```
 
-### 4.2 🔴 本期不需要任何进度回调协议
-
-**spinfield 后端自己就是执行上传的那一方**——它读文件、算摘要、推字节。既然它是搬运工，**它天然知道搬了多少**：进度就是循环里的计数器。
-
-因此目标态文档里那一整套出站回调（SR-8：节流、重试、签名、白名单、`seq` 去重、至少一次投递）**在本期一行都不需要**。
-
-> 只有当字节改由 dingospeed 自己读（模式 R）、执行者与任务持有者不是同一个进程时，回调协议才成为必需。**本期不是那个形态，就不要提前建那套东西。**
-
-### 4.3 【要求】逐文件交错，不要分两大阶段
-
-对每个文件走完"算摘要 → 立刻上传"，再处理下一个；**不要**先把所有文件的摘要算完再统一上传。
-
-> **理由是页缓存局部性**：刚算完摘要的文件还在 page cache 里，紧接着读第二遍几乎不花代价。若先算完全部再回头上传，大模型场景下早期文件早被淘汰，等于实打实多读一遍磁盘。
->
-> 代价是失去"全部校验完再开始写"的 fail-fast。但这个代价可以忽略：`defer=true` 上传的内容**对下载方完全不可见**，中途失败不会留下半个仓库，未发布的内容也会被 dingospeed 的孤儿回收兜底。
-
-### 4.4 进度来源
-
-| 阶段 | 进度从哪来 | 精度 |
-|---|---|---|
-| 算摘要 | `io.Copy` 到 hasher 时累加已读字节 | 字节级 |
-| 上传 | 推送循环的计数器 | 字节级 |
-| 发布 | 一次 HTTP 调用，无中间进度 | 阶段级 |
-
-**本期用轮询，不用 SSE。** 1 秒一次足够演示，实现量最小。SSE 有现成先例（`streamPodLogs`），环 1 再换，前端接口形态不变。
+逐文件执行“算摘要 → 立即上传”，本期串行，不做并发优化。
 
 ---
 
-## 5. 字段映射
+## 5. spinfield 最小接口
 
-### 5.1 前端字段谁消费
+### 5.1 `GET /admin/v1/local-fs?path=`
 
-spinfield `docs/prototype/model-upload-fields.md` 已定义完整字段集。本期分三类：
+返回指定目录的直接子项：
 
-| 类别 | 字段 | 本期处理 |
-|---|---|---|
-| **传给 dingospeed** | `name`、`displayVersion`、`files[].相对路径`、`conflictPolicy` | 见 §5.2 |
-| **后端自己算出来** | `files[].size`、`files[].sha256` | **不再由前端提供**，见 §5.4 |
-| **spinfield 自留** | `author`、`task`、`source`、`baseModel`、`paramsB`、`precision`、`contextLength`、`engine`、`license`、`tags` | 存在任务对象里即可，**本期不建资产表**。dingospeed 完全不认识这些 |
-| **本期不要** | `zone`、`keepSource`、`gotoWizard`、`notifyEmail`、`allowRename`、`remoteToken` | 见 §3.3。单机单实例，没有 zone 概念 |
+```json
+{
+  "path": "D:\\models",
+  "entries": [
+    {"name": "demo", "directory": true, "size": 0},
+    {"name": "README.md", "directory": false, "size": 1234}
+  ]
+}
+```
 
-**`readme` 可以占个便宜**：作为一个名为 `README.md` 的普通文件混进文件清单一起发布即可，不需要任何特殊处理。这样"模型卡"在本期白拿。
+要求：
 
-### 5.2 spinfield → dingospeed 的封装
+- 区分目录与普通文件；
+- 只负责浏览，不在前端递归整个目录；
+- 本期不做源根白名单；
+- 复用现有 `/admin/v1/*` Bearer token 机制，不新建鉴权体系。
 
-| dingospeed 参数 | 来源 | 本期取值规则 |
-|---|---|---|
-| `repoType` | 固定 | `models`（数据集本期不做） |
-| `org` | 固定 | `dingo-local`（**必须等于 dingospeed 的 `upload.namespace`**，否则一律拒绝） |
-| `repo` | `name` | 直接用。前端正则 `^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$` **已是 dingospeed 校验规则的子集**，天然安全 |
-| `revision` | `displayVersion` | ⚠️ 需规范化校验，见 §5.3 |
-| `*`（仓库内路径） | 文件相对于所选源目录的路径 | 保持原样，含子目录。**不做任何重命名或平铺** |
-| `size` | **后端 `stat`** | 不接受前端声明值 |
-| `sha256` | **后端 `io.Copy` 算出** | 64 位小写 hex |
-| `defer` | 固定 | `true`（全部暂缓生效，最后一次性发布） |
-| `overwrite` | `conflictPolicy` | 固定 `false`（"同内容复用、不同内容拒绝"正是不带 overwrite 的默认语义，**天然对齐**） |
-| `X-Dingo-Upload-Token` | 后端配置 | **绝不下发到浏览器** |
+### 5.2 `POST /admin/v1/model-uploads`
 
-### 5.3 ⚠️ `displayVersion` 不能直接当 revision 用
+请求只包含：
 
-前端默认值 `v1.0.0` 恰好符合 dingospeed 的 revision 规则 `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`，但这是**巧合**。语义化版本里常见的 `1.0.0+build.1`、`v1.0.0-rc1/2` 会被直接拒绝。
+```json
+{
+  "name": "demo-model",
+  "revision": "v1.0.0",
+  "sourceDir": "D:\\models\\demo-model"
+}
+```
 
-**要求**：后端做一次显式的规范化 + 校验，非法字符**明确报错，不要静默替换**。前端按同一正则做即时校验。这是个 10 行的函数，但漏掉它会在用户输入第一个带 `+` 的版本号时炸掉。
+**不得由前端提交 `files[]`、size 或 sha256。** 后端同步递归扫描 `sourceDir`，生成唯一文件清单并完成基本预检，然后再创建任务。
 
-### 5.4 🔴 摘要由后端计算（推翻原型文档的结论）
+同步拒绝：
 
-spinfield `docs/prototype/model-upload-fields.md` §3.3「修正 1」写的是"摘要必须在第一个 POST 之前就由**浏览器**流式算出"。**前半句对，后半句错，本文档予以推翻。**
+- 目录不存在或不是目录；
+- 目录为空；
+- 条目无法读取或不是普通文件；
+- 文件数超过 dingospeed `publishMaxFiles`；
+- 仓库名或 revision 不符合 dingospeed 现有规则。
 
-**真正的约束是**：调用 `POST /api/local-upload` 的那一方，必须在调用前知道摘要。发起调用的是 spinfield 后端，**不是浏览器**。
+成功返回：
 
-**后端计算的理由，按重要性**：
+```json
+{
+  "taskId": "...",
+  "phase": "created",
+  "totalFiles": 8,
+  "sourceBytes": 123456789,
+  "totalWorkBytes": 246913578,
+  "processedWorkBytes": 0
+}
+```
 
-| # | 理由 |
-|---|---|
-| 1 | **三种来源共用一套实现。** 原型定义的三个来源里，"从已有裸模型转换"（**主路径，默认选中**）和"从远端拉取"**根本不经过浏览器**，浏览器算不了。先做前端哈希等于先做只服务一条路的那个 |
-| 2 | **在 Go 里这不是设计决策，是一行 `io.Copy(hasher, f)`**，天然增量、内存常数、无第三方依赖 |
-| 3 | **前端做反而困难**：`crypto.subtle.digest` 只吃一次性完整 buffer，没有增量 API，必须引入 WASM 库并手工分块 |
-| 4 | **更快**：Go 原生 sha256 在 amd64 上走 SHA-NI 硬件指令，明显快于浏览器里的 WASM 实现 |
-| 5 | **本期字节根本不经过浏览器**，前端手上连文件内容都没有 |
+### 5.3 `GET /admin/v1/model-uploads/{taskId}`
 
-**诚实说明本期放弃了什么**：摘要描述的是"后端读到的字节"而不是"用户机器上的文件"。在浏览器直传形态下（环 1），这意味着浏览器→后端这一跳的损坏无法被察觉。本期字节不经过浏览器，**这个敞口不存在**；环 1 引入浏览器直传时，可让前端**顺带**上报一个摘要做交叉校验（算不出也不阻断），而不是把它做成前置必需品。
+返回当前任务快照：
 
-### 5.5 dingospeed → spinfield 的返回
+```json
+{
+  "taskId": "...",
+  "name": "demo-model",
+  "revision": "v1.0.0",
+  "phase": "transferring",
+  "totalFiles": 8,
+  "doneFiles": 3,
+  "sourceBytes": 123456789,
+  "totalWorkBytes": 246913578,
+  "processedWorkBytes": 80000000,
+  "files": [
+    {
+      "path": "subdir/config.json",
+      "size": 1234,
+      "status": "staged",
+      "processedWorkBytes": 2468
+    }
+  ],
+  "commit": "",
+  "changed": false,
+  "error": null
+}
+```
 
-| 响应字段 | spinfield 怎么用 |
-|---|---|
-| 上传响应 `status: staged` | 确认内容已落盘、等待发布 |
-| 上传响应 `blobReused: true` | 前端显示"已复用"而非"已上传"，**去重效果可见** |
-| 发布响应 `commit` | **任务终态的核心产出**，就是前端字段表里用户不可填的那个 `commit` |
-| 发布响应 `fileCount` / `added` / `replaced` / `unchanged` | 完成态展示 |
-| 发布响应 `changed: false` | 空变更，前端应显示"无变化"而非"上传成功" |
-| 错误码 `UPLOAD_*` / `PUBLISH_*` | **原样透传给前端**，不要包装成"上传失败"（错误码本身就是唯一有用的信息） |
+任务状态：
+
+```text
+created → transferring → publishing → succeeded | failed
+```
+
+文件状态：
+
+```text
+pending → hashing → uploading → staged | reused | failed
+```
+
+### 5.4 进度口径
+
+每个文件会读取两遍：哈希一次、上传一次。因此：
+
+- `sourceBytes = 所有源文件大小之和`；
+- `totalWorkBytes = sourceBytes × 2`；
+- `processedWorkBytes = 已哈希字节 + 已上传字节`；
+- 单文件 `processedWorkBytes` 范围是 `0..2×size`；
+- UI 总进度为 `processedWorkBytes / totalWorkBytes`。
+
+若 dingospeed 直接走 blob 复用快路径而没有完整读取 request body，spinfield 在收到成功且 `blobReused=true` 的响应后，必须把该文件的上传部分进度直接记为 `size`，保证成功任务最终达到 100%。
+
+禁止继续使用含义不清的单个 `doneBytes`，避免上传阶段总进度超过 100%。
+
+发布阶段不虚构字节进度，只展示阶段状态。
+
+### 5.5 MemStore 最低正确性
+
+任务在后台 goroutine 更新，前端同时轮询。内存 Store 必须：
+
+- 用 mutex 或等价方式保证并发安全；
+- 查询时返回快照副本，不能把正在修改的 map/slice 直接暴露给 handler；
+- 进程重启丢任务可接受。
+
+这是运行正确性要求，不是持久化或架构设计。
 
 ---
 
-## 6. 接口设计
+## 6. 文件扫描、路径和上传规则
 
-### 6.1 spinfield 新增（本期全部）
+### 6.1 后端扫描目录
 
-| 方法 | 路径 | 作用 |
-|---|---|---|
-| `GET` | `/admin/v1/local-fs?path=` | 浏览后端本机目录，返回子目录与文件（名称、大小、是否目录） |
-| `POST` | `/admin/v1/model-uploads` | 创建任务。请求体含模型元信息 + 源目录 + 文件相对路径清单。**不含字节、不含摘要** |
-| `GET` | `/admin/v1/model-uploads/{taskId}` | 任务快照（进度轮询用） |
-| `GET` | `/admin/v1/model-uploads` | 任务列表 |
-| `GET` | `/admin/v1/model-repos` | 仓库列表（代理 dingospeed `GET /repos`） |
-| `GET` | `/admin/v1/model-repos/{repo}` | 仓库详情（代理 dingospeed 元数据 + 文件树） |
+后端从 `sourceDir` 递归生成文件清单。前端只选择目录，不递归发请求，也不提交相对路径数组。
 
-全部沿用现有 `requireToken` Bearer 鉴权，不新建鉴权体系。
+扫描完成并预检通过后才返回 202；随后异步执行哈希、上传和发布。
 
-> **相比 v1.0 少了一个接口**：`PUT /model-uploads/{taskId}/files/{index}`（浏览器传字节）已删除——本期字节不经过浏览器。
+### 6.2 Windows 路径必须转换成仓库路径
 
-### 6.2 dingospeed 侧：0 个新增
+本机是 Windows，而 dingospeed 拒绝带反斜杠的仓库内路径。相对路径必须这样生成：
 
-全部复用 §1.1 的已有接口。
+```go
+rel, err := filepath.Rel(sourceDir, absoluteFile)
+if err != nil {
+    // reject task
+}
+repoPath := filepath.ToSlash(rel)
+```
 
-### 6.3 前端：移植原型，不是重新设计
+要求：
 
-**起点是 `docs/prototype/model-upload.html`（见 §1.3）**，工作性质是移植 + 接线：
+- 本地读取使用操作系统路径；
+- 发给 dingospeed 的 `*` 和 publish 清单 `path` 使用 `/`；
+- 保留子目录结构；
+- 构造 HTTP URL 时逐段进行 URL 编码，不把本地绝对路径放进 URL；
+- 目录里真实存在的 `README.md` 与其他文件完全同等处理。
 
-| 页面 | 原型状态 | 本期要做 |
-|---|---|---|
-| 模型上传向导（4 步） | **已实现**（含步骤门控） | 移植进 React，复用 `StepIndicator` / `Card` / `PageHeader`，与 `Wizard.tsx` 同构 |
-| 目录浏览器（Step 2） | **已实现**，数据源是硬编码假树 | **只换数据源**：接 `GET /admin/v1/local-fs`，交互不动 |
-| 元信息表单 | **已实现**，字段 id 与字段文档 key 对齐 | 移植 + 加 §5.3 的版本号正则校验 |
-| 执行态与进度 | **已实现**，用 `btn-simdone` 模拟 | 把模拟替换成轮询真实任务接口 |
-| 上传任务列表 | **已实现**（模拟数据） | 接真实接口；表格样式对齐 `Releases.tsx` |
-| 模型仓库列表 + 详情 | **已实现**（五 tab） | 接 W-7 的代理接口；本期元信息 tab 允许留空（§3.3） |
-
-**本期允许对原型做的裁剪**（都属于 §3.3 已明确不做的）：来源 tab 只保留"从已有裸模型转换"一个（另两个置灰并说明原因，遵循原型自己定的"禁用优于隐藏"规则）；zone 选择器、`keepSource`、`notifyEmail`、`gotoWizard`、`remoteToken` 一并隐去。
-
-**【硬性约束】必须先接 `MockAdapter` 再接真实后端。** 前端已有 mock/真实双轨机制，先用 mock 把向导和进度界面跑通，再切 `REACT_APP_USE_MOCK=false`。这样前后端可并行，且界面问题不会被误判成链路问题——**原型里的模拟数据可以直接搬进 mock adapter 当种子数据**。
-
----
-
-## 7. 功能需求
-
-### W-1 目录浏览
-
-`GET /admin/v1/local-fs?path=` 返回该目录下的条目（名称、是否目录、大小）。
-
-- 本期**不做**任何路径白名单——它是 §3.3 明确推迟的安全项；
-- 但**必须**在返回中区分目录与普通文件，否则前端无法做递归选择；
-- 前端选中一个目录后，由前端或后端递归展开成文件相对路径清单（建议后端做，前端只展示）。
-
-> **本期这个接口能读遍后端进程有权限读的一切。** 这是**有意接受**的，记在 §10 的债里。环 2 加源根白名单时它是第一个要改的地方。
-
-### W-2 后端计算 SHA-256
-
-对清单里每个文件：
+### 6.3 后端计算 SHA-256
 
 ```go
 h := sha256.New()
-f, _ := os.Open(abs)
-io.Copy(h, f)                    // 内存常数，无需任何库
+f, err := os.Open(absPath)
+if err != nil {
+    // fail task
+}
+reader := newProgressReader(f, updateHashProgress) // 包装 Read 并累计实际读取字节
+_, err = io.Copy(h, reader)
 sum := hex.EncodeToString(h.Sum(nil))
 ```
 
-- 大小以 `stat` 结果为准，**不接受前端声明**；
-- 计算过程要累加已读字节并上报为该文件的进度；
-- 与上传逐文件交错进行（§4.3）。
-
-**【明确不做】**：不引入任何哈希库，不做流式接收边算，不做前端哈希。
-
-### W-3 上传与转发
-
-对每个文件，用算出的 `sha256` 与 `size` 调用 dingospeed 单文件上传接口（`defer=true`），请求体是**直接打开源文件得到的 `io.Reader`**。
-
-**要求**：
+具体计数包装可以不同，但必须满足：
 
 - 内存占用与文件大小无关；
-- **不要 `io.ReadAll` 到内存**；
-- **不需要任何临时文件**——源文件本来就在磁盘上，直接开第二次读即可。
+- 不使用 `io.ReadAll`；
+- 不引入临时文件；
+- 不引入额外哈希库；
+- 哈希后重新打开源文件，以流式 request body 上传。
 
-> v1.0 曾写"不许落到后端临时文件再转发"。那条是建立在浏览器直传前提上的：那时后端手上只有一个流，没有文件，spool 是必需的。**本期源本来就是文件，spool 这件事整个不存在了**，两条需求的矛盾随之消失。
+### 6.4 spinfield → dingospeed 映射
 
-### W-4 自动发布
+| dingospeed 参数 | 来源 / 取值 |
+|---|---|
+| `repoType` | 固定 `models` |
+| `org` | 固定 `dingo-local`，必须与 `upload.namespace` 一致 |
+| `repo` | 请求 `name` |
+| `revision` | 请求 `revision` |
+| 仓库内路径 | `filepath.ToSlash(relativePath)` |
+| `size` | 后端 stat |
+| `sha256` | 后端计算出的 64 位小写 hex |
+| `defer` | 固定 `true` |
+| `overwrite` | 固定 `false` |
+| 上传 token | spinfield 后端配置，不下发浏览器 |
 
-最后一个文件上传成功后，后端**自动**调用一次 `local-publish`，清单是逐文件累积出来的 `{path, sha256, size}` 三元组。
-
-不需要前端再点一次，也不需要前端持有清单。
-
-### W-5 任务对象与状态机
+仓库名和 revision 前后端都按 dingospeed 已有规则即时校验：
 
 ```text
-created → scanning → transferring → publishing → succeeded | failed
+^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$
 ```
 
-逐文件状态：`pending → hashing → uploading → staged → failed`（或 `reused`）。
+不做静默替换或“智能规范化”；不合法就明确报错。
 
-任务快照必须包含：`taskId`、`phase`、`totalFiles`、`totalBytes`、`doneFiles`、`doneBytes`、`files[]`（路径、大小、状态、已处理字节）、终态时的 `commit` 与错误信息。
+### 6.5 自动发布
 
-**存储用 MemStore**，进程重启即丢，沿用 spinfield 现有 `NewMemStore()` 模式。
+所有文件 staged/reused 后，spinfield 自动调用一次：
 
-> **与原型文档的一处偏差**：原型把"计算校验和"画成一个**全局阶段**。本期逐文件交错（§4.3），因此它是**逐文件状态**而不是全局阶段。前端阶段条把 hashing 与 uploading 合并展示为"转换中"即可，逐文件表里再区分。这个偏差需要在原型文档里同步说明。
+```text
+POST /api/local-publish/models/dingo-local/{repo}/{revision}
+```
 
-### W-6 失败处理（本期最低限度）
+请求体为：
 
-| 情况 | 本期行为 |
+```json
+{
+  "files": [
+    {"path": "config.json", "sha256": "...", "size": 1234}
+  ]
+}
+```
+
+发布响应中的 `commit` 是任务核心产出。`changed=false` 表示重复提交没有产生新快照，任务仍然是 succeeded。
+
+### 6.6 最低失败处理
+
+| 情况 | 行为 |
 |---|---|
-| 提交时文件不存在 / 不是普通文件 | **同步拒绝，不创建任务**，列出具体路径 |
-| 任一文件读取或上传失败 | 任务转 `failed`，记录失败路径与 dingospeed 原始错误码，**不自动重试** |
-| 发布失败 | 同上，透传 `PUBLISH_*` 错误码 |
-| 任务失败后 | 用户重走一遍向导。已落盘内容走 dingospeed 幂等快路径，**代价很小** |
+| 创建任务时扫描失败 | 同步拒绝，不创建任务，返回具体路径和原因 |
+| 哈希或读取失败 | 任务 failed，记录失败文件和错误 |
+| 单文件上传失败 | 任务 failed，保留 dingospeed 返回的 `code` 和 `error` |
+| 发布失败 | 任务 failed，保留 dingospeed 返回的 `code` 和 `error` |
+| 任务失败后 | 用户重新创建任务；本期不自动重试 |
 
-**【明确不做】**：断点续传、部分重试、任务恢复。dingospeed 的幂等能力已让"重来一遍"足够便宜。
-
-### W-7 仓库查看与容量
-
-代理 dingospeed 现有接口：
-
-- 列表 ← `GET /repos`
-- 详情 ← `GET /api/models/dingo-local/{repo}/revision/{revision}`
-- 文件树 ← `GET /api/models/dingo-local/{repo}/tree/{revision}`
-
-**容量**：dingospeed 没有磁盘用量接口。本期**由 spinfield 侧把仓库各文件大小求和**得出，零改动、够演示。不要为此去改 dingospeed（§3.1）。
-
-**【明确不做】**：本期不建 spinfield 侧模型资产表。仓库的真相在 dingospeed，spinfield 只做转发与展示。元信息本期只存在任务对象里，允许"仓库页看不到元信息"这个缺口。
-
-### W-8 演示可验证性 【硬性约束】
-
-上传完成后必须能用**两种独立方式**证明内容真进了 blob：
-
-1. **看磁盘**：在 dingospeed `repos` 目录下找到按 sha256 命名的 blob 文件，大小与声明一致；
-2. **标准客户端**：用 `huggingface_hub` 拉取该仓库，内容与源目录**逐字节一致**。
-
-> 只看前端显示"成功"不算数——那只证明了 spinfield 认为自己成功了。
+spinfield 自身错误不需要建立完整错误码体系，返回可定位问题的阶段、文件路径和原始错误即可。
 
 ---
 
-## 8. 怎么在本机跑起来
+## 7. 最小前端
 
-### 8.1 端口分配
+### 7.1 页面只需要这些元素
 
-| 服务 | 地址 | 说明 |
-|---|---|---|
-| dingospeed 下载 | `http://127.0.0.1:8090` | HF 兼容通道 |
-| dingospeed 上传 | `http://127.0.0.1:8091` | 仅回环，携带 `X-Dingo-Upload-Token` |
-| spinfield adminapi | `http://127.0.0.1:8082` | Bearer token |
-| spinfield 控制台 | `http://127.0.0.1:3000` | CRA dev server，代理到 8082 |
+- 仓库名输入框；
+- revision 输入框；
+- 目录浏览器；
+- “开始上传”按钮；
+- 当前阶段；
+- 总进度；
+- 逐文件路径与 hashing/uploading/staged/reused/failed 状态；
+- 完成态 `repo / revision / commit`；
+- 失败态原始错误。
 
-### 8.2 启动
+可以从 `docs/prototype/model-upload.html` 移植这些交互和样式，但不得把完整四步向导、全量字段、任务列表或仓库五 tab 作为前置工作。
 
-```bash
-cd D:/project/workplace/ModelManager/dingospeed && go build ./... && ./bin/dingospeed.exe
+### 7.2 直接接真实后端
+
+模型上传功能不要求先实现 MockAdapter。环 0 应尽早设置：
+
+```powershell
+$env:REACT_APP_USE_MOCK='false'
 ```
 
-```bash
-cd D:/project/workplace/spinfield/web/console && npm start
-```
+并让 CRA 把 `/admin/*` 代理到 `http://127.0.0.1:8082`。`REACT_APP_ADMIN_API_BASE` 保持为空，走同源代理。
 
-spinfield 后端需先按 §3.2 做出"不启动 manager 的 API 入口"才能跑起来——**这是本环第一个要解决的技术问题，排在所有功能之前**。
-
-### 8.3 冒烟验证（不写一行代码就能先验）
-
-动代码之前，**先用 curl 把 dingospeed 那侧走通**，确认配置正确：
-
-```bash
-curl -sS -X POST -H "X-Dingo-Upload-Token: dev-token-change-me" --data-binary "@config.json" "http://127.0.0.1:8091/api/local-upload/models/dingo-local/smoke/v1/config.json?size=1234&sha256=<摘要>&defer=true"
-```
-
-> **这一步不要跳过。** 它把"链路不通"的排查范围一次砍掉一半：curl 都不通，问题在配置不在代码。
+若真实后端尚未实现，可以先做静态布局，但 mock 不得成为真实链路之前的硬性里程碑。
 
 ---
 
-## 9. 验收标准
+## 8. 本机启动与冒烟
 
-**本环验收就是 §2 那七步演示全绿。**
+### 8.1 端口
+
+| 服务 | 地址 |
+|---|---|
+| dingospeed 下载 | `http://127.0.0.1:8090` |
+| dingospeed 上传 | `http://127.0.0.1:8091` |
+| spinfield api-only | `http://127.0.0.1:8082` |
+| spinfield CRA | `http://127.0.0.1:3000` |
+
+### 8.2 构建并启动 dingospeed
+
+在 `D:\project\workplace\ModelManager\dingospeed`：
+
+```powershell
+go build -o .\bin\dingospeed.exe .\cmd
+.\bin\dingospeed.exe -config .\config\config.yaml
+```
+
+启动前确认实际使用的配置文件里 `upload.token` 非空，且 namespace 是 `dingo-local`。
+
+### 8.3 动代码前先冒烟 dingospeed
+
+以下示例动态计算真实大小和摘要，不允许写死 `size=1234`：
+
+```powershell
+$smokeFile = (Resolve-Path .\config.json).Path
+$smokeSize = (Get-Item -LiteralPath $smokeFile).Length
+$smokeSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $smokeFile).Hash.ToLowerInvariant()
+$uploadURL = "http://127.0.0.1:8091/api/local-upload/models/dingo-local/smoke/v1/config.json?size=$smokeSize&sha256=$smokeSha&defer=true"
+
+curl.exe -sS -X POST `
+  -H "X-Dingo-Upload-Token: dev-token-change-me" `
+  --data-binary "@$smokeFile" `
+  $uploadURL
+
+$publishBody = @{
+  files = @(@{path = "config.json"; sha256 = $smokeSha; size = $smokeSize})
+} | ConvertTo-Json -Depth 4 -Compress
+
+Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:8091/api/local-publish/models/dingo-local/smoke/v1" `
+  -Headers @{"X-Dingo-Upload-Token" = "dev-token-change-me"} `
+  -ContentType "application/json" `
+  -Body $publishBody
+```
+
+curl 上传和 publish 都成功后，再开始写 spinfield。若失败，先按 §0.4 验证配置和接口，不得继续堆 spinfield 代码。
+
+### 8.4 启动 spinfield api-only
+
+具体命令以最终实现为准，但必须满足：
+
+```powershell
+# 示例
+go build -o .\bin\spinfield.exe .\cmd
+$env:SPINFIELD_ADMIN_TOKEN='dev-admin-token'
+$env:DINGOSPEED_UPLOAD_BASE='http://127.0.0.1:8091'
+$env:DINGOSPEED_DOWNLOAD_BASE='http://127.0.0.1:8090'
+$env:DINGOSPEED_UPLOAD_TOKEN='dev-token-change-me'
+.\bin\spinfield.exe --api-only
+```
+
+若实际 flag 或环境变量命名与此不同，应在实现时同步更新本文。若现有代码事实导致该入口不能按行为约束实现，执行 §0.4 门禁。
+
+### 8.5 启动控制台
+
+在 `D:\project\workplace\spinfield\web\console`：
+
+```powershell
+$env:REACT_APP_USE_MOCK='false'
+Remove-Item Env:REACT_APP_ADMIN_API_BASE -ErrorAction SilentlyContinue
+npm start
+```
+
+前提是 CRA 代理已经指向 `http://127.0.0.1:8082`。
+
+---
+
+## 9. 验收
+
+### 9.1 核心验收：全部是阻塞项
 
 | # | 验收项 | 证据 |
 |---|---|---|
-| 1 | 控制台能打开模型上传页 | 截图 |
-| 2 | 四步向导能走完，目录浏览器可用，字段校验生效 | 截图 |
-| 3 | 进度实时推进，逐文件的算摘要/上传状态可见 | 录屏 |
-| 4 | 完成态展示 commit | 截图 |
-| 5 | dingospeed 磁盘上有对应 sha256 的 blob | `ls` 输出 |
-| 6 | `huggingface_hub` 拉取结果与源目录**逐字节一致** | 校验命令输出 |
-| 7 | 仓库页能看到仓库、文件列表、容量 | 截图 |
+| 1 | spinfield api-only 在无 Kubernetes 环境启动，控制台能访问真实接口 | 启动日志 + health 请求 |
+| 2 | 页面能浏览目录、填写 name/revision 并创建任务 | 实际操作 |
+| 3 | hashing/uploading 进度真实推进，最终显示 commit | 页面或接口快照 |
+| 4 | dingospeed blob 目录存在对应 SHA-256 文件，大小正确 | PowerShell 文件与哈希输出 |
+| 5 | `huggingface_hub` 从 `http://127.0.0.1:8090` 下载成功 | 标准客户端输出 |
+| 6 | 下载目录与源目录文件集合、相对路径、大小和 SHA-256 全部一致 | 独立校验脚本输出 |
 
-**补充三条必须验的**：
+只看前端 succeeded 不算验收通过。
 
-| 用例 | 期望 |
-|---|---|
-| 目录里含子目录的文件 | 目录结构原样保留，整仓拉取一个不少 |
-| 同一目录里有两个内容相同的文件 | 第二个 `blobReused: true`，前端显示"已复用" |
-| 用同一模型名同一版本再传一次同样内容 | 发布返回 `changed: false`，commit 不变 |
+标准客户端必须显式指向本机 endpoint，例如：
 
-> 后两条成本极低，但能一次性证明**内容寻址和去重真的在工作**，而不只是文件被复制了一遍。
+```python
+from huggingface_hub import snapshot_download
+
+path = snapshot_download(
+    repo_id="dingo-local/demo-model",
+    revision="v1.0.0",
+    endpoint="http://127.0.0.1:8090",
+)
+print(path)
+```
+
+### 9.2 非阻塞补充验证
+
+核心六项通过后，如成本很低，可以再验证：
+
+- 同一目录含子目录时结构保持；
+- 两个内容相同的文件出现 `blobReused=true`；
+- 相同 `repo + revision + 目录` 重复执行时 `changed=false` 且 commit 不变。
+
+这些验证失败需要记录，但不得在核心链路尚未打通前抢占实现时间。若失败暴露了文档与真实行为冲突，仍执行 §0.4。
 
 ---
 
-## 10. 本期欠下的债
+## 10. 环 0 明确欠下的债
 
-必须记下来，否则会被当成"已经做完了"：
-
-| 债 | 后果 | 还债位置 |
+| 债 | 后果 | 后续 |
 |---|---|---|
-| **目录浏览接口无任何路径限制** | 能读遍后端进程有权限读的一切 | 环 2（目标态 SR-3） |
-| 上传 token 在 spinfield 后端配置里明文 | 拿到 spinfield 就能写 dingospeed | 环 2 |
-| 无任何用户身份，全站一枚共享 token | 无法审计谁传的 | 未排期 |
-| 任务状态在内存，重启即丢 | 演示中重启会丢任务 | 环 2 |
-| 无断点续传，失败要整批重来 | 大模型体验差 | 环 1 |
-| 无取消 / 暂停 | 传错了只能等它跑完 | 环 1 |
-| 无 baseCommit，并发发布会静默互相覆盖 | 多人同时传同一版本会丢改动 | 目标态 SR-5 |
-| 元信息只在任务里，仓库页看不到 | 功能不完整 | 环 2 |
-| 未发布的暂存内容会占盘 | 反复失败会累积（dingospeed 有 168 小时回收兜底） | 观察即可 |
-| 仅单机、仅 models 类型、仅"本地路径"一种来源 | — | 环 1 / 未排期 |
+| 目录浏览无源根白名单 | 能浏览后端进程可读路径 | 安全环 |
+| 上传 token 明文放在本机后端配置/环境变量 | 不适合长期环境 | 安全环 |
+| 共享 admin token，无真实用户 | 无法审计操作者 | 未排期 |
+| 任务状态仅在内存 | 重启丢任务 | 持久化环 |
+| 无断点续传、取消、暂停、重试 | 大文件失败要重来 | 大文件环 |
+| 无 baseCommit / 覆盖 / 删除语义 | 只适合新 revision 或相同内容重跑 | 并发与版本环 |
+| 无资产表和完整元信息 | 不能作为模型管理产品使用 | 资产环 |
+| 无通用仓库列表与容量页 | 只能查看本次任务结果 | 资产环；需先解决 JSON 列表来源 |
+| 未发布内容会暂时占盘 | 失败可能留下暂存内容 | 依赖 dingospeed 现有回收 |
+| 仅单机、仅 models、仅本地路径 | 来源和部署受限 | 后续扩展 |
+
+> 环 0 产物仅用于本机验证，不进入长期运行环境。
 
 ---
 
-## 11. 分环
+## 11. 后续分环（不约束环 0 实现）
 
 | 环 | 内容 | 出口 |
 |---|---|---|
-| **环 0（本文档）** | 链路打通：目录浏览 + 任务 + 后端算摘要 + 逐文件上传 + 自动发布 + 仓库查看 | §2 七步演示全绿 |
-| 环 1 | 大文件与来源扩展：断点续传、取消/暂停/重试、浏览器直传（含 spool）、远端拉取、SSE 换掉轮询 | 能传一个真实的 30GB 模型 |
-| 环 2 | 持久化（MySQL Store）、模型资产表与元信息落库、源根白名单、容量与检索 | 仓库页信息完整且路径可控 |
-| 环 3+ | 安全加固、跨主机部署、模式 R / dingofs、回调协议、baseCommit | 见目标态文档 |
+| 环 0 | 本文：最小页面 + 本地目录 + 后端哈希/上传/发布 + HF 下载校验 | §9.1 六项全绿 |
+| 大文件环 | 断点续传、取消/暂停/重试、任务恢复、SSE | 真实 30GB 模型可控上传 |
+| 资产环 | MySQL、模型资产表、完整元信息、任务历史、仓库列表/详情/容量 | 可作为模型仓库管理功能使用 |
+| 安全环 | 源根白名单、路径边界、密钥管理、用户/RBAC、审计 | 可进入受控长期环境 |
+| 部署扩展环 | 跨主机、dingofs、其他来源、回调协议、baseCommit | 按目标态文档验收 |
 
-> **环 0 的产物不要放进任何长期运行的环境。** 它没有安全措施、任务状态易失、上传 token 明文配置，且目录浏览接口不受限。
-
----
-
-## 12. 待决
-
-| # | 问题 | 倾向 |
-|---|---|---|
-| **E-1** | spinfield "不依赖 k8s 的 API 入口"怎么做：独立 `cmd`，还是 main 加 `--api-only` 分支 | **main 加分支**。少一个二进制，且保证两条路径共用同一套路由注册，不会漂移 |
-| **E-2** | 递归展开目录成文件清单，前端做还是后端做 | **后端**。前端只负责展示与勾选，避免大目录在浏览器里递归请求 |
-| **E-3** | `displayVersion` → `revision` 的规范化规则 | 只允许 `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`，前后端各校验一次，**不做静默替换** |
-| **E-4** | 逐文件是否并发（dingospeed `concurrentLimit` 默认 4） | **本期串行**。并发只优化速度，不影响链路是否通；串行的进度模型也更简单 |
-| **E-5** | 本期演示用哪个模型 | 找一个几百 MB 的小模型（tokenizer + 小权重），**不要**一上来就用大模型——链路问题会被传输耗时掩盖 |
-
-> v1.0 的 E-2（引入 `hash-wasm`）**已删除**：摘要改由后端计算后，前端不需要任何哈希能力。
+后续环的顺序不是环 0 的前置条件。安全后置意味着先证明回路存在，不意味着环 0 已具备生产安全性。

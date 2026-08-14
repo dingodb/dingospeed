@@ -1,0 +1,37 @@
+[
+  {
+    "Path": "config.json",
+    "Size": 73,
+    "SHA256": "471c2b49a2986238352d25946852718675ff27dab2a2f2c2cf0155536ecc4742",
+    "BlobExists": true,
+    "BlobPath": "D:\\project\\workplace\\ModelManager\\dingospeed\\repos\\files\\models\\dingo-local\\ring1-local-ingest-173950\\blobs\\471c2b49a2986238352d25946852718675ff27dab2a2f2c2cf0155536ecc4742"
+  },
+  {
+    "Path": "README.md",
+    "Size": 112,
+    "SHA256": "85ec606b08548e6ab72e27a48b90b6cac896edc2f1109206744ba9ab1e2a71d2",
+    "BlobExists": true,
+    "BlobPath": "D:\\project\\workplace\\ModelManager\\dingospeed\\repos\\files\\models\\dingo-local\\ring1-local-ingest-173950\\blobs\\85ec606b08548e6ab72e27a48b90b6cac896edc2f1109206744ba9ab1e2a71d2"
+  },
+  {
+    "Path": "root-file.txt",
+    "Size": 25,
+    "SHA256": "0909581e02577fe4c38726da06c0aa9505858ad401fe5cdf02c8f05576ff1987",
+    "BlobExists": true,
+    "BlobPath": "D:\\project\\workplace\\ModelManager\\dingospeed\\repos\\files\\models\\dingo-local\\ring1-local-ingest-173950\\blobs\\0909581e02577fe4c38726da06c0aa9505858ad401fe5cdf02c8f05576ff1987"
+  },
+  {
+    "Path": "tokenizer/tokenizer.json",
+    "Size": 69,
+    "SHA256": "14d16a2eef4a6306cf8592ebcdd028fcb04bc9347aab94dc4e8d08774d35e960",
+    "BlobExists": true,
+    "BlobPath": "D:\\project\\workplace\\ModelManager\\dingospeed\\repos\\files\\models\\dingo-local\\ring1-local-ingest-173950\\blobs\\14d16a2eef4a6306cf8592ebcdd028fcb04bc9347aab94dc4e8d08774d35e960"
+  },
+  {
+    "Path": "weights/model.bin",
+    "Size": 67108864,
+    "SHA256": "dfc51ae1eca42d151aa28c7dff28b433402001d657891da7b026d76d22c09234",
+    "BlobExists": true,
+    "BlobPath": "D:\\project\\workplace\\ModelManager\\dingospeed\\repos\\files\\models\\dingo-local\\ring1-local-ingest-173950\\blobs\\dfc51ae1eca42d151aa28c7dff28b433402001d657891da7b026d76d22c09234"
+  }
+]

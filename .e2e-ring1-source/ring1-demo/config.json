@@ -1,0 +1,4 @@
+{
+  "model_type": "ring1-demo",
+  "migration": "api-only-local-ingest"
+}
