@@ -1,0 +1,24 @@
+.git
+.github
+.idea
+
+# Local build/runtime output
+bin
+log
+repos
+out
+*.log
+*.out
+
+# Local upload/e2e verification artifacts. These can include generated model
+# weights and Hugging Face cache snapshots; they are not needed to build the
+# dingospeed image.
+.e2e-*/
+.e2e-*.json
+.e2e-*-path
+.e2e-*-manifest.json
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.iml
