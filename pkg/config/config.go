@@ -175,6 +175,30 @@ type Upload struct {
 	StagingCleanupIntervalMinutes int    `json:"stagingCleanupIntervalMinutes" yaml:"stagingCleanupIntervalMinutes"`
 	PublishMaxFiles               int    `json:"publishMaxFiles" yaml:"publishMaxFiles"`
 	OrphanRetentionHours          int    `json:"orphanRetentionHours" yaml:"orphanRetentionHours"`
+	// ChunkConcurrentLimit 与 ConcurrentLimit 是两个独立的槽位，不能合用：
+	// 后者是“整文件上传”语义（默认 4），套到分块上会让四个并发块把其它文件全挡成 429，
+	// 而乱序并发正是分块上传存在的理由。
+	ChunkConcurrentLimit int `json:"chunkConcurrentLimit" yaml:"chunkConcurrentLimit"`
+	// ChunkMaxBytes 是单个 chunk 的字节上限。分块内容必须先整体进内存才能在置位前
+	// 完成 sha 校验，因此峰值内存 ≈ ChunkConcurrentLimit × ChunkMaxBytes，
+	// 两个值要一起调。
+	ChunkMaxBytes int64 `json:"chunkMaxBytes" yaml:"chunkMaxBytes"`
+}
+
+// GetUploadChunkConcurrentLimit 是分块上传的并发请求上限。
+func (c *Config) GetUploadChunkConcurrentLimit() int {
+	if c.Upload.ChunkConcurrentLimit <= 0 {
+		return 8
+	}
+	return c.Upload.ChunkConcurrentLimit
+}
+
+// GetUploadChunkMaxBytes 是单个 chunk 的字节上限，默认 64MiB（8MiB 块 × 8）。
+func (c *Config) GetUploadChunkMaxBytes() int64 {
+	if c.Upload.ChunkMaxBytes <= 0 {
+		return 64 << 20
+	}
+	return c.Upload.ChunkMaxBytes
 }
 
 // GetUploadOrphanRetention 是“已完整落盘但还没被任何清单引用”的内容的保留期。
@@ -443,6 +467,12 @@ func (c *Config) SetDefaults() {
 	}
 	if c.Upload.OrphanRetentionHours == 0 {
 		c.Upload.OrphanRetentionHours = 24 * 7
+	}
+	if c.Upload.ChunkConcurrentLimit == 0 {
+		c.Upload.ChunkConcurrentLimit = 8
+	}
+	if c.Upload.ChunkMaxBytes == 0 {
+		c.Upload.ChunkMaxBytes = 64 << 20
 	}
 }
 

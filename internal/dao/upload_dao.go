@@ -85,16 +85,29 @@ type LocalUploadResult struct {
 }
 
 type LocalUploadProgress struct {
-	RepoType     string `json:"repoType"`
-	Repo         string `json:"repo"`
-	Revision     string `json:"revision"`
-	FilePath     string `json:"filePath"`
-	Size         int64  `json:"size"`
-	Sha256       string `json:"sha256"`
-	ResumeOffset int64  `json:"resumeOffset"`
-	Effective    bool   `json:"effective"`
-	BlobComplete bool   `json:"blobComplete"`
-	Status       string `json:"status"`
+	RepoType string `json:"repoType"`
+	Repo     string `json:"repo"`
+	Revision string `json:"revision"`
+	FilePath string `json:"filePath"`
+	Size     int64  `json:"size"`
+	Sha256   string `json:"sha256"`
+	// ResumeOffset 是第一个空洞的位置，也就是顺序续传（老接口的 start）该从哪里接上。
+	// 乱序并发的分块上传下它没有意义，用 MissingRanges。
+	ResumeOffset int64 `json:"resumeOffset"`
+	// BlockSize 是切分内容时必须使用的块大小，取自 blob header 里的权威值
+	// （文件还不存在时回落到当前配置）。分块上传的调用方必须先取它再切分，
+	// 不允许自己配置：agent 侧配错了就是静默的数据损坏。
+	BlockSize int64 `json:"blockSize"`
+	// MissingRanges 是尚未写入的字节区间列表，调用方据此只补缺块。
+	MissingRanges []LocalByteRange `json:"missingRanges"`
+	Effective     bool             `json:"effective"`
+	BlobComplete  bool             `json:"blobComplete"`
+	Status        string           `json:"status"`
+}
+
+type LocalByteRange struct {
+	Offset int64 `json:"offset"`
+	Length int64 `json:"length"`
 }
 
 // LocalManifestFile 是本地仓库某个快照下的一条文件记录。
@@ -132,7 +145,12 @@ var (
 	// 加锁顺序固定为 repo → revision → blob，反向获取会死锁。
 	uploadRepoLocks     = newKeyedMutex()
 	uploadRevisionLocks = newKeyedMutex()
-	uploadBlobLocks     = newKeyedMutex()
+	// blob 锁是读写锁而不是互斥锁：分块上传的多个块要能同时往同一个 blob 里写
+	// （取读锁，互不阻塞），而“整体替换这个 blob 文件”的两个动作——老接口的
+	// os.Rename 与回收任务的 os.Remove——必须独占（取写锁）。
+	// 少了这条区分，Linux 上 rename 会把 inode 换掉，正在写的分块 writer 会继续
+	// 往孤儿 inode 上写，位图更新全部丢失且无人知晓。
+	uploadBlobLocks = newKeyedRWMutex()
 )
 
 func uploadRepoLockKey(repoType, orgRepo string) string {
@@ -178,6 +196,69 @@ func (k *keyedMutex) Unlock(key string) {
 	}
 	k.mu.Unlock()
 	entry.mu.Unlock()
+}
+
+type keyedRWMutexEntry struct {
+	mu   sync.RWMutex
+	refs int
+}
+
+// keyedRWMutex 与 keyedMutex 的引用计数策略完全一致，只是把互斥锁换成读写锁。
+// refs 同时统计读者与写者：只有在没有任何持有者时条目才会被删除，
+// 因此“删除后新来的获取者拿到一个全新条目”不会与仍未释放的持有者错配。
+type keyedRWMutex struct {
+	mu      sync.Mutex
+	entries map[string]*keyedRWMutexEntry
+}
+
+func newKeyedRWMutex() *keyedRWMutex {
+	return &keyedRWMutex{entries: make(map[string]*keyedRWMutexEntry)}
+}
+
+func (k *keyedRWMutex) acquire(key string) *keyedRWMutexEntry {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	entry, ok := k.entries[key]
+	if !ok {
+		entry = &keyedRWMutexEntry{}
+		k.entries[key] = entry
+	}
+	entry.refs++
+	return entry
+}
+
+func (k *keyedRWMutex) release(key string) *keyedRWMutexEntry {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	entry, ok := k.entries[key]
+	if !ok {
+		return nil
+	}
+	entry.refs--
+	if entry.refs <= 0 {
+		delete(k.entries, key)
+	}
+	return entry
+}
+
+func (k *keyedRWMutex) Lock(key string) {
+	k.acquire(key).mu.Lock()
+}
+
+func (k *keyedRWMutex) Unlock(key string) {
+	if entry := k.release(key); entry != nil {
+		entry.mu.Unlock()
+	}
+}
+
+func (k *keyedRWMutex) RLock(key string) {
+	k.acquire(key).mu.RLock()
+}
+
+func (k *keyedRWMutex) RUnlock(key string) {
+	if entry := k.release(key); entry != nil {
+		entry.mu.RUnlock()
+	}
 }
 
 func IsLocalOrgRepo(orgRepo string) bool {
@@ -467,7 +548,8 @@ func (u *UploadDao) materializeBlob(param LocalUploadParam, orgRepo string, body
 
 	// blob 位置只由 sha 决定，与文件路径、版本标签无关，
 	// 因此互斥必须建在 blob 上，否则同内容的两个上传会互相踩写。
-	blobKey := fmt.Sprintf("upload-blob:%s:%s:%s", param.RepoType, orgRepo, param.Sha256)
+	// 写锁：os.Rename 是整体替换文件的动作，必须与正在写同一个 blob 的分块上传互斥。
+	blobKey := uploadBlobLockKey(param.RepoType, orgRepo, param.Sha256)
 	uploadBlobLocks.Lock(blobKey)
 	defer uploadBlobLocks.Unlock(blobKey)
 
@@ -582,8 +664,11 @@ func inspectCompleteBlob(blobPath string, expectedSize int64) (bool, int64, erro
 	return offset == size, size, err
 }
 
+// localBlobPath 与下载侧共用同一个 BlobPath：上传写的就是下载读的那个文件，
+// 两侧算出来的路径字符串必须逐字符相同，否则 DingCacheManager 会为同一个文件
+// 发出两个句柄，各自维护一份互相看不见的块位图。
 func localBlobPath(repoType, orgRepo, sha256 string) string {
-	return filepath.Join(config.SysConfig.Repos(), "files", repoType, orgRepo, "blobs", sha256)
+	return BlobPath(repoType, orgRepo, sha256)
 }
 
 func sameManifestContent(existing LocalManifestFile, param LocalUploadParam) bool {
@@ -715,22 +800,27 @@ func (u *UploadDao) QueryProgress(param LocalUploadParam) (*LocalUploadProgress,
 		return nil, err
 	}
 	result := &LocalUploadProgress{
-		RepoType: param.RepoType,
-		Repo:     orgRepo,
-		Revision: param.Revision,
-		FilePath: param.FilePath,
-		Sha256:   param.Sha256,
-		Status:   "not_started",
+		RepoType:      param.RepoType,
+		Repo:          orgRepo,
+		Revision:      param.Revision,
+		FilePath:      param.FilePath,
+		Sha256:        param.Sha256,
+		BlockSize:     config.SysConfig.Download.BlockSize,
+		MissingRanges: []LocalByteRange{},
+		Status:        "not_started",
 	}
 
 	currentCommit, currentManifest := u.currentManifest(param)
 	if currentCommit != "" {
 		if existing, ok := findManifestFile(currentManifest, param.FilePath); ok && existing.Sha256 == param.Sha256 {
-			if complete, size, err := inspectCompleteBlob(blobPath, existing.Size); err != nil {
+			blob, err := inspectBlobProgress(blobPath)
+			if err != nil {
 				return nil, err
-			} else if complete {
-				result.Size = size
-				result.ResumeOffset = size
+			}
+			if blob.exists && blob.size == existing.Size && len(blob.missing) == 0 {
+				result.Size = blob.size
+				result.BlockSize = blob.blockSize
+				result.ResumeOffset = blob.size
 				result.Effective = true
 				result.BlobComplete = true
 				result.Status = "effective"
@@ -739,6 +829,8 @@ func (u *UploadDao) QueryProgress(param LocalUploadParam) (*LocalUploadProgress,
 		}
 	}
 
+	// 老接口的续传暂存文件优先：它存在就说明这个 sha 正走整文件上传那条路，
+	// 该路径的续传语义是顺序的，只能用 ResumeOffset 表达。
 	stagePath := blobPath + localUploadStageSuffix
 	if util.FileExists(stagePath) {
 		dingFile, err := downloader.NewDingCache(stagePath, config.SysConfig.Download.BlockSize)
@@ -747,6 +839,7 @@ func (u *UploadDao) QueryProgress(param LocalUploadParam) (*LocalUploadProgress,
 		}
 		offset, offsetErr := resumableOffset(dingFile)
 		size := dingFile.GetFileSize()
+		blockSize := dingFile.GetBlockSize()
 		closeErr := dingFile.Close()
 		if offsetErr != nil {
 			return nil, offsetErr
@@ -755,20 +848,103 @@ func (u *UploadDao) QueryProgress(param LocalUploadParam) (*LocalUploadProgress,
 			return nil, closeErr
 		}
 		result.Size = size
+		result.BlockSize = blockSize
 		result.ResumeOffset = offset
 		result.Status = "uploading"
 		return result, nil
 	}
 
-	if complete, size, err := inspectCompleteBlob(blobPath, -1); err != nil {
+	// 最终位置上的 blob：分块上传的内容从第一个字节起就写在这里，因此它既可能是
+	// 一份完整内容，也可能是一份还缺着块的半成品。缺块必须以区间列表形式回给调用方，
+	// “第一个空洞”这个顺序续传的概念在乱序并发下没有意义。
+	blob, err := inspectBlobProgress(blobPath)
+	if err != nil {
 		return nil, err
-	} else if complete {
-		result.Size = size
-		result.ResumeOffset = size
+	}
+	if !blob.exists {
+		return result, nil
+	}
+	result.Size = blob.size
+	result.BlockSize = blob.blockSize
+	result.MissingRanges = blob.missing
+	if len(blob.missing) == 0 {
+		result.ResumeOffset = blob.size
 		result.BlobComplete = true
 		result.Status = "blob_complete"
+	} else {
+		result.ResumeOffset = blob.missing[0].Offset
+		result.Status = "uploading"
 	}
 	return result, nil
+}
+
+type blobProgress struct {
+	exists    bool
+	size      int64
+	blockSize int64
+	missing   []LocalByteRange
+}
+
+func inspectBlobProgress(blobPath string) (blobProgress, error) {
+	progress := blobProgress{missing: []LocalByteRange{}}
+	if !util.FileExists(blobPath) {
+		return progress, nil
+	}
+	dingFile, err := downloader.NewDingCache(blobPath, config.SysConfig.Download.BlockSize)
+	if err != nil {
+		return progress, err
+	}
+	progress.exists = true
+	progress.size = dingFile.GetFileSize()
+	progress.blockSize = dingFile.GetBlockSize()
+	missing, missErr := missingBlockRanges(dingFile)
+	closeErr := dingFile.Close()
+	if missErr != nil {
+		return progress, missErr
+	}
+	if closeErr != nil {
+		return progress, closeErr
+	}
+	progress.missing = missing
+	return progress, nil
+}
+
+// missingBlockRanges 把位图里未置位的块合并成字节区间。相邻缺块合并成一段，
+// 让调用方可以按自己的 chunk 大小重新切分，而不是被迫按块逐个重传。
+func missingBlockRanges(dingFile *downloader.DingCache) ([]LocalByteRange, error) {
+	size := dingFile.GetFileSize()
+	blockSize := dingFile.GetBlockSize()
+	if blockSize <= 0 {
+		return nil, fmt.Errorf("invalid cache block size: %d", blockSize)
+	}
+	blockNum := (size + blockSize - 1) / blockSize
+	ranges := []LocalByteRange{}
+	runStart := int64(-1)
+	appendRun := func(endBlock int64) {
+		offset := runStart * blockSize
+		end := min(endBlock*blockSize, size)
+		ranges = append(ranges, LocalByteRange{Offset: offset, Length: end - offset})
+		runStart = -1
+	}
+	for i := int64(0); i < blockNum; i++ {
+		has, err := dingFile.HasBlock(i)
+		if err != nil {
+			return nil, err
+		}
+		if !has {
+			if runStart < 0 {
+				runStart = i
+			}
+			continue
+		}
+		if runStart >= 0 {
+			appendRun(i)
+		}
+	}
+	if runStart >= 0 {
+		appendRun(blockNum)
+	}
+	return ranges, nil
 }
 
 func (u *UploadDao) CleanupExpiredStagedUploads(retention time.Duration) (int, error) {
@@ -802,7 +978,7 @@ func (u *UploadDao) CleanupExpiredStagedUploads(retention time.Duration) (int, e
 		if info.ModTime().After(cutoff) {
 			return nil
 		}
-		blobKey := fmt.Sprintf("upload-blob:%s:%s:%s", repoType, orgRepo, sha)
+		blobKey := uploadBlobLockKey(repoType, orgRepo, sha)
 		uploadBlobLocks.Lock(blobKey)
 		defer uploadBlobLocks.Unlock(blobKey)
 		info, statErr = os.Stat(path)
@@ -905,38 +1081,116 @@ func (u *UploadDao) cleanupRepoBlobs(repos, repoType, orgRepo string, blobs []st
 	if err != nil {
 		return 0, err
 	}
+	tombstones := readRecycleEntries(repoType, orgRepo)
 	removed := 0
 	for _, sha := range blobs {
 		if _, ok := referenced[sha]; ok {
+			// 引用又回来了（重新上传并发布过），那条墓碑已经是错的，就地作废。
+			if _, has := tombstones[sha]; has {
+				removeRecycleEntry(repoType, orgRepo, sha)
+			}
 			continue
 		}
 		blobPath := localBlobPath(repoType, orgRepo, sha)
-		blobKey := fmt.Sprintf("upload-blob:%s:%s:%s", repoType, orgRepo, sha)
-		uploadBlobLocks.Lock(blobKey)
 		info, statErr := os.Stat(blobPath)
 		switch {
 		case statErr != nil && os.IsNotExist(statErr):
-			uploadBlobLocks.Unlock(blobKey)
+			removeRecycleEntry(repoType, orgRepo, sha)
 			continue
 		case statErr != nil:
-			uploadBlobLocks.Unlock(blobKey)
 			return removed, statErr
-		case info.ModTime().After(cutoff):
-			// 保留期内：可能正等着一次还没发出来的发布，留着。
-			uploadBlobLocks.Unlock(blobKey)
+		}
+		if !expiredForReclaim(info, tombstones[sha], cutoff) {
+			// 保留期内：可能正等着一次还没发出来的发布，或者还躺在回收站里，留着。
 			continue
 		}
 		// 同一个 sha 可能还有一个正在续传的暂存文件，那份由暂存清理按自己的
-		// 保留期处理，这里只回收已经完整的那一份。
-		rmErr := os.Remove(blobPath)
-		uploadBlobLocks.Unlock(blobKey)
-		if rmErr != nil && !os.IsNotExist(rmErr) {
-			return removed, rmErr
+		// 保留期处理，这里只管最终位置上的那一份——**不检查它是否完整**。
+		// 这正是分块上传需要的行为：中途放弃的分块上传就是以不完整的
+		// blobs/<sha> 形式留在盘上的，只按“未被任何清单引用 + 超过保留期”回收。
+		// 续传间隔小于保留期（默认 168h）就不会被误删。
+		if rmErr := reclaimBlobFile(repoType, orgRepo, sha); rmErr != nil {
+			// 传输占用是暂时的，下一个周期再来即可；为它中断整趟清理不划算。
+			zap.S().Warnf("[UPLOAD-CLEANUP] reclaim skipped: %s/%s sha=%s err=%v", repoType, orgRepo, sha, rmErr)
+			continue
 		}
+		removeRecycleEntry(repoType, orgRepo, sha)
 		removed++
 		zap.S().Infof("[UPLOAD-CLEANUP] reclaimed unreferenced upload content: %s/%s sha=%s", repoType, orgRepo, sha)
 	}
 	return removed, nil
+}
+
+// expiredForReclaim 判断一份未被引用的内容是否已经过了保留期。
+//
+// 有墓碑时以墓碑的 unlinkedAt 为准，没有才回落到 blob 的 mtime。
+// 这个区分是必须的：一个三个月前上传的文件今天被删进回收站，它的 mtime 早就过期了，
+// 按 mtime 判定的话下一个清理周期（最多一小时）就会把它彻底删掉，回收站形同虚设。
+// 反过来，“暂缓生效的上传等不到发布”这类老残留没有墓碑，仍按 mtime 判定，行为不变。
+func expiredForReclaim(info os.FileInfo, entry RecycleEntry, cutoff time.Time) bool {
+	if entry.UnlinkedAt > 0 {
+		return !time.Unix(entry.UnlinkedAt, 0).After(cutoff)
+	}
+	return !info.ModTime().After(cutoff)
+}
+
+// CleanupRecycledBlobs 回收远端缓存里被一级删除、且已过保留期的内容。
+//
+// 判据严格限定为“存在回收站墓碑”，不是“扫出来没有引用就删”。两条理由：
+//  1. 公开缓存与自研内容共用同一棵目录树，无差别回收等于改动磁盘清理对公开模型的
+//     既有行为——这正是 collectLocalBlobs 里那条 IsLocalOrgRepo 过滤要防的事；
+//  2. diskClean 的 LRU 会直接 os.Remove resolve 链接。一个远端 blob 完全可能
+//     “链接被 LRU 删了、内容还在”，此时它在引用扫描下就是无引用的，
+//     而这跟用户的任何删除动作都无关。
+//
+// 本地命名空间的墓碑不在这里处理：CleanupUnreferencedBlobs 那一趟已经覆盖了它们。
+func (u *UploadDao) CleanupRecycledBlobs(retention time.Duration) (int, error) {
+	if retention <= 0 {
+		retention = 7 * 24 * time.Hour
+	}
+	cutoff := time.Now().Add(-retention)
+	removed := 0
+	for _, key := range listRepoKeys() {
+		if IsLocalOrgRepo(key.OrgRepo) {
+			continue
+		}
+		removed += u.cleanupRecycledRepo(key.RepoType, key.OrgRepo, cutoff)
+	}
+	return removed, nil
+}
+
+func (u *UploadDao) cleanupRecycledRepo(repoType, orgRepo string, cutoff time.Time) int {
+	tombstones := readRecycleEntries(repoType, orgRepo)
+	if len(tombstones) == 0 {
+		return 0
+	}
+	repoLockKey := uploadRepoLockKey(repoType, orgRepo)
+	uploadRepoLocks.Lock(repoLockKey)
+	defer uploadRepoLocks.Unlock(repoLockKey)
+
+	idx := buildRepoIndex(repoType, orgRepo)
+	removed := 0
+	for sha, entry := range tombstones {
+		if len(idx.BySha[sha]) > 0 {
+			removeRecycleEntry(repoType, orgRepo, sha)
+			continue
+		}
+		if _, ok := idx.Blobs[sha]; !ok {
+			removeRecycleEntry(repoType, orgRepo, sha)
+			continue
+		}
+		if time.Unix(entry.UnlinkedAt, 0).After(cutoff) {
+			continue
+		}
+		if err := reclaimBlobFile(repoType, orgRepo, sha); err != nil {
+			zap.S().Warnf("[UPLOAD-CLEANUP] reclaim recycled blob skipped: %s/%s sha=%s err=%v", repoType, orgRepo, sha, err)
+			continue
+		}
+		removeRecycleEntry(repoType, orgRepo, sha)
+		removed++
+		zap.S().Infof("[UPLOAD-CLEANUP] reclaimed recycled cache content: %s/%s sha=%s", repoType, orgRepo, sha)
+	}
+	return removed
 }
 
 // referencedShas 收集该仓库下所有快照清单引用到的内容摘要。
@@ -980,13 +1234,22 @@ func (u *UploadDao) RunStagedUploadCleanup(ctx context.Context) {
 			} else if removed > 0 {
 				zap.S().Infof("cleanup expired staged uploads removed %d file(s)", removed)
 			}
-			reclaimed, err := u.CleanupUnreferencedBlobs(config.SysConfig.GetUploadOrphanRetention())
+			retention := config.SysConfig.GetUploadOrphanRetention()
+			reclaimed, err := u.CleanupUnreferencedBlobs(retention)
 			if err != nil {
 				zap.S().Warnf("reclaim unreferenced upload content failed: %v", err)
+			} else if reclaimed > 0 {
+				zap.S().Infof("reclaimed %d unreferenced upload content file(s)", reclaimed)
+			}
+			// 上一趟只覆盖本地命名空间。远端缓存里被一级删除的内容由墓碑驱动，
+			// 与上传内容共用同一个保留期（orphanRetentionHours，默认 168h）。
+			recycled, err := u.CleanupRecycledBlobs(retention)
+			if err != nil {
+				zap.S().Warnf("reclaim recycled cache content failed: %v", err)
 				continue
 			}
-			if reclaimed > 0 {
-				zap.S().Infof("reclaimed %d unreferenced upload content file(s)", reclaimed)
+			if recycled > 0 {
+				zap.S().Infof("reclaimed %d recycled cache content file(s)", recycled)
 			}
 		}
 	}
@@ -1055,12 +1318,25 @@ func (u *UploadDao) nextCommitBatch(current, uploaded []LocalManifestFile) (stri
 	sort.Slice(manifest, func(i, j int) bool {
 		return manifest[i].Path < manifest[j].Path
 	})
-	data, err := sonic.Marshal(manifest)
+	commit, err := manifestCommit(manifest)
 	if err != nil {
 		return "", nil, err
 	}
+	return commit, manifest, nil
+}
+
+// manifestCommit 是“清单内容 → 快照标识”的唯一实现。
+//
+// 发布与缓存管理的删除都要算它：删除会把一份清单变成另一份清单，新清单必须落在
+// 与发布路径完全一致的标识下。两处各写一遍序列化，同样的内容就会算出两个标识，
+// 客户端会把它们当成两个版本白白重下一遍。
+func manifestCommit(manifest []LocalManifestFile) (string, error) {
+	data, err := sonic.Marshal(manifest)
+	if err != nil {
+		return "", err
+	}
 	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]), manifest, nil
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func (u *UploadDao) readManifest(repoType, orgRepo, commit string) []LocalManifestFile {

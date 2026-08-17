@@ -112,10 +112,8 @@ func (p *PreheatCacheTask) startPreheat(hfUri, orgRepo, fileName, commit, etag, 
 	var wg sync.WaitGroup
 	bgCtx := context.WithValue(p.Ctx, consts.PromSource, "localhost")
 	responseChan := make(chan []byte, config.SysConfig.Download.RespChanSize)
-	blobsDir := fmt.Sprintf("%s/files/%s/%s/blobs", config.SysConfig.Repos(), p.Job.Datatype, orgRepo)
-	blobsFile := fmt.Sprintf("%s/%s", blobsDir, etag)
-	filesDir := fmt.Sprintf("%s/files/%s/%s/resolve/%s", config.SysConfig.Repos(), p.Job.Datatype, orgRepo, commit)
-	filesPath := fmt.Sprintf("%s/%s", filesDir, fileName)
+	blobsFile := dao.BlobPath(p.Job.Datatype, orgRepo, etag)
+	filesPath := dao.ResolvePath(p.Job.Datatype, orgRepo, commit, fileName)
 	if err := p.FileDao.ConstructBlobsAndFileFile(blobsFile, filesPath); err != nil {
 		zap.S().Errorf("ConstructBlobsAndFileFile err.%v", err)
 		return err

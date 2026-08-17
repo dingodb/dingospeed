@@ -42,6 +42,35 @@ func (h *UploadHandler) UploadWholeFile(c echo.Context) error {
 	return c.JSON(http.StatusCreated, result)
 }
 
+// UploadChunk 接收整文件中的一个分块。
+//
+// 分块直接写进最终的 blobs/<sha>，没有 finalize 步骤：某个块位=1 表示“写入这块时它
+// 通过了 chunk 级 sha 校验”，而“整个文件传完了”由 publish 时的位图检查判定。
+// 分块上传因此永远是暂缓生效的，清单才是可见性闸门。
+func (h *UploadHandler) UploadChunk(c echo.Context) error {
+	param := dao.LocalChunkUploadParam{
+		RepoType: c.Param("repoType"),
+		Org:      c.Param("org"),
+		Repo:     c.Param("repo"),
+		Revision: c.Param("revision"),
+		FilePath: c.Param("*"),
+		Sha256:   c.QueryParam("sha256"),
+	}
+	result, err := h.uploadService.UploadChunk(
+		param,
+		c.QueryParam("size"),
+		c.QueryParam("offset"),
+		c.QueryParam("chunkSha256"),
+		c.Request().Header.Get(uploadTokenHeader),
+		c.Request().ContentLength,
+		c.Request().Body,
+	)
+	if err != nil {
+		return writeUploadError(c, "local chunk upload failed", err)
+	}
+	return c.JSON(http.StatusOK, result)
+}
+
 // publishRequest 是批量发布的请求体。清单由调用方完整声明，服务端不记忆批次。
 type publishRequest struct {
 	Files []publishRequestFile `json:"files"`
