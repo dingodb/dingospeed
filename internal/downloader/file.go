@@ -299,6 +299,13 @@ func (c *DingCache) WriteBlock(blockIndex int64, blockBytes []byte) error {
 	}
 	c.fileLock.Lock()
 	defer c.fileLock.Unlock()
+	// 置位与刷盘都在动 c.header（BlockMask.bits 的读改写、以及把整个 header 交给
+	// f.Write），因此必须与位图的读者互斥。读者走的是 headerLock（HasBlock、
+	// GetFileSize、getBlockNumber 等），只有在这里也取 headerLock 才能把两侧串起来
+	// ——只靠 fileLock 只能挡住其它写者，挡不住任何一个读者。
+	// 加锁顺序固定为 fileLock → headerLock，与 Resize 一致，不会反向获取。
+	c.headerLock.Lock()
+	defer c.headerLock.Unlock()
 	if err = c.setHeaderBlock(blockIndex); err != nil {
 		return err
 	}
@@ -318,11 +325,16 @@ func (c *DingCache) Resize(fileSize int64) error {
 	newBlockNum := (fileSize + bs - 1) / bs
 	c.fileLock.Lock()
 	defer c.fileLock.Unlock()
+	// resizeFileSize 内部要读 header（GetFileSize、getHeaderSize），必须在取
+	// headerLock 之前跑完——RWMutex 不可重入，先上写锁再进去就是自锁。
 	if err := c.resizeFileSize(fileSize); err != nil {
 		return err
 	}
-	// 设置块数量、文件大小参数
-	if err := c.resizeHeader(newBlockNum, fileSize); err != nil {
+	// 设置块数量、文件大小参数。与 WriteBlock 同理：改 header 与刷盘要与 header 的
+	// 读者（GetFileSize、getBlockNumber、HasBlock 等）互斥，只能靠 headerLock 的写锁。
+	c.headerLock.Lock()
+	defer c.headerLock.Unlock()
+	if err := c.resizeHeaderLocked(newBlockNum, fileSize); err != nil {
 		return err
 	}
 	return c.flushHeader()
@@ -357,9 +369,9 @@ func (c *DingCache) resizeFileSize(fileSize int64) error {
 	return nil
 }
 
-func (c *DingCache) resizeHeader(blockNum, fileSize int64) error {
-	c.headerLock.RLock()
-	defer c.headerLock.RUnlock()
+// resizeHeaderLocked 改写 header 的块数与文件大小，调用方必须已持有 headerLock 的写锁。
+// 它原本自己取的是读锁，而读锁之间互不排斥，等于没有保护这两次写入。
+func (c *DingCache) resizeHeaderLocked(blockNum, fileSize int64) error {
 	c.header.BlockNumber = uint64(blockNum)
 	c.header.FileSize = uint64(fileSize)
 	return c.header.ValidHeader()

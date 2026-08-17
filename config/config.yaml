@@ -23,8 +23,10 @@ upload:
     concurrentLimit: 4
     stagingRetentionHours: 168
     stagingCleanupIntervalMinutes: 60
-    publishMaxFiles: 1000
+    publishMaxFiles: 5000
     orphanRetentionHours: 168
+    chunkConcurrentLimit: 8      #分块上传的并发请求上限，与整文件上传的concurrentLimit相互独立
+    chunkMaxBytes: 67108864      #单个分块的字节上限（默认64MB）。峰值内存约为 chunkConcurrentLimit × chunkMaxBytes
 
 scheduler:
     mode: standalone    #运行的两种模式：standalone&cluster,default:standalone

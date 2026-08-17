@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -205,10 +206,8 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, orgRepo, commit, fi
 		return util.ErrorEntryNotFound(c)
 	}
 	respHeaders, etag, startPos, endPos := constructRespHeader(c, pathInfo, commit, fileName)
-	blobsDir := fmt.Sprintf("%s/files/%s/%s/blobs", config.SysConfig.Repos(), repoType, orgRepo)
-	blobsFile := fmt.Sprintf("%s/%s", blobsDir, etag)
-	filesDir := fmt.Sprintf("%s/files/%s/%s/resolve/%s", config.SysConfig.Repos(), repoType, orgRepo, commit)
-	filesPath := fmt.Sprintf("%s/%s", filesDir, fileName)
+	blobsFile := BlobPath(repoType, orgRepo, etag)
+	filesPath := ResolvePath(repoType, orgRepo, commit, fileName)
 	if err = f.ConstructBlobsAndFileFile(blobsFile, filesPath); err != nil {
 		return util.ErrorProxyError(c)
 	}
@@ -284,6 +283,24 @@ func GetAnalysisFilePosition(dingFile *downloader.DingCache, startPos, endPos in
 	return offset
 }
 
+// BlobPath 是内容寻址的缓存文件位置，下载与上传两侧必须由这一个函数产出。
+//
+// 用 filepath.Join 而不是 fmt.Sprintf("%s/...")，理由不是风格而是正确性：
+// DingCacheManager 以路径字符串为 key 保证「同一个文件在进程内只有一个句柄」
+// （file_manager.go:42），两条路径拼出的字符串只要差一个字符，同一个文件就会有两个
+// 各自独立的块位图，写入互相看不见。而 Sprintf 拼接会在两种常见情况下产生偏差：
+// 配置里的 repos 带结尾斜杠时多一个分隔符（.../repos//files/...），
+// 以及 Windows 上与 filepath 系函数（MakeDirs、Abs/Rel 等）的分隔符不一致。
+// filepath.Join 会做 Clean，两种情况都被吸收掉。
+func BlobPath(repoType, orgRepo, etag string) string {
+	return filepath.Join(config.SysConfig.Repos(), "files", repoType, orgRepo, "blobs", etag)
+}
+
+// ResolvePath 是某个快照下仓库内路径对应的软链位置，与 BlobPath 同理只此一处。
+func ResolvePath(repoType, orgRepo, commit, fileName string) string {
+	return filepath.Join(config.SysConfig.Repos(), "files", repoType, orgRepo, "resolve", commit, filepath.FromSlash(fileName))
+}
+
 func (f *FileDao) ConstructBlobsAndFileFile(blobsFile, filesPath string) (err error) {
 	if err = util.MakeDirs(blobsFile); err != nil {
 		zap.S().Errorf("create %s dir err.%v", blobsFile, err)
@@ -330,7 +347,7 @@ func (f *FileDao) ConstructBlobsAndFileFile(blobsFile, filesPath string) (err er
 // ReadLocalManifest 读取本地仓库某个快照的完整文件清单。
 // 快照标识是内容的确定性摘要，同一个 commit 的清单不会再变，因此可以安全缓存。
 func (f *FileDao) ReadLocalManifest(repoType, orgRepo, commit string) ([]LocalManifestFile, error) {
-	cacheKey := fmt.Sprintf("localManifest/%s/%s/%s", repoType, orgRepo, commit)
+	cacheKey := localManifestCacheKey(repoType, orgRepo, commit)
 	if f.baseData != nil {
 		if v, ok := f.baseData.Cache.Get(cacheKey); ok {
 			return v.([]LocalManifestFile), nil
@@ -348,6 +365,22 @@ func (f *FileDao) ReadLocalManifest(repoType, orgRepo, commit string) ([]LocalMa
 		f.baseData.Cache.Set(cacheKey, manifest, config.SysConfig.GetDefaultExpiration())
 	}
 	return manifest, nil
+}
+
+func localManifestCacheKey(repoType, orgRepo, commit string) string {
+	return fmt.Sprintf("localManifest/%s/%s/%s", repoType, orgRepo, commit)
+}
+
+// InvalidateLocalManifest 丢掉某个快照清单的缓存。
+//
+// ReadLocalManifest 的缓存前提是“同一个 commit 的清单不会再变”。缓存管理的删除
+// 会重写历史快照的清单（这是让内容真正变成未引用的必要条件），前提被打破了，
+// 所以改写方必须显式把缓存清掉，否则删完之后的下载仍然读到含已删文件的旧清单。
+func (f *FileDao) InvalidateLocalManifest(repoType, orgRepo, commit string) {
+	if f.baseData == nil {
+		return
+	}
+	f.baseData.Cache.Delete(localManifestCacheKey(repoType, orgRepo, commit))
 }
 
 func (f *FileDao) GetPathsInfo(hfUri, repoType, orgRepo, commit, authorization string, pathFileName string) (*common.PathsInfo, error) {
@@ -568,8 +601,7 @@ func (f *FileDao) ReadCacheRequest(apiPath string) (*common.CacheContent, error)
 
 func (f *FileDao) GetFileOffset(dataType string, org string, repo string, etag string, fileSize int64) int64 {
 	orgRepo := util.GetOrgRepo(org, repo)
-	blobsDir := fmt.Sprintf("%s/files/%s/%s/blobs", config.SysConfig.Repos(), dataType, orgRepo)
-	blobsFile := fmt.Sprintf("%s/%s", blobsDir, etag)
+	blobsFile := BlobPath(dataType, orgRepo, etag)
 	exists := util.FileExists(blobsFile)
 	if !exists {
 		return 0
