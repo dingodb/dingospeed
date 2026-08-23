@@ -12,12 +12,12 @@ import (
 	"dingospeed/pkg/config"
 )
 
-func withUploadConfig(t *testing.T, token string) {
+func withUploadConfig(t *testing.T) {
 	t.Helper()
 	oldConfig := config.SysConfig
 	config.SysConfig = &config.Config{
 		Download: config.Download{BlockSize: 1024},
-		Upload:   config.Upload{Namespace: "dingo-local", Token: token, ConcurrentLimit: 4},
+		Upload:   config.Upload{Namespace: "dingo-local", ConcurrentLimit: 4},
 	}
 	t.Cleanup(func() { config.SysConfig = oldConfig })
 }
@@ -35,7 +35,7 @@ func validParam() dao.LocalUploadParam {
 }
 
 func TestValidateUploadParamAcceptsRealisticRepos(t *testing.T) {
-	withUploadConfig(t, "secret")
+	withUploadConfig(t)
 
 	cases := []struct {
 		name  string
@@ -64,7 +64,7 @@ func TestValidateUploadParamAcceptsRealisticRepos(t *testing.T) {
 
 // §9.10 路径逃逸矩阵：每个参与拼路径的字段都要覆盖多种逃逸形式。
 func TestValidateUploadParamRejectionMatrix(t *testing.T) {
-	withUploadConfig(t, "secret")
+	withUploadConfig(t)
 
 	badValues := []struct {
 		name  string
@@ -178,37 +178,9 @@ func TestParseDeclaredSize(t *testing.T) {
 }
 
 // §9.10 凭证：未配置 / 未提供 / 无效，三者必须可区分，且都不产生落盘副作用。
-func TestUploadTokenHandling(t *testing.T) {
-	// uploadDao 为 nil：这些用例都必须在触及落盘之前返回。
-	svc := NewUploadService(nil)
-
-	withUploadConfig(t, "")
-	if _, err := svc.UploadWholeFile(validParam(), "10", "", "anything", nil); errorCodeOf(err) != "UPLOAD_DISABLED" {
-		t.Fatalf("expected UPLOAD_DISABLED when no token is configured, got %v", err)
-	}
-
-	withUploadConfig(t, "secret")
-	if _, err := svc.UploadWholeFile(validParam(), "10", "", "", nil); errorCodeOf(err) != "UPLOAD_TOKEN_MISSING" {
-		t.Fatalf("expected UPLOAD_TOKEN_MISSING, got %v", err)
-	}
-	if _, err := svc.UploadWholeFile(validParam(), "10", "", "wrong", nil); errorCodeOf(err) != "UPLOAD_TOKEN_INVALID" {
-		t.Fatalf("expected UPLOAD_TOKEN_INVALID, got %v", err)
-	}
-	// 参数错误必须排在身份校验之后，未授权的调用方不应先看到参数反馈。
-	if _, err := svc.UploadWholeFile(validParam(), "", "", "wrong", nil); errorCodeOf(err) != "UPLOAD_TOKEN_INVALID" {
-		t.Fatalf("expected token check to precede parameter checks, got %v", err)
-	}
-	if _, err := svc.UploadWholeFile(validParam(), "", "", "secret", nil); errorCodeOf(err) != "UPLOAD_INVALID_ARGUMENT" {
-		t.Fatalf("expected UPLOAD_INVALID_ARGUMENT for a missing size, got %v", err)
-	}
-	if _, err := svc.UploadWholeFile(validParam(), "10", "bad", "secret", nil); errorCodeOf(err) != "UPLOAD_INVALID_ARGUMENT" {
-		t.Fatalf("expected UPLOAD_INVALID_ARGUMENT for an invalid resume start, got %v", err)
-	}
-}
-
 // §9.9 并发上限
 func TestUploadConcurrencyLimit(t *testing.T) {
-	withUploadConfig(t, "secret")
+	withUploadConfig(t)
 	config.SysConfig.Upload.ConcurrentLimit = 2
 
 	svc := NewUploadService(nil)
@@ -233,7 +205,7 @@ func errorCodeOf(err error) string {
 
 // §9.11 防淘汰
 func TestIsProtectedLocalUploadCacheFile(t *testing.T) {
-	withUploadConfig(t, "secret")
+	withUploadConfig(t)
 
 	root := filepath.Join("tmp", "repos")
 	protected := []string{

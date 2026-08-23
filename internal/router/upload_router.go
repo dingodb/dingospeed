@@ -44,6 +44,9 @@ func (r *UploadRouter) initRouter() {
 	// 分块是幂等的（重复写同一块直接返回 already_present），用 PUT 而不是 POST。
 	r.echo.PUT("/api/local-upload-chunk/:repoType/:org/:repo/:revision/*", r.uploadHandler.UploadChunk)
 	r.echo.POST("/api/local-publish/:repoType/:org/:repo/:revision", r.uploadHandler.PublishFiles)
+	// 整树发布：清单是目标全量而非增量，因此能表达删除。仓库编辑走这条路径，
+	// 新建上传继续走 local-publish（那条做并集合并，仓库/revision 可以不存在）。
+	r.echo.POST("/api/local-publish-tree/:repoType/:org/:repo/:revision", r.uploadHandler.PublishTree)
 }
 
 func (r *UploadRouter) Echo() *echo.Echo {

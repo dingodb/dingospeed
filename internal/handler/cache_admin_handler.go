@@ -27,11 +27,13 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// CacheAdminHandler 挂在上传服务上（回环地址 + X-Dingo-Upload-Token），
-// 与上传接口共用同一套身份校验：这些接口会删数据，不能出现在对外的下载端口上。
+// CacheAdminHandler 挂在上传服务上（强制绑回环的 8091），与上传接口共用同一层
+// 隔离：这些接口会删数据，不能出现在对外的下载端口上。
 //
-// 只有 JSON，没有页面：界面在 spinfield 控制台，token 由同机的 ingest agent
-// 从自己的配置里带上，不经过浏览器。
+// 这里没有身份校验——同机调用视为可信，隔离完全由“只监听回环”保证。跨机的
+// 用户级权限由 spinfield 控制面负责，agent 只是无用户概念的执行器。
+//
+// 只有 JSON，没有页面：界面在 spinfield 控制台。
 type CacheAdminHandler struct {
 	cacheAdminService *service.CacheAdminService
 }
@@ -45,7 +47,7 @@ type deleteRequest struct {
 }
 
 func (h *CacheAdminHandler) Summary(c echo.Context) error {
-	result, err := h.cacheAdminService.Summary(c.Request().Header.Get(uploadTokenHeader))
+	result, err := h.cacheAdminService.Summary()
 	if err != nil {
 		return writeUploadError(c, "cache summary failed", err)
 	}
@@ -53,7 +55,7 @@ func (h *CacheAdminHandler) Summary(c echo.Context) error {
 }
 
 func (h *CacheAdminHandler) ListRepos(c echo.Context) error {
-	result, err := h.cacheAdminService.ListRepos(c.Request().Header.Get(uploadTokenHeader))
+	result, err := h.cacheAdminService.ListRepos()
 	if err != nil {
 		return writeUploadError(c, "cache repo list failed", err)
 	}
@@ -61,7 +63,7 @@ func (h *CacheAdminHandler) ListRepos(c echo.Context) error {
 }
 
 func (h *CacheAdminHandler) ListFiles(c echo.Context) error {
-	result, err := h.cacheAdminService.ListFiles(parseCacheQuery(c), c.Request().Header.Get(uploadTokenHeader))
+	result, err := h.cacheAdminService.ListFiles(parseCacheQuery(c))
 	if err != nil {
 		return writeUploadError(c, "cache file list failed", err)
 	}
@@ -69,7 +71,7 @@ func (h *CacheAdminHandler) ListFiles(c echo.Context) error {
 }
 
 func (h *CacheAdminHandler) ListOrphans(c echo.Context) error {
-	result, err := h.cacheAdminService.ListOrphans(parseCacheQuery(c), c.Request().Header.Get(uploadTokenHeader))
+	result, err := h.cacheAdminService.ListOrphans(parseCacheQuery(c))
 	if err != nil {
 		return writeUploadError(c, "cache recycle list failed", err)
 	}
@@ -81,7 +83,7 @@ func (h *CacheAdminHandler) DeleteFiles(c echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"code": "CACHE_INVALID_ARGUMENT", "error": err.Error()})
 	}
-	results, err := h.cacheAdminService.SoftDelete(items, c.Request().Header.Get(uploadTokenHeader))
+	results, err := h.cacheAdminService.SoftDelete(items)
 	if err != nil {
 		return writeUploadError(c, "cache delete failed", err)
 	}
@@ -93,7 +95,7 @@ func (h *CacheAdminHandler) PurgeOrphans(c echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"code": "CACHE_INVALID_ARGUMENT", "error": err.Error()})
 	}
-	results, err := h.cacheAdminService.PurgeOrphans(items, c.Request().Header.Get(uploadTokenHeader))
+	results, err := h.cacheAdminService.PurgeOrphans(items)
 	if err != nil {
 		return writeUploadError(c, "cache purge failed", err)
 	}

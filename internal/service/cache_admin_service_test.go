@@ -10,50 +10,25 @@ import (
 // 服务层只负责鉴权、筛选、排序、分页；磁盘上的判定在 dao 里测。
 // 这里用一个空仓库目录就够了——被测的是这几层纯逻辑。
 
-func newCacheAdminServiceForTest(t *testing.T, token string) *CacheAdminService {
+func newCacheAdminServiceForTest(t *testing.T) *CacheAdminService {
 	t.Helper()
 	oldConfig := config.SysConfig
 	config.SysConfig = &config.Config{
 		Server:   config.ServerConfig{Repos: t.TempDir()},
 		Download: config.Download{BlockSize: 1024},
-		Upload:   config.Upload{Namespace: "dingo-local", Token: token},
+		Upload:   config.Upload{Namespace: "dingo-local"},
 	}
 	t.Cleanup(func() { config.SysConfig = oldConfig })
 	return NewCacheAdminService(dao.NewCacheAdminDao(nil))
 }
 
-// 缓存管理接口会删数据，任何一个入口漏掉 token 校验都是把删除能力暴露出去。
-func TestCacheAdminRequiresToken(t *testing.T) {
-	svc := newCacheAdminServiceForTest(t, "secret")
-	items := []dao.DeleteItem{{RepoType: "models", OrgRepo: "dingo-local/demo", Path: "a", Sha: "b"}}
-
-	calls := map[string]func(token string) error{
-		"summary": func(token string) error { _, err := svc.Summary(token); return err },
-		"repos":   func(token string) error { _, err := svc.ListRepos(token); return err },
-		"files":   func(token string) error { _, err := svc.ListFiles(CacheQuery{}, token); return err },
-		"orphans": func(token string) error { _, err := svc.ListOrphans(CacheQuery{}, token); return err },
-		"delete":  func(token string) error { _, err := svc.SoftDelete(items, token); return err },
-		"purge":   func(token string) error { _, err := svc.PurgeOrphans(items, token); return err },
-	}
-	for name, call := range calls {
-		if err := call(""); err == nil {
-			t.Fatalf("%s must reject a missing token", name)
-		}
-		if err := call("wrong"); err == nil {
-			t.Fatalf("%s must reject an invalid token", name)
-		}
-		if err := call("secret"); err != nil {
-			t.Fatalf("%s rejected a valid token: %v", name, err)
-		}
-	}
-}
-
+// 缓存管理接口会删数据，空批次必须被明确拒绝，不能被当成"删全部"。
 func TestCacheAdminRejectsEmptyDeleteBatch(t *testing.T) {
-	svc := newCacheAdminServiceForTest(t, "secret")
-	if _, err := svc.SoftDelete(nil, "secret"); err == nil {
+	svc := newCacheAdminServiceForTest(t)
+	if _, err := svc.SoftDelete(nil); err == nil {
 		t.Fatalf("an empty delete batch must be rejected")
 	}
-	if _, err := svc.PurgeOrphans(nil, "secret"); err == nil {
+	if _, err := svc.PurgeOrphans(nil); err == nil {
 		t.Fatalf("an empty purge batch must be rejected")
 	}
 }

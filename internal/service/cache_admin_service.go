@@ -73,10 +73,7 @@ type RecyclePage struct {
 	TotalSize int64             `json:"totalSize"`
 }
 
-func (s *CacheAdminService) Summary(token string) (*CacheSummary, error) {
-	if err := validateUploadToken(token); err != nil {
-		return nil, err
-	}
+func (s *CacheAdminService) Summary() (*CacheSummary, error) {
 	repos := s.cacheAdminDao.ListRepos()
 	summary := &CacheSummary{
 		RepoCount:              len(repos),
@@ -98,17 +95,11 @@ func (s *CacheAdminService) Summary(token string) (*CacheSummary, error) {
 	return summary, nil
 }
 
-func (s *CacheAdminService) ListRepos(token string) ([]*dao.CacheRepo, error) {
-	if err := validateUploadToken(token); err != nil {
-		return nil, err
-	}
+func (s *CacheAdminService) ListRepos() ([]*dao.CacheRepo, error) {
 	return s.cacheAdminDao.ListRepos(), nil
 }
 
-func (s *CacheAdminService) ListFiles(query CacheQuery, token string) (*CacheFilePage, error) {
-	if err := validateUploadToken(token); err != nil {
-		return nil, err
-	}
+func (s *CacheAdminService) ListFiles(query CacheQuery) (*CacheFilePage, error) {
 	rows := s.cacheAdminDao.ListFiles(query.RepoType, query.OrgRepo)
 	filtered := make([]*dao.CacheFileRow, 0, len(rows))
 	for _, row := range rows {
@@ -131,10 +122,7 @@ func (s *CacheAdminService) ListFiles(query CacheQuery, token string) (*CacheFil
 	}, nil
 }
 
-func (s *CacheAdminService) ListOrphans(query CacheQuery, token string) (*RecyclePage, error) {
-	if err := validateUploadToken(token); err != nil {
-		return nil, err
-	}
+func (s *CacheAdminService) ListOrphans(query CacheQuery) (*RecyclePage, error) {
 	rows := s.cacheAdminDao.ListOrphans(query.RepoType, query.OrgRepo)
 	filtered := make([]*dao.RecycleRow, 0, len(rows))
 	var totalSize int64
@@ -158,20 +146,14 @@ func (s *CacheAdminService) ListOrphans(query CacheQuery, token string) (*Recycl
 	}, nil
 }
 
-func (s *CacheAdminService) SoftDelete(items []dao.DeleteItem, token string) ([]*dao.DeleteResult, error) {
-	if err := validateUploadToken(token); err != nil {
-		return nil, err
-	}
+func (s *CacheAdminService) SoftDelete(items []dao.DeleteItem) ([]*dao.DeleteResult, error) {
 	if len(items) == 0 {
 		return nil, uploadError{status: 400, code: "CACHE_INVALID_ARGUMENT", msg: "items is empty"}
 	}
 	return s.cacheAdminDao.SoftDelete(items)
 }
 
-func (s *CacheAdminService) PurgeOrphans(items []dao.DeleteItem, token string) ([]*dao.DeleteResult, error) {
-	if err := validateUploadToken(token); err != nil {
-		return nil, err
-	}
+func (s *CacheAdminService) PurgeOrphans(items []dao.DeleteItem) ([]*dao.DeleteResult, error) {
 	if len(items) == 0 {
 		return nil, uploadError{status: 400, code: "CACHE_INVALID_ARGUMENT", msg: "items is empty"}
 	}

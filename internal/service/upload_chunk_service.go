@@ -47,11 +47,8 @@ func (l *chunkLimiter) release() {
 //
 // contentLength 必须是明确的字节数：幂等快路径要在读请求体之前就判断“本 chunk 覆盖的块
 // 是否已经全部置位”，没有长度就算不出覆盖了哪些块，只能先把内容读进内存再丢掉。
-func (u *UploadService) UploadChunk(param dao.LocalChunkUploadParam, rawSize, rawOffset, chunkSha, token string,
+func (u *UploadService) UploadChunk(param dao.LocalChunkUploadParam, rawSize, rawOffset, chunkSha string,
 	contentLength int64, body io.Reader) (*dao.LocalChunkUploadResult, error) {
-	if err := validateUploadToken(token); err != nil {
-		return nil, err
-	}
 	if err := validateUploadLocator(dao.LocalUploadParam{
 		RepoType: param.RepoType,
 		Org:      param.Org,

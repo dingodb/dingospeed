@@ -168,13 +168,17 @@ type Modelscope struct {
 type Upload struct {
 	Host                          string `json:"host" yaml:"host"`
 	Port                          int    `json:"port" yaml:"port"`
-	Token                         string `json:"token" yaml:"token"`
 	Namespace                     string `json:"namespace" yaml:"namespace"`
 	ConcurrentLimit               int    `json:"concurrentLimit" yaml:"concurrentLimit"`
 	StagingRetentionHours         int    `json:"stagingRetentionHours" yaml:"stagingRetentionHours"`
 	StagingCleanupIntervalMinutes int    `json:"stagingCleanupIntervalMinutes" yaml:"stagingCleanupIntervalMinutes"`
 	PublishMaxFiles               int    `json:"publishMaxFiles" yaml:"publishMaxFiles"`
 	OrphanRetentionHours          int    `json:"orphanRetentionHours" yaml:"orphanRetentionHours"`
+	// SupersededRetentionHours 是仓库编辑顶下去的旧快照的保留期。
+	// 它不是历史保留期：旧快照不进任何列表、不可切换查看，这段窗口只用来
+	// 让在途下载（客户端按 sha 逐文件下载，大模型可持续数十分钟）不至于整片 404，
+	// 并给用户一步“撤销上次修改”的机会。
+	SupersededRetentionHours int `json:"supersededRetentionHours" yaml:"supersededRetentionHours"`
 	// ChunkConcurrentLimit 与 ConcurrentLimit 是两个独立的槽位，不能合用：
 	// 后者是“整文件上传”语义（默认 4），套到分块上会让四个并发块把其它文件全挡成 429，
 	// 而乱序并发正是分块上传存在的理由。
@@ -376,6 +380,13 @@ func (c *Config) GetUploadStagingRetention() time.Duration {
 	return time.Duration(c.Upload.StagingRetentionHours) * time.Hour
 }
 
+func (c *Config) GetUploadSupersededRetention() time.Duration {
+	if c.Upload.SupersededRetentionHours <= 0 {
+		return 24 * time.Hour
+	}
+	return time.Duration(c.Upload.SupersededRetentionHours) * time.Hour
+}
+
 func (c *Config) GetUploadStagingCleanupInterval() time.Duration {
 	if c.Upload.StagingCleanupIntervalMinutes == 0 {
 		c.Upload.StagingCleanupIntervalMinutes = 60
@@ -512,10 +523,5 @@ func Scan(path string) (*Config, error) {
 }
 
 func marshalConfigForLog(c *Config) ([]byte, error) {
-	token := c.Upload.Token
-	c.Upload.Token = "<redacted>"
-	defer func() {
-		c.Upload.Token = token
-	}()
 	return yaml.Marshal(c)
 }

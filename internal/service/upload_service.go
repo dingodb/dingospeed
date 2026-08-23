@@ -29,10 +29,7 @@ func NewUploadService(uploadDao *dao.UploadDao) *UploadService {
 
 // UploadWholeFile 一次调用上传一个完整文件。rawSize 是调用方声明的完整字节大小，
 // 由本方法在身份校验之后解析，保证未通过身份校验的请求不会先收到参数错误。
-func (u *UploadService) UploadWholeFile(param dao.LocalUploadParam, rawSize, rawStart, token string, body io.Reader) (*dao.LocalUploadResult, error) {
-	if err := validateUploadToken(token); err != nil {
-		return nil, err
-	}
+func (u *UploadService) UploadWholeFile(param dao.LocalUploadParam, rawSize, rawStart string, body io.Reader) (*dao.LocalUploadResult, error) {
 	size, err := ParseDeclaredSize(rawSize)
 	if err != nil {
 		return nil, uploadError{status: 400, code: "UPLOAD_INVALID_ARGUMENT", msg: err.Error()}
@@ -72,10 +69,7 @@ func (u *UploadService) UploadWholeFile(param dao.LocalUploadParam, rawSize, raw
 }
 
 // PublishFiles 让一批已经完整落盘的文件一次性生效。
-func (u *UploadService) PublishFiles(param dao.LocalPublishParam, token string) (*dao.LocalPublishResult, error) {
-	if err := validateUploadToken(token); err != nil {
-		return nil, err
-	}
+func (u *UploadService) PublishFiles(param dao.LocalPublishParam) (*dao.LocalPublishResult, error) {
 	if err := validatePublishParam(param); err != nil {
 		return nil, uploadError{status: 400, code: "PUBLISH_INVALID_ARGUMENT", msg: err.Error()}
 	}
@@ -98,15 +92,22 @@ func validatePublishParam(param dao.LocalPublishParam) error {
 	if err := validateRepoLocator(param.RepoType, param.Org, param.Repo, param.Revision); err != nil {
 		return err
 	}
-	if len(param.Files) == 0 {
-		return fmt.Errorf("files is required and must not be empty")
-	}
-	if maxFiles := config.SysConfig.GetUploadPublishMaxFiles(); len(param.Files) > maxFiles {
-		return fmt.Errorf("too many files in one publish: %d, max %d", len(param.Files), maxFiles)
+	return validateManifestList(param.Files)
+}
+
+// validateManifestList 校验一份清单本身的合法性，批量发布与整树发布共用。
+//
+// 空清单是合法的：它表示一个还没有任何文件的版本。新建仓库、新建 revision 都要先
+// 有这样一个空版本，用户才有地方把文件加进去；清空一个 revision 同理。空清单在
+// 存储层本来就是可表示的（缓存管理删到最后一个文件就会写出一份空清单），
+// 在入口处禁掉它只会让这三个入口无法完成第一步。
+func validateManifestList(files []dao.LocalManifestFile) error {
+	if maxFiles := config.SysConfig.GetUploadPublishMaxFiles(); len(files) > maxFiles {
+		return fmt.Errorf("too many files in one publish: %d, max %d", len(files), maxFiles)
 	}
 	maxSize := int64(downloader.DEFAULT_BLOCK_MASK_MAX) * config.SysConfig.Download.BlockSize
-	seen := make(map[string]struct{}, len(param.Files))
-	for _, item := range param.Files {
+	seen := make(map[string]struct{}, len(files))
+	for _, item := range files {
 		if err := validateFileLocator(item.Path, item.Sha256); err != nil {
 			return err
 		}
@@ -126,10 +127,48 @@ func validatePublishParam(param dao.LocalPublishParam) error {
 	return nil
 }
 
-func (u *UploadService) QueryProgress(param dao.LocalUploadParam, token string) (*dao.LocalUploadProgress, error) {
-	if err := validateUploadToken(token); err != nil {
-		return nil, err
+// registrationRevision 是控制面写登记信息用的版本标签，不接受用户编辑。
+const registrationRevision = "meta"
+
+// PublishTree 用一份完整的目标清单取代某个 revision 当前的清单。
+// 新增与删除在这里合成一次提交，只产生一个新快照。
+func (u *UploadService) PublishTree(param dao.LocalPublishTreeParam) (*dao.LocalPublishTreeResult, error) {
+	if err := validatePublishTreeParam(param); err != nil {
+		return nil, uploadError{status: 400, code: "PUBLISH_TREE_INVALID_ARGUMENT", msg: err.Error()}
 	}
+	zap.S().Infof("local publish tree start: %s/%s/%s revision=%s base=%s files=%d",
+		param.RepoType, param.Org, param.Repo, param.Revision, param.BaseCommit, len(param.Files))
+	result, err := u.uploadDao.PublishTree(param)
+	if err != nil {
+		if _, ok := err.(interface{ StatusCode() int }); ok {
+			return nil, err
+		}
+		return nil, uploadError{status: 500, code: "PUBLISH_TREE_INTERNAL_ERROR", msg: err.Error()}
+	}
+	zap.S().Infof("local publish tree done: %s/%s/%s revision=%s commit=%s previous=%s status=%s added=%d replaced=%d removed=%d total=%d",
+		param.RepoType, param.Org, param.Repo, param.Revision, result.Commit, result.PreviousCommit, result.Status,
+		result.Added, result.Replaced, result.Removed, result.FileCount)
+	return result, nil
+}
+
+func validatePublishTreeParam(param dao.LocalPublishTreeParam) error {
+	if err := validateRepoLocator(param.RepoType, param.Org, param.Repo, param.Revision); err != nil {
+		return err
+	}
+	// 登记快照由控制面维护，用户编辑它会让登记信息与仓库状态对不上。
+	if param.Revision == registrationRevision {
+		return fmt.Errorf("revision %s is reserved for model registration and cannot be edited", registrationRevision)
+	}
+	if !sha256Pattern.MatchString(param.BaseCommit) {
+		return fmt.Errorf("baseCommit must be a 64-character lowercase hex string")
+	}
+	// 目标清单为空意味着“把这个 revision 清空”。标签仍然保留，指向一份空清单，
+	// 与新建出来还没加文件的 revision 是同一个状态；下载方拿到的是一个空仓库，
+	// 而不是 404。要真正去掉这个版本是删除 revision，那是另一个入口的事。
+	return validateManifestList(param.Files)
+}
+
+func (u *UploadService) QueryProgress(param dao.LocalUploadParam) (*dao.LocalUploadProgress, error) {
 	if err := validateUploadLocator(param); err != nil {
 		return nil, uploadError{status: 400, code: "UPLOAD_INVALID_ARGUMENT", msg: err.Error()}
 	}
@@ -273,19 +312,6 @@ type uploadError struct {
 	status int
 	code   string
 	msg    string
-}
-
-func validateUploadToken(token string) error {
-	if config.SysConfig.Upload.Token == "" {
-		return uploadError{status: 403, code: "UPLOAD_DISABLED", msg: "upload token is not configured"}
-	}
-	if token == "" {
-		return uploadError{status: 401, code: "UPLOAD_TOKEN_MISSING", msg: "missing upload token"}
-	}
-	if token != config.SysConfig.Upload.Token {
-		return uploadError{status: 403, code: "UPLOAD_TOKEN_INVALID", msg: "invalid upload token"}
-	}
-	return nil
 }
 
 func (e uploadError) Error() string {
