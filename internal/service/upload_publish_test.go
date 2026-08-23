@@ -25,7 +25,7 @@ func validPublishParam() dao.LocalPublishParam {
 }
 
 func TestValidatePublishParamAcceptsRealisticBatches(t *testing.T) {
-	withUploadConfig(t, "secret")
+	withUploadConfig(t)
 
 	cases := []struct {
 		name  string
@@ -66,7 +66,7 @@ func TestValidatePublishParamAcceptsRealisticBatches(t *testing.T) {
 // §9.10：发布清单是一个新的、批量的不可信输入入口，路径逃逸矩阵必须在这里重跑一遍，
 // 不能因为“上传时已经校验过”就跳过。
 func TestValidatePublishParamRejectionMatrix(t *testing.T) {
-	withUploadConfig(t, "secret")
+	withUploadConfig(t)
 
 	badValues := []struct {
 		name  string
@@ -170,13 +170,14 @@ func TestValidatePublishParamRejectionMatrix(t *testing.T) {
 
 // §9.4：清单本身的形态问题——空清单、超上限、重复路径。
 func TestValidatePublishParamListShape(t *testing.T) {
-	withUploadConfig(t, "secret")
+	withUploadConfig(t)
 
+	// 空清单是合法的：新建仓库/新建 revision 的第一步就是发布一份空清单。
 	t.Run("empty list", func(t *testing.T) {
 		param := validPublishParam()
 		param.Files = nil
-		if err := validatePublishParam(param); err == nil {
-			t.Fatalf("expected an empty publish list to be rejected")
+		if err := validatePublishParam(param); err != nil {
+			t.Fatalf("an empty publish list should be accepted, got %v", err)
 		}
 	})
 	t.Run("over the file count limit", func(t *testing.T) {
@@ -210,29 +211,71 @@ func TestValidatePublishParamListShape(t *testing.T) {
 	})
 }
 
-// §9.10 凭证：发布接口与上传共用同一个凭证，三类失败必须可区分且不触及落盘。
-func TestPublishTokenHandling(t *testing.T) {
-	svc := NewUploadService(nil)
+func validPublishTreeParam() dao.LocalPublishTreeParam {
+	return dao.LocalPublishTreeParam{
+		RepoType:   "models",
+		Org:        "dingo-local",
+		Repo:       "demo",
+		Revision:   "main",
+		BaseCommit: testSha,
+		Files: []dao.LocalManifestFile{
+			{Path: "config.json", Sha256: testSha, Size: 10},
+		},
+	}
+}
 
-	withUploadConfig(t, "")
-	if _, err := svc.PublishFiles(validPublishParam(), "anything"); errorCodeOf(err) != "UPLOAD_DISABLED" {
-		t.Fatalf("expected UPLOAD_DISABLED when no token is configured, got %v", err)
-	}
+func TestValidatePublishTreeParamRejectionMatrix(t *testing.T) {
+	withUploadConfig(t)
 
-	withUploadConfig(t, "secret")
-	if _, err := svc.PublishFiles(validPublishParam(), ""); errorCodeOf(err) != "UPLOAD_TOKEN_MISSING" {
-		t.Fatalf("expected UPLOAD_TOKEN_MISSING, got %v", err)
+	cases := []struct {
+		name   string
+		mutate func(*dao.LocalPublishTreeParam)
+		want   string
+	}{
+		{"registration revision", func(p *dao.LocalPublishTreeParam) { p.Revision = "meta" }, "reserved for model registration"},
+		{"missing base commit", func(p *dao.LocalPublishTreeParam) { p.BaseCommit = "" }, "baseCommit"},
+		{"short base commit", func(p *dao.LocalPublishTreeParam) { p.BaseCommit = "abc123" }, "baseCommit"},
+		{"uppercase base commit", func(p *dao.LocalPublishTreeParam) { p.BaseCommit = strings.ToUpper(testSha) }, "baseCommit"},
+		{"path escape", func(p *dao.LocalPublishTreeParam) {
+			p.Files = []dao.LocalManifestFile{{Path: "../escape.bin", Sha256: testSha, Size: 1}}
+		}, "filePath"},
+		{"duplicate path", func(p *dao.LocalPublishTreeParam) {
+			p.Files = []dao.LocalManifestFile{
+				{Path: "config.json", Sha256: testSha, Size: 1},
+				{Path: "config.json", Sha256: testSha, Size: 2},
+			}
+		}, "duplicate path"},
 	}
-	if _, err := svc.PublishFiles(validPublishParam(), "wrong"); errorCodeOf(err) != "UPLOAD_TOKEN_INVALID" {
-		t.Fatalf("expected UPLOAD_TOKEN_INVALID, got %v", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			param := validPublishTreeParam()
+			tc.mutate(&param)
+			err := validatePublishTreeParam(param)
+			if err == nil {
+				t.Fatal("expected the param to be rejected")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error %q does not mention %q", err.Error(), tc.want)
+			}
+		})
 	}
-	// 参数错误必须排在身份校验之后。
-	bad := validPublishParam()
-	bad.Files = nil
-	if _, err := svc.PublishFiles(bad, "wrong"); errorCodeOf(err) != "UPLOAD_TOKEN_INVALID" {
-		t.Fatalf("expected token check to precede parameter checks, got %v", err)
+}
+
+// 把一个 revision 里的文件删光是一次正常的编辑：标签保留，指向一份空清单，
+// 与新建出来还没加文件的 revision 是同一个状态。
+func TestValidatePublishTreeParamAcceptsClearingEveryFile(t *testing.T) {
+	withUploadConfig(t)
+
+	param := validPublishTreeParam()
+	param.Files = nil
+	if err := validatePublishTreeParam(param); err != nil {
+		t.Fatalf("clearing every file should be accepted, got %v", err)
 	}
-	if _, err := svc.PublishFiles(bad, "secret"); errorCodeOf(err) != "PUBLISH_INVALID_ARGUMENT" {
-		t.Fatalf("expected PUBLISH_INVALID_ARGUMENT, got %v", err)
+}
+
+func TestValidatePublishTreeParamAcceptsAnEdit(t *testing.T) {
+	withUploadConfig(t)
+	if err := validatePublishTreeParam(validPublishTreeParam()); err != nil {
+		t.Fatalf("expected the param to be accepted: %v", err)
 	}
 }

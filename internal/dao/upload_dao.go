@@ -434,10 +434,15 @@ func (u *UploadDao) PublishFiles(param LocalPublishParam) (*LocalPublishResult, 
 // 发布清单是调用方声明的，不能信：少传了一个文件、传了一半就中断、内容被外部删掉，
 // 都会让清单进入“有记录但没文件”的破损状态，而那正是生效语义明令不允许出现的。
 func (u *UploadDao) verifyPublishContent(param LocalPublishParam, orgRepo string) error {
+	return verifyManifestContent(param.RepoType, orgRepo, param.Files)
+}
+
+// verifyManifestContent 是这项检查的唯一实现，批量发布与整树发布共用。
+func verifyManifestContent(repoType, orgRepo string, files []LocalManifestFile) error {
 	repos := config.SysConfig.Repos()
 	var missing, mismatched []string
-	for _, item := range param.Files {
-		blobPath := localBlobPath(param.RepoType, orgRepo, item.Sha256)
+	for _, item := range files {
+		blobPath := localBlobPath(repoType, orgRepo, item.Sha256)
 		if err := ensureLocalUploadPathSafe(repos, blobPath); err != nil {
 			return err
 		}
@@ -1234,6 +1239,14 @@ func (u *UploadDao) RunStagedUploadCleanup(ctx context.Context) {
 			} else if removed > 0 {
 				zap.S().Infof("cleanup expired staged uploads removed %d file(s)", removed)
 			}
+			// 待回收快照要排在 blob 回收之前：快照还在盘上时它的清单仍然算引用
+			// （referencedShas 扫的是全部快照），里面的内容永远轮不到回收。
+			dropped, err := u.CleanupSupersededSnapshots(config.SysConfig.GetUploadSupersededRetention())
+			if err != nil {
+				zap.S().Warnf("drop superseded snapshots failed: %v", err)
+			} else if dropped > 0 {
+				zap.S().Infof("dropped %d superseded snapshot(s)", dropped)
+			}
 			retention := config.SysConfig.GetUploadOrphanRetention()
 			reclaimed, err := u.CleanupUnreferencedBlobs(retention)
 			if err != nil {
@@ -1331,12 +1344,25 @@ func (u *UploadDao) nextCommitBatch(current, uploaded []LocalManifestFile) (stri
 // 与发布路径完全一致的标识下。两处各写一遍序列化，同样的内容就会算出两个标识，
 // 客户端会把它们当成两个版本白白重下一遍。
 func manifestCommit(manifest []LocalManifestFile) (string, error) {
-	data, err := sonic.Marshal(manifest)
+	data, err := sonic.Marshal(canonicalManifest(manifest))
 	if err != nil {
 		return "", err
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// canonicalManifest 把空清单统一成 nil 之外的那一种写法。
+//
+// 空清单是可以出现的（新建的空 revision、被清空的 revision），而 nil 切片序列化成
+// null、长度为 0 的切片序列化成 []，两者算出的快照标识不同。同一个“没有文件”的状态
+// 落在两个标识下，写入方和读回方就会各自认一个，标签指向的目录与清单所在的目录对不上。
+// 落盘与算标识都走这里，空清单在系统里就只有 [] 这一种形态。
+func canonicalManifest(manifest []LocalManifestFile) []LocalManifestFile {
+	if manifest == nil {
+		return []LocalManifestFile{}
+	}
+	return manifest
 }
 
 func (u *UploadDao) readManifest(repoType, orgRepo, commit string) []LocalManifestFile {
@@ -1362,7 +1388,7 @@ func (u *UploadDao) writeEffectiveMetadata(repoType, orgRepo, revision, commit s
 	if err := util.MakeDirs(manifestPath); err != nil {
 		return err
 	}
-	if err := util.WriteDataToFileAtomic(manifestPath, manifest); err != nil {
+	if err := util.WriteDataToFileAtomic(manifestPath, canonicalManifest(manifest)); err != nil {
 		return err
 	}
 	if err := u.writeMeta(repoType, orgRepo, commit, commit, manifest); err != nil {

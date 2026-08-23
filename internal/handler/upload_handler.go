@@ -14,8 +14,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const uploadTokenHeader = "X-Dingo-Upload-Token"
-
 type UploadHandler struct {
 	uploadService *service.UploadService
 }
@@ -35,7 +33,7 @@ func (h *UploadHandler) UploadWholeFile(c echo.Context) error {
 		Overwrite: strings.EqualFold(c.QueryParam("overwrite"), "true"),
 		Deferred:  strings.EqualFold(c.QueryParam("defer"), "true"),
 	}
-	result, err := h.uploadService.UploadWholeFile(param, c.QueryParam("size"), c.QueryParam("start"), c.Request().Header.Get(uploadTokenHeader), c.Request().Body)
+	result, err := h.uploadService.UploadWholeFile(param, c.QueryParam("size"), c.QueryParam("start"), c.Request().Body)
 	if err != nil {
 		return writeUploadError(c, "local upload failed", err)
 	}
@@ -61,7 +59,6 @@ func (h *UploadHandler) UploadChunk(c echo.Context) error {
 		c.QueryParam("size"),
 		c.QueryParam("offset"),
 		c.QueryParam("chunkSha256"),
-		c.Request().Header.Get(uploadTokenHeader),
 		c.Request().ContentLength,
 		c.Request().Body,
 	)
@@ -119,9 +116,55 @@ func (h *UploadHandler) PublishFiles(c echo.Context) error {
 			Size:   item.Size,
 		})
 	}
-	result, err := h.uploadService.PublishFiles(param, c.Request().Header.Get(uploadTokenHeader))
+	result, err := h.uploadService.PublishFiles(param)
 	if err != nil {
 		return writeUploadError(c, "local publish failed", err)
+	}
+	return c.JSON(http.StatusCreated, result)
+}
+
+// publishTreeRequest 是整树发布的请求体。files 是目标全量清单，不是增量批次。
+type publishTreeRequest struct {
+	BaseCommit string               `json:"baseCommit"`
+	Files      []publishRequestFile `json:"files"`
+}
+
+func (h *UploadHandler) PublishTree(c echo.Context) error {
+	body, err := io.ReadAll(io.LimitReader(c.Request().Body, maxPublishBodyBytes+1))
+	if err != nil {
+		return writeUploadError(c, "local publish tree failed", err)
+	}
+	if len(body) > maxPublishBodyBytes {
+		return c.JSON(http.StatusRequestEntityTooLarge, map[string]string{
+			"code":  "PUBLISH_BODY_TOO_LARGE",
+			"error": fmt.Sprintf("publish body exceeds %d bytes", maxPublishBodyBytes),
+		})
+	}
+	var req publishTreeRequest
+	if err = sonic.Unmarshal(body, &req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"code":  "PUBLISH_TREE_INVALID_ARGUMENT",
+			"error": fmt.Sprintf("publish body is not valid json: %v", err),
+		})
+	}
+	param := dao.LocalPublishTreeParam{
+		RepoType:   c.Param("repoType"),
+		Org:        c.Param("org"),
+		Repo:       c.Param("repo"),
+		Revision:   c.Param("revision"),
+		BaseCommit: req.BaseCommit,
+		Files:      make([]dao.LocalManifestFile, 0, len(req.Files)),
+	}
+	for _, item := range req.Files {
+		param.Files = append(param.Files, dao.LocalManifestFile{
+			Path:   item.Path,
+			Sha256: item.Sha256,
+			Size:   item.Size,
+		})
+	}
+	result, err := h.uploadService.PublishTree(param)
+	if err != nil {
+		return writeUploadError(c, "local publish tree failed", err)
 	}
 	return c.JSON(http.StatusCreated, result)
 }
@@ -135,7 +178,7 @@ func (h *UploadHandler) QueryProgress(c echo.Context) error {
 		FilePath: c.Param("*"),
 		Sha256:   c.QueryParam("sha256"),
 	}
-	result, err := h.uploadService.QueryProgress(param, c.Request().Header.Get(uploadTokenHeader))
+	result, err := h.uploadService.QueryProgress(param)
 	if err != nil {
 		return writeUploadError(c, "local upload progress failed", err)
 	}

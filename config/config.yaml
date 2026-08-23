@@ -18,13 +18,13 @@ server:
 upload:
     host: 127.0.0.1
     port: 8091
-    token: "dev-token-change-me"
     namespace: dingo-local
     concurrentLimit: 4
     stagingRetentionHours: 168
     stagingCleanupIntervalMinutes: 60
     publishMaxFiles: 5000
     orphanRetentionHours: 168
+    supersededRetentionHours: 24    #仓库编辑顶下去的旧快照的保留期，用于在途下载与一步撤销，不是历史保留
     chunkConcurrentLimit: 8      #分块上传的并发请求上限，与整文件上传的concurrentLimit相互独立
     chunkMaxBytes: 67108864      #单个分块的字节上限（默认64MB）。峰值内存约为 chunkConcurrentLimit × chunkMaxBytes
 

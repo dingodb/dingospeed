@@ -288,7 +288,10 @@ func (m *MetaService) localRepositoryFiles(repoType, orgRepo, commit, filePath, 
 			Link: fmt.Sprintf("%s/%s", downloadLinkRoot, item.Path),
 		})
 	}
-	if len(fileDescribes) == 0 {
+	// 清单本身就是空的（新建还没加文件、或者被清空的 revision），那么仓库根目录下
+	// 确实一个文件都没有，这是仓库的正常状态，不是“路径不存在”。只有在清单非空
+	// 却筛不出任何东西时，才说明调用方要的那一级目录不存在。
+	if len(fileDescribes) == 0 && !(prefix == "" && len(manifest) == 0) {
 		return nil, fmt.Errorf("file not exists")
 	}
 	sortNodes(fileDescribes)

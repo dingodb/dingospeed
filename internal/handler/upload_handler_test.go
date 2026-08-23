@@ -25,7 +25,7 @@ func newTestUploadHandler(t *testing.T) (*UploadHandler, *echo.Echo) {
 	config.SysConfig = &config.Config{
 		Server:   config.ServerConfig{Repos: t.TempDir()},
 		Download: config.Download{BlockSize: 1024},
-		Upload:   config.Upload{Namespace: "dingo-local", Token: "secret", ConcurrentLimit: 4},
+		Upload:   config.Upload{Namespace: "dingo-local", ConcurrentLimit: 4},
 	}
 	t.Cleanup(func() { config.SysConfig = oldConfig })
 
@@ -46,7 +46,6 @@ func doUpload(t *testing.T, h *UploadHandler, e *echo.Echo, filePath string, con
 	target := fmt.Sprintf("/api/local-upload/models/dingo-local/demo/main/%s?size=%d&sha256=%s&%s",
 		filePath, len(content), shaOf(content), query)
 	req := httptest.NewRequest(http.MethodPost, target, bytes.NewReader(content))
-	req.Header.Set(uploadTokenHeader, "secret")
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.SetParamNames("repoType", "org", "repo", "revision", "*")
@@ -61,7 +60,6 @@ func doPublish(t *testing.T, h *UploadHandler, e *echo.Echo, body string, query 
 	t.Helper()
 	target := "/api/local-publish/models/dingo-local/demo/main?" + query
 	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
-	req.Header.Set(uploadTokenHeader, "secret")
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 	c.SetParamNames("repoType", "org", "repo", "revision")
@@ -158,13 +156,6 @@ func TestPublishRejectsMalformedBody(t *testing.T) {
 		}
 	})
 
-	t.Run("empty file list", func(t *testing.T) {
-		rec := doPublish(t, h, e, `{"files":[]}`, "")
-		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("empty list returned %d: %s", rec.Code, rec.Body.String())
-		}
-	})
-
 	t.Run("body too large", func(t *testing.T) {
 		rec := doPublish(t, h, e, strings.Repeat("x", maxPublishBodyBytes+1), "")
 		if rec.Code != http.StatusRequestEntityTooLarge {
@@ -174,6 +165,24 @@ func TestPublishRejectsMalformedBody(t *testing.T) {
 			t.Fatalf("unexpected error code: %s", rec.Body.String())
 		}
 	})
+}
+
+// 空清单不是畸形请求：新建仓库、新建 revision 都是先发布一份空清单，
+// 拿到一个还没有任何文件的版本，用户之后才有地方把文件加进去。
+func TestPublishAcceptsEmptyFileListToCreateAnEmptyRevision(t *testing.T) {
+	h, e := newTestUploadHandler(t)
+
+	rec := doPublish(t, h, e, `{"files":[]}`, "")
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("empty list returned %d: %s", rec.Code, rec.Body.String())
+	}
+	body := decodeBody(t, rec)
+	if commit, _ := body["commit"].(string); len(commit) != 64 {
+		t.Fatalf("empty publish did not return a commit: %s", rec.Body.String())
+	}
+	if count, _ := body["fileCount"].(float64); int(count) != 0 {
+		t.Fatalf("empty publish fileCount is %v, want 0", body["fileCount"])
+	}
 }
 
 // §9.4：发布清单里有内容没传完时整次拒绝，并且响应里要能看出是哪个路径。
@@ -198,25 +207,5 @@ func TestPublishOverHTTPReportsUnreadyPaths(t *testing.T) {
 	}
 	if msg, _ := body["error"].(string); !strings.Contains(msg, "ghost.bin") {
 		t.Fatalf("error must name the unready path: %s", rec.Body.String())
-	}
-}
-
-func TestPublishRequiresToken(t *testing.T) {
-	h, e := newTestUploadHandler(t)
-
-	req := httptest.NewRequest(http.MethodPost, "/api/local-publish/models/dingo-local/demo/main",
-		strings.NewReader(`{"files":[{"path":"a.bin","sha256":"`+strings.Repeat("a", 64)+`","size":1}]}`))
-	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
-	c.SetParamNames("repoType", "org", "repo", "revision")
-	c.SetParamValues("models", "dingo-local", "demo", "main")
-	if err := h.PublishFiles(c); err != nil {
-		t.Fatalf("publish handler returned error: %v", err)
-	}
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("publish without a token returned %d: %s", rec.Code, rec.Body.String())
-	}
-	if decodeBody(t, rec)["code"] != "UPLOAD_TOKEN_MISSING" {
-		t.Fatalf("unexpected error code: %s", rec.Body.String())
 	}
 }
