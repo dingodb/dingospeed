@@ -24,11 +24,16 @@ type UploadServer struct {
 }
 
 func NewUploadServer(config *config.Config, uploadRouter *router.UploadRouter) *UploadServer {
+	// The listen address is whatever upload.host says. It is not forced to
+	// loopback here: under bridge networking that made the port unreachable from
+	// outside the container, which is why the Spinfield control plane could never
+	// talk to it. Leaving an operator's explicit 0.0.0.0 in place is the point.
+	//
+	// This is not a widening by default: config.Scan still fills an empty
+	// upload.host with 127.0.0.1, so every deployment that has not set it keeps
+	// binding loopback exactly as before. Opening the port is a configuration
+	// decision, and reverting that one config value is the whole rollback.
 	host := config.Upload.Host
-	if !isLoopbackHost(host) {
-		zap.S().Warnf("upload.host %s is not loopback; forcing 127.0.0.1", host)
-		host = "127.0.0.1"
-	}
 	s := &UploadServer{
 		network: "tcp",
 		address: fmt.Sprintf("%s:%d", host, config.Upload.Port),
@@ -72,9 +77,4 @@ func NewUploadEngine() router.UploadEcho {
 
 func uploadRouterEcho(r *router.UploadRouter) *echo.Echo {
 	return r.Echo()
-}
-
-func isLoopbackHost(host string) bool {
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
