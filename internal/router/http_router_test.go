@@ -10,27 +10,28 @@ import (
 )
 
 const localSnapshotRoute = "/api/local-repositories/:repoType/:org/:repo/revisions/:revision"
+const localArchiveRoute = localSnapshotRoute + "/archive"
 
 func TestLocalRepositoryRoutesAreOptIn(t *testing.T) {
 	oldConfig := config.SysConfig
 	t.Cleanup(func() { config.SysConfig = oldConfig })
 
-	hasRoute := func(enabled bool) bool {
+	routes := func(enabled bool) map[string]bool {
 		config.SysConfig = &config.Config{Server: config.ServerConfig{LocalRepositoryAPI: enabled}}
 		e := echo.New()
 		NewHttpRouter(e, handler.NewFileHandler(nil, nil, nil), handler.NewMetaHandler(nil), handler.NewSysHandler(nil), handler.NewCacheJobHandler(nil), handler.NewModelscopeHandler(nil))
+		got := map[string]bool{}
 		for _, route := range e.Routes() {
-			if route.Method == "GET" && route.Path == localSnapshotRoute {
-				return true
-			}
+			got[route.Method+" "+route.Path] = true
 		}
-		return false
+		return got
 	}
 
-	if hasRoute(false) {
+	if got := routes(false); got["GET "+localSnapshotRoute] || got["GET "+localArchiveRoute] || got["HEAD "+localArchiveRoute] {
 		t.Fatal("local repository API route is enabled by default")
 	}
-	if !hasRoute(true) {
+	got := routes(true)
+	if !got["GET "+localSnapshotRoute] || !got["GET "+localArchiveRoute] || !got["HEAD "+localArchiveRoute] {
 		t.Fatal("local repository API route is missing when enabled")
 	}
 }

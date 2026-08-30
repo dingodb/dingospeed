@@ -15,9 +15,12 @@
 package downloader
 
 import (
+	"bytes"
 	"fmt"
 	"path/filepath"
 	"testing"
+
+	"dingospeed/pkg/config"
 
 	"go.uber.org/zap"
 )
@@ -52,4 +55,33 @@ func TestFileWrite3(t *testing.T) {
 	size := -14
 	s := make([]byte, (size+7)/8)
 	fmt.Println(len(s))
+}
+
+func TestCopyPayloadExcludesHeaderAndRequiresCompleteBlocks(t *testing.T) {
+	oldConfig := config.SysConfig
+	config.SysConfig = &config.Config{}
+	t.Cleanup(func() { config.SysConfig = oldConfig })
+	cache, err := NewDingCache(filepath.Join(t.TempDir(), "cachefile"), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cache.Close() }()
+	if err = cache.Resize(7); err != nil {
+		t.Fatal(err)
+	}
+	if err = cache.WriteBlock(0, []byte("abcd")); err != nil {
+		t.Fatal(err)
+	}
+	var partial bytes.Buffer
+	if _, err = cache.CopyPayload(&partial); err == nil {
+		t.Fatal("incomplete cache payload was copied")
+	}
+	if err = cache.WriteBlock(1, []byte("efg0")); err != nil {
+		t.Fatal(err)
+	}
+	var complete bytes.Buffer
+	written, err := cache.CopyPayload(&complete)
+	if err != nil || written != 7 || complete.String() != "abcdefg" {
+		t.Fatalf("written=%d payload=%q err=%v", written, complete.String(), err)
+	}
 }

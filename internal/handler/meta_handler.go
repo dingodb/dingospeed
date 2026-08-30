@@ -15,6 +15,7 @@
 package handler
 
 import (
+	"mime"
 	"net/http"
 	"strings"
 
@@ -122,6 +123,38 @@ func (handler *MetaHandler) GetLocalSnapshotHandler(c echo.Context) error {
 		return util.ErrorProxyError(c)
 	}
 	return c.JSON(http.StatusOK, snapshot)
+}
+
+func (handler *MetaHandler) GetLocalArchiveHandler(c echo.Context) error {
+	repoType := c.Param("repoType")
+	org := c.Param("org")
+	repo := c.Param("repo")
+	orgRepo := util.GetOrgRepo(org, repo)
+	if _, ok := consts.RepoTypesMapping[repoType]; !ok || org == "" || repo == "" || !dao.IsLocalOrgRepo(orgRepo) {
+		return util.ErrorPageNotFound(c)
+	}
+	revision := c.Param("revision")
+	if c.Request().Method == http.MethodHead {
+		if _, err := handler.metaService.GetLocalSnapshot(repoType, orgRepo, revision); err != nil {
+			if e, ok := err.(myerr.Error); ok {
+				return util.ErrorEntryUnknown(c, e.StatusCode(), e.Error())
+			}
+			return util.ErrorProxyError(c)
+		}
+		setLocalArchiveHeaders(c, repo+"-"+revision+".zip")
+		return c.NoContent(http.StatusOK)
+	}
+	setLocalArchiveHeaders(c, repo+"-"+revision+".zip")
+	if err := handler.metaService.StreamLocalArchive(repoType, orgRepo, revision, repo, c.Response()); err != nil {
+		zap.S().Errorf("stream local archive err.%v", err)
+		return err
+	}
+	return nil
+}
+
+func setLocalArchiveHeaders(c echo.Context, filename string) {
+	c.Response().Header().Set(echo.HeaderContentType, "application/zip")
+	c.Response().Header().Set(echo.HeaderContentDisposition, mime.FormatMediaType("attachment", map[string]string{"filename": filename}))
 }
 
 func (handler *MetaHandler) WhoamiV2Handler(c echo.Context) error {
