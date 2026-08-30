@@ -47,6 +47,17 @@ type RepoTreeItem struct {
 	Lfs  *common.Lfs `json:"lfs,omitempty"`
 }
 
+type LocalSnapshotFile struct {
+	Path   string `json:"path"`
+	Size   int64  `json:"size"`
+	Sha256 string `json:"sha256"`
+}
+
+type LocalSnapshot struct {
+	Commit string              `json:"commit"`
+	Files  []LocalSnapshotFile `json:"files"`
+}
+
 func NewMetaService(fileDao *dao.FileDao, metaDao *dao.MetaDao) *MetaService {
 	return &MetaService{
 		fileDao: fileDao,
@@ -111,6 +122,25 @@ func (m *MetaService) GetRepoTree(repoType, orgRepo, revision, pathInRepo string
 		return items[i].Path < items[j].Path
 	})
 	return items, nil
+}
+
+// GetLocalSnapshot is the stable HTTP-facing contract for one local revision.
+// Cache envelopes, manifest filenames and their on-disk layout remain private
+// to dingospeed behind this method.
+func (m *MetaService) GetLocalSnapshot(repoType, orgRepo, revision string) (*LocalSnapshot, error) {
+	commit, err := m.fileDao.GetFileCommitSha(repoType, orgRepo, revision, "", "meta")
+	if err != nil {
+		return nil, err
+	}
+	manifest, err := m.fileDao.ReadLocalManifest(repoType, orgRepo, commit)
+	if err != nil {
+		return nil, err
+	}
+	files := make([]LocalSnapshotFile, len(manifest))
+	for i, file := range manifest {
+		files[i] = LocalSnapshotFile{Path: file.Path, Size: file.Size, Sha256: file.Sha256}
+	}
+	return &LocalSnapshot{Commit: commit, Files: files}, nil
 }
 
 func stableTreeID(path string) string {

@@ -60,6 +60,12 @@ func (r *HttpRouter) initRouter() {
 }
 
 func (r *HttpRouter) routerForSpeed() { // alayanew
+	// The local repository contract is opt-in so existing deployments keep the
+	// exact same route table until their control plane is ready to consume it.
+	if config.SysConfig.Server.LocalRepositoryAPI {
+		r.echo.GET("/api/local-repositories/:repoType/:org/:repo/revisions/:revision", r.metaHandler.GetLocalSnapshotHandler)
+	}
+
 	// 单个文件下载
 	r.echo.HEAD("/:repoType/:org/:repo/resolve/:commit/:filePath", r.fileHandler.HeadFileHandler1)
 	r.echo.HEAD("/:orgOrRepoType/:repo/resolve/:commit/:filePath", r.fileHandler.HeadFileHandler2)

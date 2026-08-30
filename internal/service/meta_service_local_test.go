@@ -113,3 +113,20 @@ func TestGetRepoTreeForLocalRepo(t *testing.T) {
 		t.Fatalf("unexpected shallow tree: %+v", shallow)
 	}
 }
+
+func TestGetLocalSnapshotReturnsCommitAndCompleteManifest(t *testing.T) {
+	meta, commit := uploadLocalRepo(t, []string{"config.json", "subdir/tokenizer.json"})
+	snapshot, err := meta.GetLocalSnapshot("models", "dingo-local/demo", "main")
+	if err != nil {
+		t.Fatalf("GetLocalSnapshot failed: %v", err)
+	}
+	if snapshot.Commit != commit || len(snapshot.Files) != 2 {
+		t.Fatalf("unexpected snapshot: %+v", snapshot)
+	}
+	if snapshot.Files[0].Path != "config.json" || snapshot.Files[0].Size == 0 || snapshot.Files[0].Sha256 == "" {
+		t.Fatalf("unexpected first file: %+v", snapshot.Files[0])
+	}
+	if snapshot.Files[1].Path != "subdir/tokenizer.json" || snapshot.Files[1].Size == 0 || snapshot.Files[1].Sha256 == "" {
+		t.Fatalf("unexpected second file: %+v", snapshot.Files[1])
+	}
+}
