@@ -64,6 +64,8 @@ func (r *HttpRouter) routerForSpeed() { // alayanew
 	// exact same route table until their control plane is ready to consume it.
 	if config.SysConfig.Server.LocalRepositoryAPI {
 		r.echo.GET("/api/local-repositories/:repoType/:org/:repo/revisions/:revision", r.metaHandler.GetLocalSnapshotHandler)
+		r.echo.GET("/api/local-repositories/:repoType/:org/:repo/revisions/:revision/archive", r.metaHandler.GetLocalArchiveHandler)
+		r.echo.HEAD("/api/local-repositories/:repoType/:org/:repo/revisions/:revision/archive", r.metaHandler.GetLocalArchiveHandler)
 	}
 
 	// 单个文件下载

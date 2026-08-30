@@ -16,9 +16,12 @@ package dao
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -294,6 +297,46 @@ func GetAnalysisFilePosition(dingFile *downloader.DingCache, startPos, endPos in
 // filepath.Join 会做 Clean，两种情况都被吸收掉。
 func BlobPath(repoType, orgRepo, etag string) string {
 	return filepath.Join(config.SysConfig.Repos(), "files", repoType, orgRepo, "blobs", etag)
+}
+
+// CopyLocalBlob streams the payload portion of one complete DingCache blob and
+// verifies it against the manifest hash while the blob is protected from
+// replacement or reclamation.
+func (f *FileDao) CopyLocalBlob(repoType, orgRepo, sha string, size int64, w io.Writer) error {
+	blobPath := BlobPath(repoType, orgRepo, sha)
+	if err := ensureLocalUploadPathSafe(config.SysConfig.Repos(), blobPath); err != nil {
+		return err
+	}
+	blobKey := uploadBlobLockKey(repoType, orgRepo, sha)
+	uploadBlobLocks.RLock(blobKey)
+	defer uploadBlobLocks.RUnlock(blobKey)
+	info, err := os.Lstat(blobPath)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("local blob is not a regular file")
+	}
+	dingFile, err := downloader.GetInstance().GetDingFile(blobPath, size)
+	if err != nil {
+		return err
+	}
+	defer downloader.GetInstance().ReleasedDingFile(blobPath)
+	if dingFile.GetFileSize() != size {
+		return fmt.Errorf("local blob size is %d, manifest declares %d", dingFile.GetFileSize(), size)
+	}
+	digest := sha256.New()
+	written, err := dingFile.CopyPayload(io.MultiWriter(w, digest))
+	if err != nil {
+		return err
+	}
+	if written != size {
+		return fmt.Errorf("copied %d local blob bytes, want %d", written, size)
+	}
+	if actual := hex.EncodeToString(digest.Sum(nil)); !strings.EqualFold(actual, sha) {
+		return fmt.Errorf("local blob sha256 mismatch: manifest %s, actual %s", sha, actual)
+	}
+	return nil
 }
 
 // ResolvePath 是某个快照下仓库内路径对应的软链位置，与 BlobPath 同理只此一处。

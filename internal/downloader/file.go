@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 
@@ -220,6 +221,34 @@ func (c *DingCache) ReadBlock(blockIndex int64) ([]byte, error) {
 	}
 	block := c.padBlock(rawBlock)
 	return block, nil
+}
+
+// CopyPayload writes only the cached file content, excluding the DingCache
+// header and bitmap. Every block must already be present.
+func (c *DingCache) CopyPayload(w io.Writer) (int64, error) {
+	var written int64
+	for blockIndex := int64(0); blockIndex < c.getBlockNumber(); blockIndex++ {
+		block, err := c.ReadBlock(blockIndex)
+		if err != nil {
+			return written, err
+		}
+		if block == nil {
+			return written, fmt.Errorf("cache block %d is missing", blockIndex)
+		}
+		remaining := c.GetFileSize() - written
+		if int64(len(block)) > remaining {
+			block = block[:remaining]
+		}
+		n, err := io.Copy(w, bytes.NewReader(block))
+		written += n
+		if err != nil {
+			return written, err
+		}
+	}
+	if written != c.GetFileSize() {
+		return written, fmt.Errorf("copied %d payload bytes, want %d", written, c.GetFileSize())
+	}
+	return written, nil
 }
 
 func (c *DingCache) readBlockAndCache(f *os.File, blockIndex int64) {

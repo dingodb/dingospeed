@@ -1,10 +1,13 @@
 package service
 
 import (
+	"archive/zip"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 	"testing"
+	"time"
 
 	"dingospeed/internal/dao"
 	"dingospeed/internal/data"
@@ -128,5 +131,42 @@ func TestGetLocalSnapshotReturnsCommitAndCompleteManifest(t *testing.T) {
 	}
 	if snapshot.Files[1].Path != "subdir/tokenizer.json" || snapshot.Files[1].Size == 0 || snapshot.Files[1].Sha256 == "" {
 		t.Fatalf("unexpected second file: %+v", snapshot.Files[1])
+	}
+}
+
+func TestStreamLocalArchiveMatchesExistingArchiveShape(t *testing.T) {
+	meta, _ := uploadLocalRepo(t, []string{"config.json", "subdir/tokenizer.json"})
+	var output bytes.Buffer
+	if err := meta.StreamLocalArchive("models", "dingo-local/demo", "main", "demo", &output); err != nil {
+		t.Fatalf("StreamLocalArchive failed: %v", err)
+	}
+	reader, err := zip.NewReader(bytes.NewReader(output.Bytes()), int64(output.Len()))
+	if err != nil {
+		t.Fatalf("open archive failed: %v", err)
+	}
+	want := map[string]string{
+		"demo/config.json":           "content of config.json",
+		"demo/subdir/tokenizer.json": "content of subdir/tokenizer.json",
+	}
+	if len(reader.File) != len(want) {
+		t.Fatalf("archive has %d entries, want %d", len(reader.File), len(want))
+	}
+	for _, file := range reader.File {
+		if file.Method != zip.Store || !file.Modified.Equal(time.Unix(0, 0).UTC()) {
+			t.Fatalf("unexpected header for %s: method=%d modified=%s", file.Name, file.Method, file.Modified)
+		}
+		body, err := file.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		content, err := io.ReadAll(body)
+		_ = body.Close()
+		if err != nil || string(content) != want[file.Name] {
+			t.Fatalf("unexpected content for %s: %q err=%v", file.Name, content, err)
+		}
+		delete(want, file.Name)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing archive entries: %v", want)
 	}
 }

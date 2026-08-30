@@ -15,12 +15,15 @@
 package service
 
 import (
+	"archive/zip"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
+	"path"
 	"sort"
 	"strings"
+	"time"
 
 	"dingospeed/internal/dao"
 	"dingospeed/pkg/common"
@@ -141,6 +144,31 @@ func (m *MetaService) GetLocalSnapshot(repoType, orgRepo, revision string) (*Loc
 		files[i] = LocalSnapshotFile{Path: file.Path, Size: file.Size, Sha256: file.Sha256}
 	}
 	return &LocalSnapshot{Commit: commit, Files: files}, nil
+}
+
+// StreamLocalArchive writes a deterministic, uncompressed ZIP for one local
+// revision. The manifest remains the source of entry names, sizes and hashes;
+// blob payloads are verified while they are copied.
+func (m *MetaService) StreamLocalArchive(repoType, orgRepo, revision, repo string, w io.Writer) error {
+	snapshot, err := m.GetLocalSnapshot(repoType, orgRepo, revision)
+	if err != nil {
+		return err
+	}
+	archive := zip.NewWriter(w)
+	for _, file := range snapshot.Files {
+		header := &zip.FileHeader{Name: path.Join(repo, file.Path), Method: zip.Store}
+		header.SetModTime(time.Unix(0, 0).UTC())
+		entry, err := archive.CreateHeader(header)
+		if err != nil {
+			_ = archive.Close()
+			return err
+		}
+		if err := m.fileDao.CopyLocalBlob(repoType, orgRepo, file.Sha256, file.Size, entry); err != nil {
+			_ = archive.Close()
+			return err
+		}
+	}
+	return archive.Close()
 }
 
 func stableTreeID(path string) string {
