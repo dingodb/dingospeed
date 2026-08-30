@@ -52,19 +52,20 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Mode       string `json:"mode" yaml:"mode"`
-	Host       string `json:"host" yaml:"host"`
-	Port       int    `json:"port" yaml:"port"`
-	PProf      bool   `json:"pprof" yaml:"pprof"`
-	PProfPort  int    `json:"pprofPort" yaml:"pprofPort"`
-	Metrics    bool   `json:"metrics" yaml:"metrics"`
-	Online     bool   `json:"online" yaml:"online"`
-	Repos      string `json:"repos" yaml:"repos"`
-	HfNetLoc   string `json:"hfNetLoc" yaml:"hfNetLoc"`
-	BpHfNetLoc string `json:"bpHfNetLoc" yaml:"bpHfNetLoc"`
-	XetNetLoc  string `json:"xetNetLoc" yaml:"xetNetLoc"`
-	HfScheme   string `json:"hfScheme" yaml:"hfScheme" validate:"oneof=https http"`
-	Ssl        SSL    `json:"ssl" yaml:"ssl"`
+	Mode               string `json:"mode" yaml:"mode"`
+	Host               string `json:"host" yaml:"host"`
+	Port               int    `json:"port" yaml:"port"`
+	PProf              bool   `json:"pprof" yaml:"pprof"`
+	PProfPort          int    `json:"pprofPort" yaml:"pprofPort"`
+	Metrics            bool   `json:"metrics" yaml:"metrics"`
+	Online             bool   `json:"online" yaml:"online"`
+	Repos              string `json:"repos" yaml:"repos"`
+	LocalRepositoryAPI bool   `json:"localRepositoryAPI" yaml:"localRepositoryAPI"`
+	HfNetLoc           string `json:"hfNetLoc" yaml:"hfNetLoc"`
+	BpHfNetLoc         string `json:"bpHfNetLoc" yaml:"bpHfNetLoc"`
+	XetNetLoc          string `json:"xetNetLoc" yaml:"xetNetLoc"`
+	HfScheme           string `json:"hfScheme" yaml:"hfScheme" validate:"oneof=https http"`
+	Ssl                SSL    `json:"ssl" yaml:"ssl"`
 }
 
 type SSL struct {

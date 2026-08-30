@@ -106,6 +106,24 @@ func (handler *MetaHandler) GetRepoTreeHandler(c echo.Context) error {
 	return c.JSON(http.StatusOK, tree)
 }
 
+func (handler *MetaHandler) GetLocalSnapshotHandler(c echo.Context) error {
+	repoType := c.Param("repoType")
+	org := c.Param("org")
+	repo := c.Param("repo")
+	orgRepo := util.GetOrgRepo(org, repo)
+	if _, ok := consts.RepoTypesMapping[repoType]; !ok || org == "" || repo == "" || !dao.IsLocalOrgRepo(orgRepo) {
+		return util.ErrorPageNotFound(c)
+	}
+	snapshot, err := handler.metaService.GetLocalSnapshot(repoType, orgRepo, c.Param("revision"))
+	if err != nil {
+		if e, ok := err.(myerr.Error); ok {
+			return util.ErrorEntryUnknown(c, e.StatusCode(), e.Error())
+		}
+		return util.ErrorProxyError(c)
+	}
+	return c.JSON(http.StatusOK, snapshot)
+}
+
 func (handler *MetaHandler) WhoamiV2Handler(c echo.Context) error {
 	return handler.metaService.WhoamiV2(c)
 }
