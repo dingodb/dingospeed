@@ -127,9 +127,6 @@ func validateManifestList(files []dao.LocalManifestFile) error {
 	return nil
 }
 
-// registrationRevision 是控制面写登记信息用的版本标签，不接受用户编辑。
-const registrationRevision = "meta"
-
 // PublishTree 用一份完整的目标清单取代某个 revision 当前的清单。
 // 新增与删除在这里合成一次提交，只产生一个新快照。
 func (u *UploadService) PublishTree(param dao.LocalPublishTreeParam) (*dao.LocalPublishTreeResult, error) {
@@ -154,10 +151,6 @@ func (u *UploadService) PublishTree(param dao.LocalPublishTreeParam) (*dao.Local
 func validatePublishTreeParam(param dao.LocalPublishTreeParam) error {
 	if err := validateRepoLocator(param.RepoType, param.Org, param.Repo, param.Revision); err != nil {
 		return err
-	}
-	// 登记快照由控制面维护，用户编辑它会让登记信息与仓库状态对不上。
-	if param.Revision == registrationRevision {
-		return fmt.Errorf("revision %s is reserved for model registration and cannot be edited", registrationRevision)
 	}
 	if !sha256Pattern.MatchString(param.BaseCommit) {
 		return fmt.Errorf("baseCommit must be a 64-character lowercase hex string")

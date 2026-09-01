@@ -232,7 +232,6 @@ func TestValidatePublishTreeParamRejectionMatrix(t *testing.T) {
 		mutate func(*dao.LocalPublishTreeParam)
 		want   string
 	}{
-		{"registration revision", func(p *dao.LocalPublishTreeParam) { p.Revision = "meta" }, "reserved for model registration"},
 		{"missing base commit", func(p *dao.LocalPublishTreeParam) { p.BaseCommit = "" }, "baseCommit"},
 		{"short base commit", func(p *dao.LocalPublishTreeParam) { p.BaseCommit = "abc123" }, "baseCommit"},
 		{"uppercase base commit", func(p *dao.LocalPublishTreeParam) { p.BaseCommit = strings.ToUpper(testSha) }, "baseCommit"},
@@ -270,6 +269,18 @@ func TestValidatePublishTreeParamAcceptsClearingEveryFile(t *testing.T) {
 	param.Files = nil
 	if err := validatePublishTreeParam(param); err != nil {
 		t.Fatalf("clearing every file should be accepted, got %v", err)
+	}
+}
+
+func TestValidatePublishTreeParamAcceptsMetaRevision(t *testing.T) {
+	withUploadConfig(t)
+
+	for _, revision := range []string{"meta", "Meta"} {
+		param := validPublishTreeParam()
+		param.Revision = revision
+		if err := validatePublishTreeParam(param); err != nil {
+			t.Fatalf("%s must be accepted like an ordinary revision, got %v", revision, err)
+		}
 	}
 }
 

@@ -964,23 +964,21 @@ func TestOrphanRowCarriesExpiry(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// A' 登记快照：控制面写的 meta 版本既不在列表里，也删不掉。
+// meta 与普通 revision 使用完全相同的列表和删除语义。
 // ---------------------------------------------------------------------------
 
-// stageRegistration 造一份登记快照：只含 metadata.json 与 README.md，发布在 meta 版本下。
-func stageRegistration(t *testing.T, u *UploadDao, metadata, readme []byte) *LocalPublishResult {
+func stageMetaRevision(t *testing.T, u *UploadDao, metadata, readme []byte) *LocalPublishResult {
 	t.Helper()
 	mustStage(t, u, deferredParam("metadata.json", metadata), metadata)
 	mustStage(t, u, deferredParam("README.md", readme), readme)
 	param := publishParam("meta",
 		manifestItem("metadata.json", metadata),
 		manifestItem("README.md", readme))
-	// 重新登记就是覆盖同名文件，控制面发布时同样带着 overwrite。
 	param.Overwrite = true
 	return mustPublish(t, u, param)
 }
 
-func TestListFilesHidesRegistrationSnapshot(t *testing.T) {
+func TestListFilesShowsMetaRevision(t *testing.T) {
 	admin, u, _ := newTestCacheAdminDao(t)
 	const orgRepo = "dingo-local/demo"
 
@@ -989,102 +987,96 @@ func TestListFilesHidesRegistrationSnapshot(t *testing.T) {
 	mustPublish(t, u, publishParam("main", manifestItem("weights/model.bin", weights)))
 	metadata := []byte("{\"repo\":\"demo\"}")
 	readme := []byte("# demo")
-	stageRegistration(t, u, metadata, readme)
+	stageMetaRevision(t, u, metadata, readme)
 
 	rows := admin.ListFiles("models", orgRepo)
-	if len(rows) != 1 || rows[0].Path != "weights/model.bin" {
-		t.Fatalf("registration files must not appear in the listing, got %+v", rows)
+	if len(rows) != 3 || findRow(rows, "metadata.json", sha256Hex(metadata)) == nil ||
+		findRow(rows, "README.md", sha256Hex(readme)) == nil ||
+		findRow(rows, "weights/model.bin", sha256Hex(weights)) == nil {
+		t.Fatalf("meta files must appear like ordinary revision files, got %+v", rows)
 	}
 
-	// 页面上的数字与看得见的行必须一致：仓库汇总同样不能把登记内容算进去。
 	repos := admin.ListRepos()
 	if len(repos) != 1 {
 		t.Fatalf("expected 1 repo, got %d", len(repos))
 	}
-	if repos[0].FileCount != 1 || repos[0].TotalSize != int64(len(weights)) {
-		t.Fatalf("repo totals must exclude registration content, got count=%d size=%d",
+	if repos[0].FileCount != 3 || repos[0].TotalSize != int64(len(weights)+len(metadata)+len(readme)) {
+		t.Fatalf("repo totals must include meta content, got count=%d size=%d",
 			repos[0].FileCount, repos[0].TotalSize)
 	}
 }
 
-func TestListFilesHidesSupersededRegistrationSnapshot(t *testing.T) {
+func TestListFilesShowsSupersededMetaSnapshotLikeAnyOtherSnapshot(t *testing.T) {
 	admin, u, _ := newTestCacheAdminDao(t)
 	const orgRepo = "dingo-local/demo"
 
-	first := stageRegistration(t, u, []byte("{\"v\":1}"), []byte("# v1"))
-	second := stageRegistration(t, u, []byte("{\"v\":2}"), []byte("# v2"))
+	first := stageMetaRevision(t, u, []byte("{\"v\":1}"), []byte("# v1"))
+	second := stageMetaRevision(t, u, []byte("{\"v\":2}"), []byte("# v2"))
 	if first.Commit == second.Commit {
-		t.Fatalf("test setup is wrong: expected two distinct registration snapshots")
+		t.Fatalf("test setup is wrong: expected two distinct snapshots")
 	}
 
-	// 第二次登记让第一份快照失去了 meta 标签，但它仍被自己的清单引用着。
-	// 判定认清单内容而不认标签，这份历史快照同样不该冒出来。
-	if rows := admin.ListFiles("models", orgRepo); len(rows) != 0 {
-		t.Fatalf("superseded registration snapshot must stay hidden, got %+v", rows)
+	// 普通快照在保留期结束前仍参与缓存索引。
+	if rows := admin.ListFiles("models", orgRepo); len(rows) != 4 {
+		t.Fatalf("both ordinary snapshots must remain visible until normal cleanup, got %+v", rows)
 	}
 }
 
-func TestListFilesStillShowsUserFileThatSharesRegistrationContent(t *testing.T) {
+func TestListFilesMergesSharedContentAcrossMainAndMeta(t *testing.T) {
 	admin, u, _ := newTestCacheAdminDao(t)
 	const orgRepo = "dingo-local/demo"
 
-	// 用户自己上传的 README.md 与登记快照里的那份字节相同（空描述就会这样），
-	// 它是用户的文件，必须照常显示。
 	readme := []byte("# demo")
 	mustStage(t, u, deferredParam("README.md", readme), readme)
 	mustPublish(t, u, publishParam("main", manifestItem("README.md", readme)))
-	stageRegistration(t, u, []byte("{\"repo\":\"demo\"}"), readme)
+	stageMetaRevision(t, u, []byte("{\"repo\":\"demo\"}"), readme)
 
 	row := findRow(admin.ListFiles("models", orgRepo), "README.md", sha256Hex(readme))
 	if row == nil {
-		t.Fatalf("a user file must not be hidden just because the registration snapshot shares its content")
+		t.Fatal("shared README is missing")
 	}
-	// 这一行如实带着两个标签：同一份内容确实同时挂在 main 和登记快照上。
-	// 它删不掉（见 TestSoftDeleteRefusesUserFileSharedWithRegistration），但不该消失。
 	if len(row.Revisions) != 2 || row.Revisions[0] != "main" || row.Revisions[1] != "meta" {
 		t.Fatalf("revisions = %v, want [main meta]", row.Revisions)
 	}
 }
 
-func TestSoftDeleteRefusesRegistrationMetadata(t *testing.T) {
+func TestSoftDeleteMetaFileUsesOrdinarySnapshotRewrite(t *testing.T) {
 	admin, u, _ := newTestCacheAdminDao(t)
 	const orgRepo = "dingo-local/demo"
 
 	metadata := []byte("{\"repo\":\"demo\"}")
-	published := stageRegistration(t, u, metadata, []byte("# demo"))
+	published := stageMetaRevision(t, u, metadata, []byte("# demo"))
 
 	sha := sha256Hex(metadata)
 	results, err := admin.SoftDelete([]DeleteItem{{RepoType: "models", OrgRepo: orgRepo, Path: "metadata.json", Sha: sha}})
 	if err != nil {
 		t.Fatalf("soft delete failed: %v", err)
 	}
-	if len(results) != 1 || results[0].Status != "skipped" {
-		t.Fatalf("deleting registration metadata must be refused, got %+v", results[0])
+	if len(results) != 1 || results[0].Status != "deleted" {
+		t.Fatalf("deleting a meta file must use ordinary delete semantics, got %+v", results[0])
 	}
 
-	// 清单原封不动，标识也不能被作废——否则登记信息就此丢失。
-	manifest := mustReadManifest(t, "models", orgRepo, published.Commit)
-	if _, found := findManifestFile(manifest, "metadata.json"); !found {
-		t.Fatalf("the registration snapshot must be left untouched")
+	currentCommit := revisionCommit(t, u, "models", orgRepo, "meta")
+	if currentCommit == published.Commit {
+		t.Fatal("meta revision was not rewritten")
 	}
-	if revisionCommit(t, u, "models", orgRepo, "meta") != published.Commit {
-		t.Fatalf("the meta tag must still point at the same snapshot")
+	manifest := mustReadManifest(t, "models", orgRepo, currentCommit)
+	if _, found := findManifestFile(manifest, "metadata.json"); found {
+		t.Fatal("metadata.json survived ordinary delete")
 	}
-	if tombstoneExists("models", orgRepo, sha) {
-		t.Fatalf("a refused delete must not leave a recycle tombstone")
+	if !tombstoneExists("models", orgRepo, sha) {
+		t.Fatal("unreferenced metadata content did not enter the recycle bin")
 	}
 }
 
-func TestSoftDeleteUserFileSharedWithRegistrationKeepsTheRegistrationCopy(t *testing.T) {
+func TestSoftDeleteSharedMainAndMetaFileRemovesBothReferences(t *testing.T) {
 	admin, u, _ := newTestCacheAdminDao(t)
 	const orgRepo = "dingo-local/demo"
 
-	// 同一个路径的同一份内容既在 main 上又在登记快照里（用户上传的 README.md 与
-	// 空描述生成的那份摘要相同）。这是用户自己的文件，删得掉；登记快照那一份不动。
 	readme := []byte("# demo")
 	mustStage(t, u, deferredParam("README.md", readme), readme)
 	mustPublish(t, u, publishParam("main", manifestItem("README.md", readme)))
-	registration := stageRegistration(t, u, []byte("{\"repo\":\"demo\"}"), readme)
+	stageMetaRevision(t, u, []byte("{\"repo\":\"demo\"}"), readme)
 
 	sha := sha256Hex(readme)
 	results, err := admin.SoftDelete([]DeleteItem{{RepoType: "models", OrgRepo: orgRepo, Path: "README.md", Sha: sha}})
@@ -1092,33 +1084,22 @@ func TestSoftDeleteUserFileSharedWithRegistrationKeepsTheRegistrationCopy(t *tes
 		t.Fatalf("soft delete failed: %v", err)
 	}
 	if len(results) != 1 || results[0].Status != "deleted" {
-		t.Fatalf("a user file must stay deletable even when the registration snapshot shares its content, got %+v", results[0])
+		t.Fatalf("shared ordinary file delete failed: %+v", results[0])
 	}
 
-	// main 上没了。
-	current := mustReadManifest(t, "models", orgRepo, revisionCommit(t, u, "models", orgRepo, "main"))
-	if _, found := findManifestFile(current, "README.md"); found {
-		t.Fatalf("the file must be gone from main")
+	for _, revision := range []string{"main", "meta"} {
+		current := mustReadManifest(t, "models", orgRepo, revisionCommit(t, u, "models", orgRepo, revision))
+		if _, found := findManifestFile(current, "README.md"); found {
+			t.Fatalf("README.md survived delete in %s", revision)
+		}
 	}
-	// 登记快照原样保留，标识不作废。
-	if revisionCommit(t, u, "models", orgRepo, "meta") != registration.Commit {
-		t.Fatalf("the meta tag must still point at the same snapshot")
+	if !tombstoneExists("models", orgRepo, sha) {
+		t.Fatal("unreferenced shared content did not enter the recycle bin")
 	}
-	if _, found := findManifestFile(mustReadManifest(t, "models", orgRepo, registration.Commit), "README.md"); !found {
-		t.Fatalf("the registration snapshot must keep its own copy")
+	if findOrphan(admin.ListOrphans("models", orgRepo), sha) == nil {
+		t.Fatal("shared content is missing from the recycle bin")
 	}
-	// 内容还被登记快照引用着，不能进回收站，否则自动回收会把它删掉。
-	if tombstoneExists("models", orgRepo, sha) {
-		t.Fatalf("content the registration snapshot still references must not be recycled")
-	}
-	if findOrphan(admin.ListOrphans("models", orgRepo), sha) != nil {
-		t.Fatalf("content the registration snapshot still references must not show up as an orphan")
-	}
-	if !blobExists("models", orgRepo, sha) {
-		t.Fatalf("the blob must stay on disk")
-	}
-	// 这一行只剩登记引用了，从列表里消失。
 	if findRow(admin.ListFiles("models", orgRepo), "README.md", sha) != nil {
-		t.Fatalf("the deleted user file must disappear from the listing")
+		t.Fatal("deleted shared README still appears in cache listing")
 	}
 }

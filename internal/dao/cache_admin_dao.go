@@ -225,8 +225,6 @@ type repoIndex struct {
 	BySha    map[string][]repoRef
 	// TagsOf 把快照标识映射回指向它的版本标签（main、v1 之类）。
 	TagsOf map[string][]string
-	// Registration 是登记快照的标识集合，见 isRegistrationManifest。
-	Registration map[string]struct{}
 }
 
 func repoSource(orgRepo string) string {
@@ -259,8 +257,6 @@ func buildRepoIndex(repoType, orgRepo string) *repoIndex {
 		Blobs:    make(map[string]blobStat),
 		BySha:    make(map[string][]repoRef),
 		TagsOf:   make(map[string][]string),
-
-		Registration: make(map[string]struct{}),
 	}
 	collectRepoBlobs(idx)
 	collectRepoTags(idx)
@@ -340,61 +336,6 @@ func readCacheContent(path string) ([]byte, error) {
 	return hex.DecodeString(cacheContent.Content)
 }
 
-// registrationFiles 是登记快照允许出现的全部文件名。
-//
-// 登记快照由 spinfield 控制面写入（它把这批内容发布在 meta 版本下），记录的是
-// 模型的登记信息与模型卡片，而不是用户缓存的模型内容。它对用户不可见也不可删：
-// 删掉它不会释放任何有意义的空间，却会让该仓库全部版本的登记记录一起消失。
-var registrationFiles = map[string]struct{}{
-	"metadata.json": {},
-	"README.md":     {},
-}
-
-// registrationRevision 是控制面写登记信息用的版本标签。
-const registrationRevision = "meta"
-
-// isRegistrationManifest 判断一份清单是不是登记快照。
-//
-// 认清单内容而不是只认 meta 这个标签：一次新的登记会让上一份登记快照失去标签，
-// 但它仍然被自己的清单引用着、仍然在盘上。只认标签的话，这些历史登记快照会重新
-// 出现在列表里并且可删，等于护栏只在最新那一份上生效。
-//
-// metadata.json 必须在场：登记快照总是两个文件一起写，而“只有一个 README.md”
-// 是再普通不过的用户仓库，不能因为文件名撞上就被藏起来。
-func isRegistrationManifest(manifest []LocalManifestFile) bool {
-	hasMetadata := false
-	for _, item := range manifest {
-		if _, ok := registrationFiles[item.Path]; !ok {
-			return false
-		}
-		if item.Path == "metadata.json" {
-			hasMetadata = true
-		}
-	}
-	return hasMetadata
-}
-
-// isRegistrationCommit 在清单形状之外再要求这份快照没有被别的标签占用：
-// 登记快照要么当前挂在 meta 上，要么是被新登记顶掉、已经不带标签的历史版本。
-// 用户真把 metadata.json + README.md 发布到 main 上，那是他自己的文件，照常显示。
-func isRegistrationCommit(tags []string, manifest []LocalManifestFile) bool {
-	if !isRegistrationManifest(manifest) {
-		return false
-	}
-	for _, tag := range tags {
-		if tag != registrationRevision {
-			return false
-		}
-	}
-	return true
-}
-
-// isRegistrationRef 判断某条引用是否落在登记快照上。
-func (idx *repoIndex) isRegistrationRef(ref repoRef) bool {
-	_, ok := idx.Registration[ref.Commit]
-	return ok
-}
-
 // collectManifestRefs 收集本地仓库的引用：扫全部快照清单，与 referencedShas 同源。
 func collectManifestRefs(idx *repoIndex) {
 	revisionRoot := filepath.Join(repoApiRoot(idx.RepoType, idx.OrgRepo), "revision")
@@ -409,9 +350,6 @@ func collectManifestRefs(idx *repoIndex) {
 		manifest, readErr := readManifestFile(LocalManifestPath(idx.RepoType, idx.OrgRepo, entry.Name()))
 		if readErr != nil {
 			continue
-		}
-		if isRegistrationCommit(idx.TagsOf[entry.Name()], manifest) {
-			idx.Registration[entry.Name()] = struct{}{}
 		}
 		for _, item := range manifest {
 			idx.BySha[item.Sha256] = append(idx.BySha[item.Sha256], repoRef{Commit: entry.Name(), Path: item.Path})
@@ -636,16 +574,9 @@ func (d *CacheAdminDao) ListFiles(repoType, orgRepo string) []*CacheFileRow {
 	return rows
 }
 
-// indexRows 汇总一级列表的行，登记快照独占的内容不在其中。
-//
-// 过滤放在这里而不是各个调用点：ListRepos 的文件数/占用与 ListFiles 的行都出自
-// 这个函数，页面上的数字才不会与看得见的行对不上。
-// 只有“全部引用都在登记快照上”的行才隐藏：同一份内容若还被普通版本引用（比如
-// 用户自己上传了一个空的 README.md，与空描述生成的那份摘要相同），它就是用户的
-// 文件，仍要照常显示。
+// indexRows 汇总一级列表的行。
 func indexRows(idx *repoIndex) []*CacheFileRow {
 	byKey := make(map[string]*CacheFileRow)
-	userRef := make(map[string]bool)
 	order := make([]string, 0)
 	for sha, refs := range idx.BySha {
 		stat := idx.Blobs[sha]
@@ -672,9 +603,6 @@ func indexRows(idx *repoIndex) []*CacheFileRow {
 				byKey[key] = row
 				order = append(order, key)
 			}
-			if !idx.isRegistrationRef(ref) {
-				userRef[key] = true
-			}
 			row.Commits = appendUnique(row.Commits, ref.Commit)
 			for _, tag := range idx.TagsOf[ref.Commit] {
 				row.Revisions = appendUnique(row.Revisions, tag)
@@ -686,9 +614,6 @@ func indexRows(idx *repoIndex) []*CacheFileRow {
 	}
 	rows := make([]*CacheFileRow, 0, len(order))
 	for _, key := range order {
-		if !userRef[key] {
-			continue
-		}
 		row := byKey[key]
 		sort.Strings(row.Commits)
 		sort.Strings(row.Revisions)
@@ -875,55 +800,33 @@ func (d *CacheAdminDao) softDeleteOne(idx *repoIndex, item DeleteItem) *DeleteRe
 		result.Reason = "no reference found"
 		return result
 	}
-	// 登记快照不参与删除：摘除动的是清单，登记快照的清单必须原样留着。
-	// 但它也不该拦住用户删自己的文件——同一个路径的同一份内容可能既在 main 上
-	// 又在登记快照里（用户上传的空 README.md 与空描述生成的那份摘要相同），
-	// 那是两条独立的引用，删 main 的那条不该被登记快照牵连。
-	// 所以这里是把登记引用摘出去、只删剩下的，而不是见到就整条拒绝。
-	deletable := make([]repoRef, 0, len(matched))
-	for _, ref := range matched {
-		if !idx.isRegistrationRef(ref) {
-			deletable = append(deletable, ref)
-		}
-	}
-	if len(deletable) == 0 {
-		result.Status = "skipped"
-		result.Reason = "model registration metadata is managed by the control plane and cannot be deleted"
-		return result
-	}
 	// 版本标签要在动清单之前记下来：摘除会让旧快照连同它的标签映射一起消失，
 	// 之后再查就只剩空列表，回收站里就看不出这份内容原本挂在哪个版本上。
 	revisions := make([]string, 0)
-	for _, ref := range deletable {
+	for _, ref := range matched {
 		for _, tag := range idx.TagsOf[ref.Commit] {
 			revisions = appendUnique(revisions, tag)
 		}
 	}
 
 	if idx.Source == CacheSourceUpload {
-		if err := d.removeManifestEntries(idx, item.Path, item.Sha, deletable); err != nil {
+		if err := d.removeManifestEntries(idx, item.Path, item.Sha, matched); err != nil {
 			result.Status = "failed"
 			result.Reason = err.Error()
 			return result
 		}
 	} else {
-		removePathsInfo(idx, item.Path, deletable)
+		removePathsInfo(idx, item.Path, matched)
 	}
-	for _, ref := range deletable {
+	for _, ref := range matched {
 		removeResolveLink(idx.RepoType, idx.OrgRepo, ref.Commit, ref.Path)
 	}
 
 	// 从内存索引里同步摘掉，让同一批里针对同一个 sha 的其它条目看到最新的引用状态。
-	// 登记引用没被摘，必须留在 remaining 里：否则这份内容会被判成无人引用而进回收站，
-	// 而登记快照还指着它。
-	registrationOnly := true
 	remaining := make([]repoRef, 0, len(refs))
 	for _, ref := range refs {
-		if ref.Path != item.Path || idx.isRegistrationRef(ref) {
+		if ref.Path != item.Path {
 			remaining = append(remaining, ref)
-			if !idx.isRegistrationRef(ref) {
-				registrationOnly = false
-			}
 		}
 	}
 	if len(remaining) == 0 {
@@ -946,11 +849,7 @@ func (d *CacheAdminDao) softDeleteOne(idx *repoIndex, item DeleteItem) *DeleteRe
 		}
 	} else {
 		idx.BySha[item.Sha] = remaining
-		if registrationOnly {
-			result.Reason = "content is still referenced by the model registration snapshot"
-		} else {
-			result.Reason = "content is still referenced by other paths"
-		}
+		result.Reason = "content is still referenced by other paths"
 	}
 	zap.S().Infof("[CACHE-ADMIN] soft deleted %s/%s path=%s sha=%s", idx.RepoType, idx.OrgRepo, item.Path, item.Sha)
 	return result
