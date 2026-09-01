@@ -113,6 +113,37 @@ func TestPublishTreeAppliesAdditionsAndDeletionsInOneCommit(t *testing.T) {
 	}
 }
 
+func TestMetaRevisionPublishesAndEditsLikeMain(t *testing.T) {
+	u, _ := newTestUploadDao(t)
+	keepContent, removeContent := []byte("keep"), []byte("remove")
+	keep := manifestItem("README.md", keepContent)
+	remove := manifestItem("old.bin", removeContent)
+	mustStage(t, u, deferredParam(keep.Path, keepContent), keepContent)
+	mustStage(t, u, deferredParam(remove.Path, removeContent), removeContent)
+	created := mustPublish(t, u, publishParam("meta", keep, remove))
+	if got := revisionCommit(t, u, "models", "dingo-local/demo", "meta"); got != created.Commit {
+		t.Fatalf("meta points at %s, want %s", got, created.Commit)
+	}
+
+	newContent := []byte("new")
+	added := manifestItem("new.bin", newContent)
+	mustStage(t, u, deferredParam(added.Path, newContent), newContent)
+	edited := mustPublishTree(t, u, treeParam("meta", created.Commit, keep, added))
+	if edited.PreviousCommit != created.Commit || edited.Commit == created.Commit || edited.Removed != 1 || edited.Added != 1 {
+		t.Fatalf("meta edit result = %+v", edited)
+	}
+	if got := revisionCommit(t, u, "models", "dingo-local/demo", "meta"); got != edited.Commit {
+		t.Fatalf("meta points at %s after edit, want %s", got, edited.Commit)
+	}
+	manifest := mustReadManifest(t, "models", "dingo-local/demo", edited.Commit)
+	if len(manifest) != 2 {
+		t.Fatalf("meta manifest = %+v", manifest)
+	}
+	if _, found := findManifestFile(manifest, remove.Path); found {
+		t.Fatal("meta edit retained the deleted file")
+	}
+}
+
 func TestPublishTreeRejectsStaleBaseCommit(t *testing.T) {
 	u, _ := newTestUploadDao(t)
 	base, keepItem, _ := seedRevision(t, u, "main")

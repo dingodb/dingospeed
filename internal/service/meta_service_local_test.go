@@ -16,6 +16,10 @@ import (
 
 // uploadLocalRepo 通过上传接口造出一个本地仓库，返回最新快照标识。
 func uploadLocalRepo(t *testing.T, paths []string) (*MetaService, string) {
+	return uploadLocalRepoRevision(t, "main", paths)
+}
+
+func uploadLocalRepoRevision(t *testing.T, revision string, paths []string) (*MetaService, string) {
 	t.Helper()
 	oldConfig := config.SysConfig
 	config.SysConfig = &config.Config{
@@ -39,7 +43,7 @@ func uploadLocalRepo(t *testing.T, paths []string) (*MetaService, string) {
 			RepoType: "models",
 			Org:      "dingo-local",
 			Repo:     "demo",
-			Revision: "main",
+			Revision: revision,
 			FilePath: p,
 			Size:     int64(len(content)),
 			Sha256:   hex.EncodeToString(sum[:]),
@@ -50,6 +54,31 @@ func uploadLocalRepo(t *testing.T, paths []string) (*MetaService, string) {
 		commit = result.Commit
 	}
 	return NewMetaService(fileDao, nil), commit
+}
+
+func TestMetaRevisionListsReadsAndDownloadsLikeMain(t *testing.T) {
+	meta, commit := uploadLocalRepoRevision(t, "meta", []string{"README.md", "weights/model.bin"})
+	const orgRepo = "dingo-local/demo"
+
+	snapshot, err := meta.GetLocalSnapshot("models", orgRepo, "meta")
+	if err != nil || snapshot.Commit != commit || len(snapshot.Files) != 2 {
+		t.Fatalf("meta snapshot = %+v, err=%v", snapshot, err)
+	}
+	tree, err := meta.GetRepoTree("models", orgRepo, "meta", "", true, "")
+	if err != nil || len(tree) != 2 {
+		t.Fatalf("meta tree = %+v, err=%v", tree, err)
+	}
+	var output bytes.Buffer
+	if err = meta.StreamLocalArchive("models", orgRepo, "meta", "demo", &output); err != nil {
+		t.Fatalf("stream meta archive: %v", err)
+	}
+	reader, err := zip.NewReader(bytes.NewReader(output.Bytes()), int64(output.Len()))
+	if err != nil {
+		t.Fatalf("open meta archive: %v", err)
+	}
+	if len(reader.File) != 2 {
+		t.Fatalf("meta archive entries=%d", len(reader.File))
+	}
 }
 
 // 内部的仓库文件列表接口对本地仓库同样从清单派生。
