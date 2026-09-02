@@ -40,7 +40,9 @@ func NewSysService(schedulerDao *dao.SchedulerDao) *SysService {
 			if config.SysConfig.DiskClean.Enabled {
 				go sysSvc.cycleCheckDiskUsage()
 			}
-			if config.SysConfig.DynamicProxy.HttpProxyConnTest {
+			// 代理池启用后由 proxypool 自己的探活负责健康判定；
+			// 旧的全局二值 ProxyIsAvailable 会与池子的熔断状态互相打架，必须停掉。
+			if config.SysConfig.DynamicProxy.HttpProxyConnTest && !config.SysConfig.IsProxyPoolEnabled() {
 				go sysSvc.cycleTestProxyConnectivity()
 			}
 		})

@@ -271,7 +271,10 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 								select {
 								case contentChan <- chunk[:n]:
 								case <-r.Context.Done():
-									return fmt.Errorf("form remote ctx done")
+									// 包装 ctx.Err() 而非返回裸字符串，
+									// 上层（如代理池计分）要靠 errors.Is 把
+									// 「客户端主动取消」和「出口故障」区分开。
+									return fmt.Errorf("form remote ctx done: %w", r.Context.Err())
 								}
 							}
 							chunkByteLen += n // 原始数量

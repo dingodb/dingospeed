@@ -45,6 +45,7 @@ type Config struct {
 	TokenBucketLimit TokenBucketLimit `json:"tokenBucketLimit" yaml:"tokenBucketLimit"`
 	DiskClean        DiskClean        `json:"diskClean" yaml:"diskClean"`
 	DynamicProxy     DynamicProxy     `json:"dynamicProxy" yaml:"dynamicProxy"`
+	ProxyPool        ProxyPool        `json:"proxyPool" yaml:"proxyPool"`
 	Scheduler        Scheduler        `json:"scheduler" yaml:"scheduler"`
 	Upload           Upload           `json:"upload" yaml:"upload"`
 	mu               sync.RWMutex
@@ -157,6 +158,39 @@ type DynamicProxy struct {
 	TimePeriod         int    `json:"timePeriod" yaml:"timePeriod"`
 	MaxContinuousFails int    `json:"maxContinuousFails" yaml:"maxContinuousFails"`
 	Webhook            string `json:"webhook " yaml:"webhook"`
+}
+
+// ProxyPool 出口代理池。多中心部署下每个 zone 各自出公网，
+// 单出口一旦被限速或被墙，重试打在同一条死路上毫无意义；
+// 池化后每次重试自动换出口，坏出口按应用层信号熔断。
+type ProxyPool struct {
+	Enabled bool              `json:"enabled" yaml:"enabled"`
+	Members []ProxyPoolMember `json:"members" yaml:"members"`
+	// ProbeTarget 探活地址，必须是代理实际要访问的域名。
+	ProbeTarget string `json:"probeTarget" yaml:"probeTarget"`
+	// ProbeInterval 探活周期，单位秒，默认 60。
+	ProbeInterval int `json:"probeInterval" yaml:"probeInterval"`
+	// ProbeTimeout 单次探活超时，单位秒，默认 10。
+	ProbeTimeout int `json:"probeTimeout" yaml:"probeTimeout"`
+	// FailThreshold 连续失败多少次后熔断该出口，默认 3。
+	FailThreshold int `json:"failThreshold" yaml:"failThreshold"`
+	// Cooldown 熔断冷却时长，单位秒，默认 300。
+	Cooldown int `json:"cooldown" yaml:"cooldown"`
+	// DialTimeout 建连超时，单位秒，默认 10。
+	DialTimeout int `json:"dialTimeout" yaml:"dialTimeout"`
+	// ResponseHeaderTimeout 等响应头超时，单位秒，默认 60。
+	// 隧道通但对端不吐数据的故障主要靠它暴露。
+	ResponseHeaderTimeout int `json:"responseHeaderTimeout" yaml:"responseHeaderTimeout"`
+	// FallbackDirect 全池熔断时是否回退直连备用域名（bpHfNetLoc），默认 true。
+	FallbackDirect *bool `json:"fallbackDirect" yaml:"fallbackDirect"`
+	// NoProxy 额外免代理域名后缀，私有网段与回环已默认旁路，无需在此列出。
+	NoProxy []string `json:"noProxy" yaml:"noProxy"`
+}
+
+type ProxyPoolMember struct {
+	Name   string `json:"name" yaml:"name"`
+	URL    string `json:"url" yaml:"url"`
+	Weight int    `json:"weight" yaml:"weight"`
 }
 
 type Modelscope struct {
@@ -393,6 +427,24 @@ func (c *Config) GetUploadStagingCleanupInterval() time.Duration {
 		c.Upload.StagingCleanupIntervalMinutes = 60
 	}
 	return time.Duration(c.Upload.StagingCleanupIntervalMinutes) * time.Minute
+}
+
+// IsProxyPoolEnabled 代理池是否生效。
+// 兼容旧配置：只配了 dynamicProxy.httpProxy 时，视为一个单成员池，
+// 这样存量部署不改配置也能拿到熔断与旁路能力。
+func (c *Config) IsProxyPoolEnabled() bool {
+	if c.ProxyPool.Enabled && len(c.ProxyPool.Members) > 0 {
+		return true
+	}
+	return c.DynamicProxy.HttpProxy != ""
+}
+
+// GetProxyPoolFallbackDirect 全池熔断时是否回退直连备用域名，未配置时默认开启。
+func (c *Config) GetProxyPoolFallbackDirect() bool {
+	if c.ProxyPool.FallbackDirect == nil {
+		return true
+	}
+	return *c.ProxyPool.FallbackDirect
 }
 
 func (c *Config) IsCluster() bool {

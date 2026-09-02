@@ -26,6 +26,7 @@ import (
 	"dingospeed/pkg/app"
 	"dingospeed/pkg/config"
 	log "dingospeed/pkg/logger"
+	"dingospeed/pkg/util"
 )
 
 var (
@@ -53,6 +54,10 @@ func main() {
 	}
 
 	log.InitLogger()
+	// 代理池必须在任何回源请求之前建好，探活循环随之启动。
+	if err = util.InitProxyPool(); err != nil {
+		panic(err)
+	}
 	myapp, f, err := wireApp(conf)
 	if err != nil {
 		panic(err)

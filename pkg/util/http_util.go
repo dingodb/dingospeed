@@ -16,6 +16,8 @@ package util
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -29,6 +31,7 @@ import (
 	"dingospeed/pkg/config"
 	"dingospeed/pkg/consts"
 	"dingospeed/pkg/prom"
+	"dingospeed/pkg/proxypool"
 
 	"github.com/avast/retry-go"
 	"github.com/labstack/echo/v4"
@@ -130,13 +133,62 @@ func constructClient(method string) (string, *http.Client, error) {
 	return domain, client, err
 }
 
+// route 一次出站请求的选路结果。member 为 nil 表示这条请求没走池子（直连或旧逻辑）。
+type route struct {
+	domain string
+	client *http.Client
+	member *proxypool.Member
+}
+
+// report 把本次请求结果回灌给代理池，驱动熔断与恢复。
+func (r route) report(statusCode int, err error) {
+	if r.member != nil {
+		ProxyPool().Report(r.member, statusCode, err)
+	}
+}
+
+func (r route) reportResp(resp *common.Response, err error) {
+	code := 0
+	if resp != nil {
+		code = resp.StatusCode
+	}
+	r.report(code, err)
+}
+
+// constructRoute 为一次出站请求选路。
+// 关键语义：每调用一次就从池子里换一个出口，因此 RetryRequest 的三次重试
+// 会落在三个不同出口上，而不是把同一条死路撞三遍。
+func constructRoute(method string) (route, error) {
+	if pool := ProxyPool(); pool != nil {
+		if m := pool.Pick(); m != nil {
+			return route{
+				domain: config.SysConfig.GetHFURLBase(),
+				client: m.Client(method),
+				member: m,
+			}, nil
+		}
+		// 全池熔断：所有出口都不可用，回退直连备用域名，至少保证有降级路径。
+		if config.SysConfig.GetProxyPoolFallbackDirect() {
+			proxypool.FallbackDirectTotal.Inc()
+			// 故障时 QPS 不会下降，逐请求打日志会在最需要看日志的时候把日志刷爆。
+			logFallbackThrottled()
+			client, err := NewHTTPClient(method)
+			return route{domain: config.SysConfig.GetBpHFURLBase(), client: client}, err
+		}
+	}
+	domain, client, err := constructClient(method)
+	return route{domain: domain, client: client}, err
+}
+
 func Head(requestUri string, headers map[string]string) (*common.Response, error) {
-	domain, client, err := constructClient(http.MethodHead)
+	r, err := constructRoute(http.MethodHead)
 	if err != nil {
 		return nil, fmt.Errorf("construct http client err: %v", err)
 	}
-	requestURL := fmt.Sprintf("%s%s", domain, requestUri)
-	return doHead(client, requestURL, headers)
+	requestURL := fmt.Sprintf("%s%s", r.domain, requestUri)
+	resp, err := doHead(r.client, requestURL, headers)
+	r.reportResp(resp, err)
+	return resp, err
 }
 
 func doHead(client *http.Client, targetURL string, headers map[string]string) (*common.Response, error) {
@@ -169,12 +221,14 @@ func doHead(client *http.Client, targetURL string, headers map[string]string) (*
 }
 
 func Get(requestUri string, headers map[string]string) (*common.Response, error) {
-	domain, client, err := constructClient(http.MethodGet)
+	r, err := constructRoute(http.MethodGet)
 	if err != nil {
 		return nil, fmt.Errorf("construct http client err: %v", err)
 	}
-	requestURL := fmt.Sprintf("%s%s", domain, requestUri)
-	return doGet(client, requestURL, headers)
+	requestURL := fmt.Sprintf("%s%s", r.domain, requestUri)
+	resp, err := doGet(r.client, requestURL, headers)
+	r.reportResp(resp, err)
+	return resp, err
 }
 
 func doGet(client *http.Client, targetURL string, headers map[string]string) (*common.Response, error) {
@@ -216,51 +270,69 @@ func doGet(client *http.Client, targetURL string, headers map[string]string) (*c
 }
 
 func GetStream(domain, uri string, headers map[string]string, f func(r *http.Response) error) error {
-	var (
-		client *http.Client
-		err    error
-	)
-	if IsInnerDomain(domain) {
-		client, err = NewHTTPClient(http.MethodGet)
+	// 内网目标（兄弟节点互拉、回环上传口）必须旁路代理：
+	// 这些地址走公网出口必然失败，且会把好出口误判成坏出口。
+	if IsInnerDomain(domain) || ProxyPool().ShouldBypass(domain) {
+		client, err := NewHTTPClient(http.MethodGet)
+		if err != nil {
+			return fmt.Errorf("construct http client err: %v", err)
+		}
 		headers[consts.RequestSourceInner] = Itoa(1)
-	} else {
-		domain, client, err = constructClient(http.MethodGet)
+		_, err = doGetStream(client, fmt.Sprintf("%s%s", domain, uri), headers, f)
+		return err
 	}
+	r, err := constructRoute(http.MethodGet)
 	if err != nil {
 		return fmt.Errorf("construct http client err: %v", err)
 	}
-	requestURL := fmt.Sprintf("%s%s", domain, uri)
-	return doGetStream(client, requestURL, headers, f)
+	requestURL := fmt.Sprintf("%s%s", r.domain, uri)
+	code, err := doGetStream(r.client, requestURL, headers, f)
+	// 这里上报的 err 包含了流式传输中途的失败（f 回调里读 body 断掉），
+	// 而这正是 gost 的 TCP 层健康检查看不见的那一类故障。
+	// 但客户端主动取消不能算在出口头上，否则用户中断下载会误伤健康出口。
+	if !isClientCanceled(err) {
+		r.report(code, err)
+	}
+	return err
 }
 
-func doGetStream(client *http.Client, targetURL string, headers map[string]string, f func(r *http.Response) error) error {
+// isClientCanceled 判断错误是否源自本地取消（用户中断下载、下游关闭），
+// 这类错误与出口健康无关。
+func isClientCanceled(err error) bool {
+	return err != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded))
+}
+
+// doGetStream 返回响应状态码与错误，状态码供代理池计分使用；未拿到响应时返回 0。
+func doGetStream(client *http.Client, targetURL string, headers map[string]string, f func(r *http.Response) error) (int, error) {
 	escapedURL := strings.ReplaceAll(targetURL, "#", "%23")
 	req, err := http.NewRequest("GET", escapedURL, nil)
 	if err != nil {
-		return fmt.Errorf("创建GET请求失败: %v", err)
+		return 0, fmt.Errorf("创建GET请求失败: %v", err)
 	}
 	for key, value := range headers {
 		req.Header.Set(key, value)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer resp.Body.Close()
 	respHeaders := make(map[string]interface{})
 	for key, value := range resp.Header {
 		respHeaders[strings.ToLower(key)] = value
 	}
-	return f(resp)
+	return resp.StatusCode, f(resp)
 }
 
 func Post(requestUri string, contentType string, data []byte, headers map[string]string) (*common.Response, error) {
-	domain, client, err := constructClient(http.MethodPost)
+	r, err := constructRoute(http.MethodPost)
 	if err != nil {
 		return nil, fmt.Errorf("construct http client err: %v", err)
 	}
-	requestURL := fmt.Sprintf("%s%s", domain, requestUri)
-	return doPost(client, requestURL, contentType, data, headers)
+	requestURL := fmt.Sprintf("%s%s", r.domain, requestUri)
+	resp, err := doPost(r.client, requestURL, contentType, data, headers)
+	r.reportResp(resp, err)
+	return resp, err
 }
 
 func doPost(client *http.Client, targetURL string, contentType string, data []byte, headers map[string]string) (*common.Response, error) {
@@ -348,12 +420,13 @@ func ResponseStream(c echo.Context, fileName string, headers map[string]string, 
 }
 
 func ForwardRequest(originalReq echo.Context) (*http.Response, error) {
-	domain, client, err := constructClient(http.MethodGet)
+	r, err := constructRoute(http.MethodGet)
 	if err != nil {
 		return nil, fmt.Errorf("construct http client err: %v", err)
 	}
+	client := r.client
 	reqUri := originalReq.Request().URL.Path
-	targetURL, err := url.Parse(domain)
+	targetURL, err := url.Parse(r.domain)
 	if err != nil {
 		return nil, fmt.Errorf("url.Parse err: %v", err)
 	}
@@ -375,9 +448,11 @@ func ForwardRequest(originalReq echo.Context) (*http.Response, error) {
 	}
 	resp, err := client.Do(proxyReq)
 	if err != nil {
+		r.report(0, err)
 		zap.S().Warnf("转发请求失败: %s, 错误: %v", targetURL, err)
 		return nil, fmt.Errorf("执行转发请求失败: %v", err)
 	}
+	r.report(resp.StatusCode, nil)
 	return resp, nil
 }
 

@@ -1,0 +1,58 @@
+# 代理池告警规则。挂到 Prometheus 的 rule_files 下即可。
+# 指标由 dingospeed 的 /metrics 暴露（server.metrics: true）。
+groups:
+  - name: dingospeed-proxypool
+    rules:
+      # 单个出口熔断：还有别的出口顶着，属于可容忍的降级，但要知道是哪个坏了。
+      - alert: ProxyPoolMemberDown
+        expr: proxypool_member_healthy == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "出口 {{ $labels.member }} 已熔断"
+          description: "实例 {{ $labels.instance }} 的代理出口 {{ $labels.member }} 连续失败被摘除超过 5 分钟，请检查该 gost 节点的公网出口。"
+
+      # 全池熔断：回源已经退化为直连备用域名，属于故障态。
+      - alert: ProxyPoolExhausted
+        expr: proxypool_available_members == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "代理池全部出口不可用"
+          description: "实例 {{ $labels.instance }} 的所有出口均已熔断，回源已回退直连 bpHfNetLoc，跨境下载可能大面积失败。"
+
+      # 冗余度不足：只剩一个出口时它一挂就全池熔断，需要提前补。
+      - alert: ProxyPoolLowRedundancy
+        expr: proxypool_available_members == 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "代理池只剩 1 个可用出口"
+          description: "实例 {{ $labels.instance }} 已无冗余，该出口再失败即触发全池熔断。"
+
+      # 出口失败率偏高：还没到熔断阈值但已经在拖慢下载。
+      - alert: ProxyPoolMemberHighFailureRate
+        expr: |
+          sum by (instance, member) (rate(proxypool_member_request_total{result="fail"}[10m]))
+          /
+          clamp_min(sum by (instance, member) (rate(proxypool_member_request_total[10m])), 0.001)
+          > 0.3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "出口 {{ $labels.member }} 失败率超过 30%"
+          description: "近 10 分钟失败率 {{ $value | humanizePercentage }}，该出口可能已被限速或部分链路不通。"
+
+      # 频繁回退直连说明池子整体不健康，直连通常更慢且更容易被拦。
+      - alert: ProxyPoolFrequentDirectFallback
+        expr: rate(proxypool_fallback_direct_total[10m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "回源持续回退直连"
+          description: "实例 {{ $labels.instance }} 近 10 分钟持续出现全池熔断后的直连回退。"
