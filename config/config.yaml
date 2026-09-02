@@ -90,6 +90,30 @@ dynamicProxy:
     maxContinuousFails: 5 #连续失败次数超过该值，则认为代理不可用
     webhook: https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=73662ac1-1055-48a7-8c89-37964b5f4fdc111 # 企业微信机器人Webhook地址
 
+# 出口代理池。启用后 dynamicProxy 的单代理与定时探活自动让位给这里。
+# 每次取用出口都会轮换，因此一次请求的多次重试会落在不同出口上；
+# 出口按应用层信号（传输中断/429/403/5xx）熔断，冷却后半开自动恢复。
+proxyPool:
+    enabled: false          # 置 true 且 members 非空时生效
+    probeTarget: "https://hf-mirror.com/api/models/bert-base-uncased"  # 探活地址，必须是代理实际要访问的域名
+    probeInterval: 60       # 探活周期，秒
+    probeTimeout: 10        # 单次探活超时，秒
+    failThreshold: 3        # 连续失败多少次熔断该出口
+    cooldown: 300           # 熔断冷却时长，秒；到期后放行一个半开试探请求
+    dialTimeout: 10         # 建连超时，秒
+    responseHeaderTimeout: 60  # 等响应头超时，秒；隧道通但对端不吐数据靠它暴露
+    fallbackDirect: true    # 全池熔断时回退直连 bpHfNetLoc
+    noProxy: []             # 额外免代理域名后缀；私有网段与回环已默认旁路，无需列出
+    members: []
+    # members 示例（gost 集群各节点的本地 LB 端口）：
+    # members:
+    #     - name: hd-02
+    #       url: http://10.201.3.93:8121
+    #       weight: 2
+    #     - name: hd-04
+    #       url: http://10.220.70.213:8121
+    #       weight: 1
+
 modelscope:
     officialBaseURL: https://www.modelscope.cn  # ModelScope官方基础地址
     chunkSize: 8388608  # 8MB分块，16*1024*1024的数值结果
