@@ -18,7 +18,6 @@ server:
 upload:
     host: 127.0.0.1
     port: 8091
-    token: ""
     namespace: dingo-local
     concurrentLimit: 4
     stagingRetentionHours: 168

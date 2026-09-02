@@ -71,7 +71,17 @@ func (s *UploadServer) Stop(ctx context.Context) error {
 
 func NewUploadEngine() router.UploadEcho {
 	e := echo.New()
-	e.Use(middleware.CORSMiddleware())
+	// 这里刻意不挂 CORSMiddleware，换成 UploadGuardMiddleware。
+	//
+	// 两者作用不同，不要混淆：CORS 响应头只决定「浏览器允不允许页面读取响应」，
+	// 它从不阻止请求到达服务端。摘掉 CORSMiddleware 的收益只有一条——去掉
+	// Access-Control-Allow-Origin: *，使恶意页面无法再读取本口的响应
+	// （例如 GET /api/cache/repos 枚举缓存清单）。真正挡住写操作的是
+	// UploadGuardMiddleware 按 Origin 做的拒绝。
+	//
+	// 上传口是机器对机器的接口：spinfield 控制面后端调 ingest agent，agent 再调这里，
+	// 没有浏览器直连，因此去掉 CORS 头不影响任何现有调用方。
+	e.Use(middleware.UploadGuardMiddleware())
 	return router.UploadEcho{Echo: e}
 }
 

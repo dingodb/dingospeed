@@ -83,6 +83,11 @@ func CORSMiddleware() echo.MiddlewareFunc {
 		return func(c echo.Context) error {
 			// 设置跨域头
 			c.Response().Header().Set("Access-Control-Allow-Origin", "*")
+			// 注意 Allow-Methods 只影响预检请求，删掉这里的 POST 并不能阻止跨域 POST：
+			// text/plain 的 POST 属于简单请求，压根不发预检。所以这一行不是访问控制，
+			// 收紧它只会打断跨域用 JSON 调 /api/cacheJob/* 的调用方（那种请求要预检），
+			// 拦不住任何攻击。下载口若要真正限制跨站写入，需要的是按 Origin 判断的
+			// 中间件，而不是改这里。
 			c.Response().Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS, HEAD")
 			c.Response().Header().Set("Access-Control-Allow-Headers", "*")
 			c.Response().Header().Set("Access-Control-Expose-Headers", "*")
