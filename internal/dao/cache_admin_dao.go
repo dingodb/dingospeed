@@ -490,7 +490,9 @@ func listRepoKeys() []repoKey {
 	repos := config.SysConfig.Repos()
 	for _, repoType := range []string{"models", "datasets", "spaces"} {
 		scanRepoRoots(filepath.Join(repos, "files", repoType), repoType, []string{"blobs", "resolve"}, keys)
-		scanRepoRoots(filepath.Join(repos, "api", repoType), repoType, []string{"revision"}, keys)
+		// paths-info 和 recycle 都是仓库根下的数据子树。它们本身足以证明仓库
+		// 存在；命中后必须停止向下遍历，否则仓库发现会退化为扫描全部文件。
+		scanRepoRoots(filepath.Join(repos, "api", repoType), repoType, []string{"revision", "paths-info", recycleDirName}, keys)
 	}
 	result := make([]repoKey, 0, len(keys))
 	for k := range keys {
@@ -561,6 +563,16 @@ func (d *CacheAdminDao) ListRepos() []*CacheRepo {
 
 // ListFiles 返回某个仓库的一级列表；orgRepo 为空时返回全部仓库的合集。
 func (d *CacheAdminDao) ListFiles(repoType, orgRepo string) []*CacheFileRow {
+	// 调用方已经给出完整仓库键时直接构建该仓库的索引。不能为了确认它是否在
+	// 列表中先枚举所有仓库；一个小仓库的延迟不应受其他仓库大小影响。
+	if repoType != "" && orgRepo != "" {
+		key := repoKey{RepoType: repoType, OrgRepo: orgRepo}
+		if validateRepoKey(key) != nil {
+			return []*CacheFileRow{}
+		}
+		return indexRows(buildRepoIndex(repoType, orgRepo))
+	}
+
 	rows := make([]*CacheFileRow, 0)
 	for _, key := range listRepoKeys() {
 		if repoType != "" && key.RepoType != repoType {

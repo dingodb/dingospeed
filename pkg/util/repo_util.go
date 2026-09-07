@@ -21,9 +21,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"dingospeed/pkg/common"
@@ -35,6 +37,89 @@ import (
 var (
 	symlinkLock sync.Mutex
 )
+
+type FileAccessErrorKind string
+
+const (
+	FileAccessPermissionDenied  FileAccessErrorKind = "permission_denied"
+	FileAccessMountDisconnected FileAccessErrorKind = "mount_disconnected"
+	FileAccessIOFailure         FileAccessErrorKind = "io_failure"
+	FileAccessUnavailable       FileAccessErrorKind = "path_unavailable"
+)
+
+// FileAccessError distinguishes an inaccessible storage path from a path that
+// simply does not exist. Err retains the operating-system error for diagnosis.
+type FileAccessError struct {
+	Kind FileAccessErrorKind
+	Path string
+	Err  error
+}
+
+func (e *FileAccessError) Error() string {
+	return fmt.Sprintf("storage path %s is unavailable (%s): %v", e.Path, e.Kind, e.Err)
+}
+
+func (e *FileAccessError) Unwrap() error { return e.Err }
+
+// PathExists is the error-preserving alternative to FileExists. A missing path
+// is a normal negative result; every other stat failure is returned as a typed
+// FileAccessError so callers cannot mistake a storage failure for a cache miss.
+func PathExists(filePath string) (bool, error) {
+	_, err := os.Stat(filePath)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	accessErr, _ := ClassifyFileAccessError(filePath, err)
+	return false, accessErr
+}
+
+// ClassifyFileAccessError recognizes filesystem access failures even when
+// another layer has wrapped the original *os.PathError. Content and parsing
+// errors are deliberately left unclassified.
+func ClassifyFileAccessError(filePath string, err error) (*FileAccessError, bool) {
+	if err == nil || os.IsNotExist(err) {
+		return nil, false
+	}
+	var pathErr *os.PathError
+	if !errors.As(err, &pathErr) {
+		return nil, false
+	}
+	return &FileAccessError{Kind: classifyFileAccessError(err), Path: filePath, Err: err}, true
+}
+
+func classifyFileAccessError(err error) FileAccessErrorKind {
+	return classifyFileAccessErrorForOS(err, runtime.GOOS)
+}
+
+func classifyFileAccessErrorForOS(err error, goos string) FileAccessErrorKind {
+	if goos != "linux" && os.IsPermission(err) {
+		return FileAccessPermissionDenied
+	}
+
+	// DingoFS runs on Linux. Numeric errno values keep this package buildable
+	// on development hosts where Linux-specific syscall names are unavailable.
+	const (
+		linuxEIO      syscall.Errno = 5
+		linuxENOTCONN syscall.Errno = 107
+		linuxESTALE   syscall.Errno = 116
+	)
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		switch errno {
+		case linuxENOTCONN, linuxESTALE:
+			return FileAccessMountDisconnected
+		case linuxEIO:
+			return FileAccessIOFailure
+		}
+	}
+	if os.IsPermission(err) {
+		return FileAccessPermissionDenied
+	}
+	return FileAccessUnavailable
+}
 
 func GetOrgRepo(org, repo string) string {
 	if org == "" {

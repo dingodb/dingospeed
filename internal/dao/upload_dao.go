@@ -956,56 +956,63 @@ func (u *UploadDao) CleanupExpiredStagedUploads(retention time.Duration) (int, e
 	if retention <= 0 {
 		retention = 7 * 24 * time.Hour
 	}
-	root := filepath.Join(config.SysConfig.Repos(), "files")
 	cutoff := time.Now().Add(-retention)
 	removed := 0
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil
-			}
-			return err
-		}
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), localUploadStageSuffix) {
-			return nil
-		}
-		repoType, orgRepo, sha, ok := stagedBlobIdentity(root, path)
-		if !ok {
-			return nil
-		}
-		info, statErr := entry.Info()
-		if statErr != nil {
-			if os.IsNotExist(statErr) {
-				return nil
-			}
-			return statErr
-		}
-		if info.ModTime().After(cutoff) {
-			return nil
-		}
-		blobKey := uploadBlobLockKey(repoType, orgRepo, sha)
-		uploadBlobLocks.Lock(blobKey)
-		defer uploadBlobLocks.Unlock(blobKey)
-		info, statErr = os.Stat(path)
-		if statErr != nil {
-			if os.IsNotExist(statErr) {
-				return nil
-			}
-			return statErr
-		}
-		if info.ModTime().After(cutoff) {
-			return nil
-		}
-		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
-			return rmErr
-		}
-		removed++
-		return nil
-	})
-	if os.IsNotExist(err) {
-		return removed, nil
+	namespace := "dingo-local"
+	if config.SysConfig != nil && config.SysConfig.Upload.Namespace != "" {
+		namespace = config.SysConfig.Upload.Namespace
 	}
-	return removed, err
+	filesRoot := filepath.Join(config.SysConfig.Repos(), "files")
+	for _, repoType := range []string{"models", "datasets"} {
+		root := filepath.Join(filesRoot, repoType, namespace)
+		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				if os.IsNotExist(err) {
+					return nil
+				}
+				return err
+			}
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), localUploadStageSuffix) {
+				return nil
+			}
+			parsedRepoType, orgRepo, sha, ok := stagedBlobIdentity(filesRoot, path)
+			if !ok || parsedRepoType != repoType || !IsLocalOrgRepo(orgRepo) {
+				return nil
+			}
+			info, statErr := entry.Info()
+			if statErr != nil {
+				if os.IsNotExist(statErr) {
+					return nil
+				}
+				return statErr
+			}
+			if info.ModTime().After(cutoff) {
+				return nil
+			}
+			blobKey := uploadBlobLockKey(repoType, orgRepo, sha)
+			uploadBlobLocks.Lock(blobKey)
+			defer uploadBlobLocks.Unlock(blobKey)
+			info, statErr = os.Stat(path)
+			if statErr != nil {
+				if os.IsNotExist(statErr) {
+					return nil
+				}
+				return statErr
+			}
+			if info.ModTime().After(cutoff) {
+				return nil
+			}
+			if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
+				return rmErr
+			}
+			removed++
+			return nil
+		})
+		if err != nil && !os.IsNotExist(err) {
+			return removed, err
+		}
+	}
+	return removed, nil
 }
 
 // CleanupUnreferencedBlobs 回收“已经完整落盘、但不被任何清单引用”的内容。
@@ -1238,31 +1245,6 @@ func (u *UploadDao) RunStagedUploadCleanup(ctx context.Context) {
 				zap.S().Warnf("cleanup expired staged uploads failed: %v", err)
 			} else if removed > 0 {
 				zap.S().Infof("cleanup expired staged uploads removed %d file(s)", removed)
-			}
-			// 待回收快照要排在 blob 回收之前：快照还在盘上时它的清单仍然算引用
-			// （referencedShas 扫的是全部快照），里面的内容永远轮不到回收。
-			dropped, err := u.CleanupSupersededSnapshots(config.SysConfig.GetUploadSupersededRetention())
-			if err != nil {
-				zap.S().Warnf("drop superseded snapshots failed: %v", err)
-			} else if dropped > 0 {
-				zap.S().Infof("dropped %d superseded snapshot(s)", dropped)
-			}
-			retention := config.SysConfig.GetUploadOrphanRetention()
-			reclaimed, err := u.CleanupUnreferencedBlobs(retention)
-			if err != nil {
-				zap.S().Warnf("reclaim unreferenced upload content failed: %v", err)
-			} else if reclaimed > 0 {
-				zap.S().Infof("reclaimed %d unreferenced upload content file(s)", reclaimed)
-			}
-			// 上一趟只覆盖本地命名空间。远端缓存里被一级删除的内容由墓碑驱动，
-			// 与上传内容共用同一个保留期（orphanRetentionHours，默认 168h）。
-			recycled, err := u.CleanupRecycledBlobs(retention)
-			if err != nil {
-				zap.S().Warnf("reclaim recycled cache content failed: %v", err)
-				continue
-			}
-			if recycled > 0 {
-				zap.S().Infof("reclaimed %d recycled cache content file(s)", recycled)
 			}
 		}
 	}

@@ -18,8 +18,8 @@ func NewUploadCleanupServer(uploadDao *dao.UploadDao) *UploadCleanupServer {
 }
 
 func (s *UploadCleanupServer) Start(ctx context.Context) error {
-	zap.S().Infof("[UPLOAD-CLEANUP] staged upload cleanup interval=%s retention=%s",
-		config.SysConfig.GetUploadStagingCleanupInterval(), config.SysConfig.GetUploadStagingRetention())
+	zap.S().Infof("[UPLOAD-CLEANUP] local namespace=%s staged upload cleanup interval=%s retention=%s",
+		config.SysConfig.Upload.Namespace, config.SysConfig.GetUploadStagingCleanupInterval(), config.SysConfig.GetUploadStagingRetention())
 	go s.uploadDao.RunStagedUploadCleanup(ctx)
 	return nil
 }
