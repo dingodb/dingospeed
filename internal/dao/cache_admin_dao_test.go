@@ -115,6 +115,26 @@ func findOrphan(rows []*RecycleRow, sha string) *RecycleRow {
 	return nil
 }
 
+func TestListRepoKeysStopsAtPathsInfo(t *testing.T) {
+	_, _, _ = newTestCacheAdminDao(t)
+	orgRepo := "dingo-local/paths-heavy"
+
+	// revision 是一个合法仓库标记，但这里故意把同名目录放在 paths-info
+	// 深处。仓库发现如果进入数据子树，会把这个深层路径误判成另一个仓库。
+	deepRevision := filepath.Join(repoApiRoot("models", orgRepo), "paths-info", "commit", "nested", "revision")
+	if err := os.MkdirAll(deepRevision, 0o755); err != nil {
+		t.Fatalf("create deep paths-info fixture: %v", err)
+	}
+
+	keys := listRepoKeys()
+	if len(keys) != 1 {
+		t.Fatalf("expected one repository without descending paths-info, got %#v", keys)
+	}
+	if keys[0] != (repoKey{RepoType: "models", OrgRepo: orgRepo}) {
+		t.Fatalf("unexpected repository key: %#v", keys[0])
+	}
+}
+
 func tombstoneExists(repoType, orgRepo, sha string) bool {
 	return util.FileExists(recycleEntryPath(repoType, orgRepo, sha))
 }

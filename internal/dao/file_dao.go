@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -82,6 +83,11 @@ func (f *FileDao) GetFileCommitSha(repoType, orgRepo, commit, authorization stri
 	if IsLocalOrgRepo(orgRepo) {
 		commitSha, err = f.GetCommitHfOffline(repoType, orgRepo, commit)
 		if err != nil {
+			var accessErr *util.FileAccessError
+			if errors.As(err, &accessErr) {
+				zap.S().Errorw("local metadata storage unavailable", "kind", accessErr.Kind, "path", accessErr.Path, "error", accessErr.Err)
+				return "", myerr.Wrap("local metadata storage unavailable", err)
+			}
 			return "", myerr.NewAppendCode(http.StatusNotFound, fmt.Sprintf("%s is not found", orgRepo))
 		}
 		return commitSha, nil
@@ -91,6 +97,11 @@ func (f *FileDao) GetFileCommitSha(repoType, orgRepo, commit, authorization stri
 	}
 	commitSha, err = f.GetCommitHfOffline(repoType, orgRepo, commit)
 	if err != nil {
+		var accessErr *util.FileAccessError
+		if errors.As(err, &accessErr) {
+			zap.S().Errorw("metadata cache storage unavailable", "kind", accessErr.Kind, "path", accessErr.Path, "error", accessErr.Err)
+			return "", myerr.Wrap("metadata cache storage unavailable", err)
+		}
 		if source == "file" {
 			// 若只是发起文件下载（先在线后离线），将不会校验meta文件是否存在，没有就创建，主要是看文件本身是否存在。
 			goto remoteRequestMeta
@@ -167,9 +178,16 @@ func (f *FileDao) RemoteRequestMeta(method, repoType, orgRepo, revision, authori
 
 func (f *FileDao) GetCommitHfOffline(repoType, orgRepo, commit string) (string, error) {
 	apiPath := fmt.Sprintf("%s/api/%s/%s/revision/%s/meta_get.json", config.SysConfig.Repos(), repoType, orgRepo, commit)
-	if util.FileExists(apiPath) {
+	exists, err := util.PathExists(apiPath)
+	if err != nil {
+		return "", err
+	}
+	if exists {
 		cacheContent, err := f.ReadCacheRequest(apiPath)
 		if err != nil {
+			if accessErr, ok := util.ClassifyFileAccessError(apiPath, err); ok {
+				return "", accessErr
+			}
 			return "", err
 		}
 		var sha CommitHfSha

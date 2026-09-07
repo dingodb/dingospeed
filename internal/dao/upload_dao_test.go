@@ -471,6 +471,42 @@ func TestStagedUploadRetentionAndCleanup(t *testing.T) {
 	}
 }
 
+func TestStagedUploadCleanupOnlyScansLocalNamespace(t *testing.T) {
+	u, repos := newTestUploadDao(t)
+	stale := time.Now().Add(-48 * time.Hour)
+
+	localPath := stagedBlobPath(repos, "models", "dingo-local/local-repo", "local-sha")
+	remotePath := stagedBlobPath(repos, "models", "remote-org/remote-repo", "remote-sha")
+	localDatasetPath := stagedBlobPath(repos, "datasets", "dingo-local/local-dataset", "dataset-sha")
+	for _, path := range []string{localPath, remotePath, localDatasetPath} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("staged"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, stale, stale); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	removed, err := u.CleanupExpiredStagedUploads(24 * time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 2 {
+		t.Fatalf("removed=%d, want 2 local staged files", removed)
+	}
+	for _, path := range []string{localPath, localDatasetPath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("local staged file must be removed: %s (err=%v)", path, err)
+		}
+	}
+	if _, err := os.Stat(remotePath); err != nil {
+		t.Fatalf("remote namespace must not be scanned or removed: %v", err)
+	}
+}
+
 func TestRepeatedFullUploadInterruptionsReuseOneStagedFile(t *testing.T) {
 	u, repos := newTestUploadDao(t)
 	content := []byte("0123456789abcdef0123456789abcdef-tail")

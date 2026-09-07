@@ -15,6 +15,7 @@
 package dao
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -191,7 +192,7 @@ func (m *MetaDao) requestAndSaveMeta(repoType, orgRepo, revision, commitSha, met
 	if revision == mainVersion {
 		err = m.writeApiMetaFile(repoType, orgRepo, revision, method, resp.StatusCode, extractHeaders, resp.Body)
 		if err != nil {
-			return nil, err
+			m.logMetadataCacheWriteFailure(orgRepo, revision, method, err)
 		}
 	} else {
 		apiDir := fmt.Sprintf("%s/api/%s/%s/revision/%s", config.SysConfig.Repos(), repoType, orgRepo, mainVersion)
@@ -199,14 +200,14 @@ func (m *MetaDao) requestAndSaveMeta(repoType, orgRepo, revision, commitSha, met
 		if !util.FileExists(apiMetaPath) {
 			err = m.writeApiMetaFile(repoType, orgRepo, mainVersion, method, resp.StatusCode, extractHeaders, resp.Body) // create main dir
 			if err != nil {
-				return nil, err
+				m.logMetadataCacheWriteFailure(orgRepo, mainVersion, method, err)
 			}
 		}
 	}
 
 	err = m.writeApiMetaFile(repoType, orgRepo, commitSha, method, resp.StatusCode, extractHeaders, resp.Body)
 	if err != nil {
-		return nil, err
+		m.logMetadataCacheWriteFailure(orgRepo, commitSha, method, err)
 	}
 	return &common.CacheContent{
 		StatusCode:    resp.StatusCode,
@@ -215,16 +216,31 @@ func (m *MetaDao) requestAndSaveMeta(repoType, orgRepo, revision, commitSha, met
 	}, nil
 }
 
+func (m *MetaDao) logMetadataCacheWriteFailure(orgRepo, revision, method string, err error) {
+	fields := []interface{}{"repo", orgRepo, "revision", revision, "method", method, "error", err}
+	var accessErr *util.FileAccessError
+	if errors.As(err, &accessErr) {
+		fields = append(fields, "kind", accessErr.Kind, "path", accessErr.Path)
+	}
+	zap.S().Warnw("serving remote metadata without cache", fields...)
+}
+
 func (m *MetaDao) writeApiMetaFile(repoType, orgRepo, commitSha, method string, statusCode int, extractHeaders map[string]string, body []byte) error {
 	apiDir := fmt.Sprintf("%s/api/%s/%s/revision/%s", config.SysConfig.Repos(), repoType, orgRepo, commitSha)
 	apiMetaPath := fmt.Sprintf("%s/%s", apiDir, fmt.Sprintf("meta_%s.json", method))
 	err := util.MakeDirs(apiMetaPath)
 	if err != nil {
 		zap.S().Errorf("create %s dir err.%v", apiMetaPath, err)
+		if accessErr, ok := util.ClassifyFileAccessError(apiMetaPath, err); ok {
+			return accessErr
+		}
 		return err
 	}
 	if err = m.fileDao.WriteCacheRequest(apiMetaPath, statusCode, extractHeaders, body); err != nil {
 		zap.S().Errorf("writeCacheRequest err.%v", err)
+		if accessErr, ok := util.ClassifyFileAccessError(apiMetaPath, err); ok {
+			return accessErr
+		}
 		return err
 	}
 	return nil
