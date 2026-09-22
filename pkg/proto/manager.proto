@@ -5,8 +5,11 @@ import "google/protobuf/empty.proto";
 
 option go_package = ".;manager";
 
+// Existing RPC org/repo keep legacy remote coordinates; hosted org is dingo-local/namespace.
+
 // 用户服务定义
 service Manager {
+ rpc IngestRepository (IngestRepositoryRequest) returns (IngestRepositoryResponse);
     // 启动注册方法
     rpc Register (RegisterRequest) returns (RegisterResponse) {};
     // 心跳方法
@@ -34,6 +37,8 @@ message RegisterRequest {
     string host = 2;
     int32 port = 3;
     bool  online = 4;
+    string managementUrl = 5;
+    string downloadUrl = 6;
 }
 
 // 注册响应
@@ -47,6 +52,32 @@ message HeartbeatRequest {
     int32 id = 1;
     string instanceId = 2;
     bool  online = 3;
+    NodeHealthSnapshot health = 4;
+}
+
+// In-memory observations only; absence means the client does not report health.
+message NodeHealthSnapshot {
+    uint32 version = 1;
+    string process_id = 2;
+    int64 started_at = 3;
+    int64 collected_at = 4;
+    uint32 heartbeat_period_seconds = 5;
+    repeated CapabilityObservation capabilities = 6;
+    repeated StorageErrorCount errors = 7;
+}
+
+message CapabilityObservation {
+    string capability = 1;
+    int32 state = 2; // 0 unknown, 1 observed healthy, 2 suspect, 3 degraded, 4 recovering
+    bool unresolved = 3;
+    int64 last_observation = 4;
+    int64 last_failure = 5;
+}
+
+message StorageErrorCount {
+    string operation = 1;
+    string kind = 2;
+    uint64 count = 3; // Cumulative within process_id, not an active-failure count.
 }
 
 message SchedulerFileRequest {
@@ -136,3 +167,14 @@ message UpdateRepositoryMountStatusReq{
     int32 status = 2;
     string errorMsg = 3;
 }
+
+message IngestRepositoryRequest {
+ string instance_id = 1;
+ string namespace = 2;
+ string repo_type = 3;
+ string repo = 4;
+ string revision = 5;
+ string commit = 6;
+ bool online = 7;
+}
+message IngestRepositoryResponse { int64 repository_id = 1; string commit = 2; int64 file_count = 3; int64 used_storage = 4; }

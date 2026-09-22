@@ -1,0 +1,54 @@
+rule_files:
+  - ../storage_probe_alerts.yml
+evaluation_interval: 5s
+tests:
+  - name: blocked_read_late_return_and_verified_recovery
+    interval: 5s
+    input_series:
+      - series: 'dingospeed_storage_probe_blocked{job="dingospeed",instance="node-a",operation="read"}'
+        values: '1x29 0x7'
+      - series: 'dingospeed_storage_probe_unresolved{job="dingospeed",instance="node-a",operation="read"}'
+        values: '1x35 0'
+      - series: 'dingospeed_storage_probe_blocked{job="dingospeed",instance="node-a",operation="write"}'
+        values: '0x36'
+      - series: 'dingospeed_storage_probe_unresolved{job="dingospeed",instance="node-a",operation="write"}'
+        values: '0x36'
+      - series: 'dingospeed_storage_probe_blocked{job="dingospeed",instance="node-b",operation="read"}'
+        values: '0x36'
+      - series: 'dingospeed_storage_probe_unresolved{job="dingospeed",instance="node-b",operation="read"}'
+        values: '0x36'
+    alert_rule_test:
+      - eval_time: 25s
+        alertname: DingoSpeedStorageProbeBlocked
+        exp_alerts: []
+      - eval_time: 30s
+        alertname: DingoSpeedStorageProbeBlocked
+        exp_alerts:
+          - &blocked
+            exp_labels: {job: dingospeed, instance: node-a, operation: read, severity: warning}
+            exp_annotations:
+              summary: 'Storage probe still blocked: read'
+              description: 'Instance node-a has a timed-out dedicated probe still running. Its slot remains occupied; no replacement is launched. This does not establish whole-mount failure.'
+      - eval_time: 145s
+        alertname: DingoSpeedStorageProbeBlocked
+        exp_alerts: [*blocked]
+      - eval_time: 150s
+        alertname: DingoSpeedStorageProbeBlocked
+        exp_alerts: []
+      - eval_time: 115s
+        alertname: DingoSpeedStorageProbeUnresolved
+        exp_alerts: []
+      - eval_time: 120s
+        alertname: DingoSpeedStorageProbeUnresolved
+        exp_alerts:
+          - &unresolved
+            exp_labels: {job: dingospeed, instance: node-a, operation: read, severity: warning}
+            exp_annotations:
+              summary: 'Storage probe lacks recovery evidence: read'
+              description: 'Instance node-a has unresolved dedicated probe evidence. Compare business dependency metrics; probe success cannot clear business file errors.'
+      - eval_time: 150s
+        alertname: DingoSpeedStorageProbeUnresolved
+        exp_alerts: [*unresolved]
+      - eval_time: 180s
+        alertname: DingoSpeedStorageProbeUnresolved
+        exp_alerts: []

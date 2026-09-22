@@ -2,6 +2,7 @@ package util
 
 import (
 	"crypto/tls"
+	"dingospeed/pkg/transfersettings"
 	"fmt"
 	"net/http"
 	"os"
@@ -77,35 +78,6 @@ func EnsureDir(path string) error {
 	return nil
 }
 
-func GetCachePath(repoType, repoId, revision, filePath string) (string, bool) {
-	parts := strings.Split(repoId, "/")
-	if len(parts) != 2 {
-		zap.S().Errorf("无效的repoId格式: %s，需为 org/repo 格式", repoId)
-		return "", false
-	}
-
-	var cacheRoot string
-	switch repoType {
-	case "datasets":
-		cacheRoot = config.SysConfig.GetDatasetCacheRoot()
-	case "models", "":
-		cacheRoot = config.SysConfig.GetModelCacheRoot()
-	default:
-		zap.S().Warnf("未知的repoType: %s，默认使用models缓存目录", repoType)
-		cacheRoot = config.SysConfig.GetModelCacheRoot()
-	}
-
-	targetCachePath := filepath.Join(cacheRoot, parts[0], parts[1], revision, filepath.Clean(filePath))
-	fileInfo, err := os.Stat(targetCachePath)
-	if err == nil {
-		zap.S().Debugf("缓存文件存在: %s, 大小: %d字节", targetCachePath, fileInfo.Size())
-		return targetCachePath, true
-	}
-
-	_ = EnsureDir(targetCachePath)
-	return targetCachePath, false
-}
-
 var (
 	httpClientOnce   sync.Once
 	globalHTTPClient *http.Client
@@ -147,23 +119,36 @@ func DoRequestWithRetry(req *http.Request) (*http.Response, error) {
 	client := CreateHTTPClient()
 	var resp *http.Response
 	var err error
+	attempts := config.SysConfig.Modelscope.MaxRetry
+	if attempts < 1 {
+		attempts = 1 // A retry setting must never suppress the initial request.
+	}
 
-	for i := 0; i < config.SysConfig.Modelscope.MaxRetry; i++ {
-		resp, err = client.Do(req)
+	for i := 0; i < attempts; i++ {
+		resp, err = transfersettings.Do("modelscope", client, req)
 		if err == nil {
 			return resp, nil
 		}
 
 		if strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "deadline exceeded") {
-			zap.S().Warnf("⚠️  Retry %d/%d: request timeout - %v", i+1, config.SysConfig.Modelscope.MaxRetry, err)
-			time.Sleep(time.Duration(config.SysConfig.Modelscope.RetryDelay) * time.Duration(i+1))
+			zap.S().Warnf("⚠️  Retry %d/%d: request timeout - %v", i+1, attempts, err)
+			if i+1 == attempts {
+				break
+			}
+			timer := time.NewTimer(time.Duration(config.SysConfig.Modelscope.RetryDelay) * time.Second * time.Duration(i+1))
+			select {
+			case <-req.Context().Done():
+				timer.Stop()
+				return nil, req.Context().Err()
+			case <-timer.C:
+			}
 			continue
 		}
 
 		return nil, err
 	}
 
-	return nil, fmt.Errorf("failed after %d retries: %v", config.SysConfig.Modelscope.MaxRetry, err)
+	return nil, fmt.Errorf("failed after %d attempts: %w", attempts, err)
 }
 
 // ParseRangeHeader 解析Range请求头，返回起始字节和结束字节（-1表示到末尾）

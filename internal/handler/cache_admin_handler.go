@@ -15,6 +15,8 @@
 package handler
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,8 +24,9 @@ import (
 
 	"dingospeed/internal/dao"
 	"dingospeed/internal/service"
+	"dingospeed/pkg/repository"
+	"dingospeed/pkg/util"
 
-	"github.com/bytedance/sonic"
 	"github.com/labstack/echo/v4"
 )
 
@@ -59,7 +62,20 @@ func (h *CacheAdminHandler) ListRepos(c echo.Context) error {
 	if err != nil {
 		return writeUploadError(c, "cache repo list failed", err)
 	}
-	return c.JSON(http.StatusOK, map[string]interface{}{"repos": result})
+	filtered := result[:0]
+	for _, repo := range result {
+		if ns := c.QueryParam("namespace"); ns != "" && repo.Namespace != ns {
+			continue
+		}
+		if typ := c.QueryParam("repoType"); typ != "" && repo.RepoType != typ {
+			continue
+		}
+		if name := c.QueryParam("repo"); name != "" && repo.Repo != name {
+			continue
+		}
+		filtered = append(filtered, repo)
+	}
+	return c.JSON(http.StatusOK, map[string]interface{}{"repos": filtered})
 }
 
 func (h *CacheAdminHandler) ListFiles(c echo.Context) error {
@@ -103,15 +119,20 @@ func (h *CacheAdminHandler) PurgeOrphans(c echo.Context) error {
 }
 
 func parseCacheQuery(c echo.Context) service.CacheQuery {
+	id := ""
+	if c.QueryParam("repo") != "" {
+		id = util.GetOrgRepo(c.QueryParam("namespace"), c.QueryParam("repo"))
+	}
 	return service.CacheQuery{
-		RepoType: c.QueryParam("repoType"),
-		OrgRepo:  c.QueryParam("orgRepo"),
-		Source:   c.QueryParam("source"),
-		Keyword:  c.QueryParam("keyword"),
-		Sort:     c.QueryParam("sort"),
-		Order:    c.QueryParam("order"),
-		Page:     atoiOrZero(c.QueryParam("page")),
-		PageSize: atoiOrZero(c.QueryParam("pageSize")),
+		Namespace: c.QueryParam("namespace"),
+		RepoType:  c.QueryParam("repoType"),
+		OrgRepo:   id,
+		Source:    c.QueryParam("source"),
+		Keyword:   c.QueryParam("keyword"),
+		Sort:      c.QueryParam("sort"),
+		Order:     c.QueryParam("order"),
+		Page:      atoiOrZero(c.QueryParam("page")),
+		PageSize:  atoiOrZero(c.QueryParam("pageSize")),
 	}
 }
 
@@ -136,7 +157,9 @@ func readDeleteItems(c echo.Context) ([]dao.DeleteItem, error) {
 		return nil, fmt.Errorf("request body too large")
 	}
 	var req deleteRequest
-	if err = sonic.Unmarshal(body, &req); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	if err = decoder.Decode(&req); err != nil {
 		return nil, fmt.Errorf("body is not valid json: %v", err)
 	}
 	if len(req.Items) == 0 {
@@ -144,6 +167,14 @@ func readDeleteItems(c echo.Context) ([]dao.DeleteItem, error) {
 	}
 	if len(req.Items) > 2000 {
 		return nil, fmt.Errorf("too many items in one request: %d", len(req.Items))
+	}
+	for i := range req.Items {
+		item := &req.Items[i]
+		key := repository.RepoKey{Namespace: item.Namespace, RepoType: item.RepoType, Repo: item.Repo}
+		if err := key.Validate(); err != nil {
+			return nil, err
+		}
+		item.OrgRepo = key.ID()
 	}
 	return req.Items, nil
 }

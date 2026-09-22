@@ -24,7 +24,7 @@ import (
 // revision 的当前指向，否则说明别人已经改过，静默覆盖会丢掉对方的提交。
 type LocalPublishTreeParam struct {
 	RepoType   string
-	Org        string
+	Namespace  string
 	Repo       string
 	Revision   string
 	BaseCommit string
@@ -32,10 +32,11 @@ type LocalPublishTreeParam struct {
 }
 
 type LocalPublishTreeResult struct {
-	RepoType string `json:"repoType"`
-	Repo     string `json:"repo"`
-	Revision string `json:"revision"`
-	Commit   string `json:"commit"`
+	Namespace string `json:"namespace"`
+	RepoType  string `json:"repoType"`
+	Repo      string `json:"repo"`
+	Revision  string `json:"revision"`
+	Commit    string `json:"commit"`
 	// PreviousCommit 是本次提交之前 revision 的指向。
 	//
 	// 调用方判断“改动是否生效”必须看它与 Commit 是否不同，不能看 Commit 是否变化：
@@ -75,7 +76,12 @@ func supersededMarkerPath(repoType, orgRepo, commit string) string {
 // 与 PublishFiles 共用 manifestCommit 与 writeEffectiveMetadata：两条路径算出的
 // 标识必须来自同一份序列化，否则同样的内容会得到两个标识，客户端会白白重下一遍。
 func (u *UploadDao) PublishTree(param LocalPublishTreeParam) (*LocalPublishTreeResult, error) {
-	orgRepo := util.GetOrgRepo(param.Org, param.Repo)
+	release := holdRepository(param.RepoType, param.Namespace, param.Repo)
+	defer release()
+	if err := RegisterHosted(param.RepoType, param.Namespace, param.Repo); err != nil {
+		return nil, localUploadError{status: 409, code: "REPOSITORY_REGISTRATION_CONFLICT", msg: err.Error()}
+	}
+	orgRepo := util.GetOrgRepo(param.Namespace, param.Repo)
 
 	// 锁序与 PublishFiles 完全一致：publish try-enter → 仓库锁 → 版本锁。
 	// 少一把或换个顺序都会与即时生效上传、回收任务交叉成死锁或脏读。
@@ -132,7 +138,8 @@ func (u *UploadDao) PublishTree(param LocalPublishTreeParam) (*LocalPublishTreeR
 	added, replaced, unchanged, removed := diffManifest(currentManifest, manifest)
 	result := &LocalPublishTreeResult{
 		RepoType:       param.RepoType,
-		Repo:           orgRepo,
+		Namespace:      param.Namespace,
+		Repo:           param.Repo,
 		Revision:       param.Revision,
 		Commit:         commit,
 		PreviousCommit: currentCommit,

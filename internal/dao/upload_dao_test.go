@@ -45,13 +45,13 @@ func sha256Hex(b []byte) string {
 
 func uploadParam(filePath string, content []byte) LocalUploadParam {
 	return LocalUploadParam{
-		RepoType: "models",
-		Org:      "dingo-local",
-		Repo:     "demo",
-		Revision: "main",
-		FilePath: filePath,
-		Size:     int64(len(content)),
-		Sha256:   sha256Hex(content),
+		RepoType:  "models",
+		Namespace: "dingo-local",
+		Repo:      "demo",
+		Revision:  "main",
+		FilePath:  filePath,
+		Size:      int64(len(content)),
+		Sha256:    sha256Hex(content),
 	}
 }
 
@@ -473,6 +473,12 @@ func TestStagedUploadRetentionAndCleanup(t *testing.T) {
 
 func TestStagedUploadCleanupOnlyScansLocalNamespace(t *testing.T) {
 	u, repos := newTestUploadDao(t)
+	if err := RegisterHosted("models", "dingo-local", "local-repo"); err != nil {
+		t.Fatal(err)
+	}
+	if err := RegisterHosted("datasets", "dingo-local", "local-dataset"); err != nil {
+		t.Fatal(err)
+	}
 	stale := time.Now().Add(-48 * time.Hour)
 
 	localPath := stagedBlobPath(repos, "models", "dingo-local/local-repo", "local-sha")
@@ -819,7 +825,7 @@ func TestUploadMetadataFootprintStaysLinear(t *testing.T) {
 	// 每次上传固定写 1 个 blob + 1 份清单 + 2 份 commit 元数据，
 	// 外加全程复用的 2 份版本标签元数据。逐条落 paths-info / 建 resolve 链接的
 	// 老写法在这个规模下会产生一万多个文件。
-	if want := 4*fileCount + 2; objects != want {
+	if want := 4*fileCount + 4; objects != want {
 		t.Fatalf("metadata footprint is %d files, want %d (quadratic growth regression?)", objects, want)
 	}
 }

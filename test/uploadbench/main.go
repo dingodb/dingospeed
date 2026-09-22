@@ -1,4 +1,4 @@
-// uploadbench 是针对 dingospeed 本地单文件上传接口 POST /api/local-upload/... 的压测客户端。
+// uploadbench 是针对 dingospeed 本地单文件上传接口 POST /api/uploads/:repoType/:namespace?repo&revision&path 的压测客户端。
 // 只依赖标准库，内容按种子确定性生成，不落磁盘，避免客户端磁盘 IO 干扰服务端指标。
 package main
 
@@ -12,6 +12,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -133,17 +134,16 @@ type sample struct {
 }
 
 type target struct {
-	base     string
-	token    string
-	repoType string
-	org      string
-	repo     string
-	revision string
+	base      string
+	repoType  string
+	namespace string
+	repo      string
+	revision  string
 }
 
 func (t target) upload(cli *http.Client, filePath string, seed uint64, size int64, overwrite bool, body io.Reader) (int, string, string, error) {
-	u := fmt.Sprintf("%s/api/local-upload/%s/%s/%s/%s/%s?size=%d&sha256=%s",
-		t.base, t.repoType, t.org, t.repo, t.revision, filePath, size, contentSha(seed, size))
+	q := url.Values{"repo": {t.repo}, "revision": {t.revision}, "path": {filePath}, "size": {fmt.Sprint(size)}, "sha256": {contentSha(seed, size)}}
+	u := strings.TrimRight(t.base, "/") + "/api/uploads/" + url.PathEscape(t.repoType) + "/" + url.PathEscape(t.namespace) + "?" + q.Encode()
 	if overwrite {
 		u += "&overwrite=true"
 	}
@@ -152,7 +152,6 @@ func (t target) upload(cli *http.Client, filePath string, seed uint64, size int6
 		return 0, "", "", err
 	}
 	req.ContentLength = size
-	req.Header.Set(uploadTokenHeader, t.token)
 	req.Header.Set("Content-Type", "application/octet-stream")
 	resp, err := cli.Do(req)
 	if err != nil {
@@ -172,8 +171,6 @@ func (t target) upload(cli *http.Client, filePath string, seed uint64, size int6
 	}
 	return resp.StatusCode, code, upStatus, nil
 }
-
-const uploadTokenHeader = "X-Dingo-Upload-Token"
 
 // retry429 > 0 时，客户端遇到 429 会退避后重试同一个文件，模拟真实上传工具的行为。
 var retry429 time.Duration
@@ -300,32 +297,31 @@ func summarize(scenario, label string, conc int, size int64, samples []sample, w
 
 func main() {
 	var (
-		base     = flag.String("base", "http://127.0.0.1:8091", "上传服务地址")
-		token    = flag.String("token", "bench-token", "上传 token")
-		repoType = flag.String("repoType", "datasets", "models|datasets")
-		org      = flag.String("org", "dingo-local", "命名空间")
-		repo     = flag.String("repo", "bench", "仓库名")
-		revision = flag.String("revision", "main", "版本")
-		scenario = flag.String("scenario", "closed", "closed|dataset|slowloris|idem")
-		label    = flag.String("label", "", "结果标签")
-		conc     = flag.Int("c", 4, "并发数")
-		total    = flag.Int("n", 32, "总请求数")
-		size     = flag.Int64("size", 4<<20, "单文件字节数")
-		prefix   = flag.String("prefix", "f", "文件名前缀")
-		out      = flag.String("out", "", "逐请求样本 JSONL 输出路径")
-		holders  = flag.Int("holders", 4, "slowloris 场景占位连接数")
-		holdRate = flag.Int64("holdRate", 4096, "slowloris 每个占位连接的字节/秒")
-		holdSize = flag.Int64("holdSize", 8<<20, "slowloris 占位文件字节数")
-		probeFor = flag.Duration("probeFor", 20*time.Second, "slowloris 探测持续时间")
-		warmup   = flag.Bool("warmup", true, "先发一次请求预热连接与目录")
-		shards   = flag.Int("shardRepos", 1, "dataset 场景把文件散列到 N 个仓库，1 表示全部写同一个仓库")
-		retry    = flag.Duration("retry429", 0, "closed 场景遇到 429 的退避重试间隔，0 表示不重试")
+		base      = flag.String("base", "http://127.0.0.1:8091", "上传服务地址")
+		repoType  = flag.String("repoType", "datasets", "models|datasets")
+		namespace = flag.String("namespace", "dingo-local", "命名空间")
+		repo      = flag.String("repo", "bench", "仓库名")
+		revision  = flag.String("revision", "main", "版本")
+		scenario  = flag.String("scenario", "closed", "closed|dataset|slowloris|idem")
+		label     = flag.String("label", "", "结果标签")
+		conc      = flag.Int("c", 4, "并发数")
+		total     = flag.Int("n", 32, "总请求数")
+		size      = flag.Int64("size", 4<<20, "单文件字节数")
+		prefix    = flag.String("prefix", "f", "文件名前缀")
+		out       = flag.String("out", "", "逐请求样本 JSONL 输出路径")
+		holders   = flag.Int("holders", 4, "slowloris 场景占位连接数")
+		holdRate  = flag.Int64("holdRate", 4096, "slowloris 每个占位连接的字节/秒")
+		holdSize  = flag.Int64("holdSize", 8<<20, "slowloris 占位文件字节数")
+		probeFor  = flag.Duration("probeFor", 20*time.Second, "slowloris 探测持续时间")
+		warmup    = flag.Bool("warmup", true, "先发一次请求预热连接与目录")
+		shards    = flag.Int("shardRepos", 1, "dataset 场景把文件散列到 N 个仓库，1 表示全部写同一个仓库")
+		retry     = flag.Duration("retry429", 0, "closed 场景遇到 429 的退避重试间隔，0 表示不重试")
 	)
 	flag.Parse()
 	retry429 = *retry
 	shardRepos = *shards
 
-	t := target{base: *base, token: *token, repoType: *repoType, org: *org, repo: *repo, revision: *revision}
+	t := target{base: *base, repoType: *repoType, namespace: *namespace, repo: *repo, revision: *revision}
 	lbl := *label
 	if lbl == "" {
 		lbl = fmt.Sprintf("%s-c%d-n%d-%dB", *scenario, *conc, *total, *size)

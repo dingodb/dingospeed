@@ -12,13 +12,13 @@ import (
 
 func chunkParam(filePath string, content []byte) LocalChunkUploadParam {
 	return LocalChunkUploadParam{
-		RepoType: "models",
-		Org:      "dingo-local",
-		Repo:     "demo",
-		Revision: "main",
-		FilePath: filePath,
-		Sha256:   sha256Hex(content),
-		Size:     int64(len(content)),
+		RepoType:  "models",
+		Namespace: "dingo-local",
+		Repo:      "demo",
+		Revision:  "main",
+		FilePath:  filePath,
+		Sha256:    sha256Hex(content),
+		Size:      int64(len(content)),
 	}
 }
 
@@ -57,12 +57,12 @@ func chunkPlan(size, chunkLen int64) [][2]int64 {
 func progressOf(t *testing.T, u *UploadDao, param LocalChunkUploadParam) *LocalUploadProgress {
 	t.Helper()
 	progress, err := u.QueryProgress(LocalUploadParam{
-		RepoType: param.RepoType,
-		Org:      param.Org,
-		Repo:     param.Repo,
-		Revision: param.Revision,
-		FilePath: param.FilePath,
-		Sha256:   param.Sha256,
+		RepoType:  param.RepoType,
+		Namespace: param.Namespace,
+		Repo:      param.Repo,
+		Revision:  param.Revision,
+		FilePath:  param.FilePath,
+		Sha256:    param.Sha256,
 	})
 	if err != nil {
 		t.Fatalf("query progress failed: %v", err)

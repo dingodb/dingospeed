@@ -17,10 +17,13 @@ package service
 import (
 	"archive/zip"
 	"crypto/sha256"
+	"dingospeed/pkg/repository"
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net/url"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -74,6 +77,53 @@ func (m *MetaService) GetMetadata(repoType, orgRepo, revision, method, authoriza
 }
 
 func (m *MetaService) GetRepoTree(repoType, orgRepo, revision, pathInRepo string, recursive bool, authorization string) ([]RepoTreeItem, error) {
+	if !dao.IsLocalOrgRepo(orgRepo) {
+		upstream, err := dao.UpstreamRepo(repoType, orgRepo)
+		if err != nil {
+			return nil, err
+		}
+		uri := "/api/" + repoType + "/" + escapeRepoPath(upstream) + "/tree/" + url.PathEscape(revision)
+		if pathInRepo != "" {
+			uri += "/" + escapeRepoPath(pathInRepo)
+		}
+		if recursive {
+			uri += "?recursive=true"
+		}
+		headers := map[string]string{}
+		if authorization != "" {
+			headers["Authorization"] = authorization
+		}
+		items := []RepoTreeItem{}
+		seen := map[string]bool{}
+		for page := 0; page < 1000; page++ {
+			if seen[uri] {
+				return nil, fmt.Errorf("upstream tree pagination loop")
+			}
+			seen[uri] = true
+			resp, err := util.Get(uri, headers)
+			if err != nil {
+				return nil, err
+			}
+			if resp.StatusCode != 200 {
+				return nil, echo.NewHTTPError(resp.StatusCode, "upstream tree request rejected")
+			}
+			var batch []RepoTreeItem
+			if err = sonic.Unmarshal(resp.Body, &batch); err != nil {
+				return nil, err
+			}
+			items = append(items, batch...)
+			next, err := hfTreeNextURI(resp.GetKey("Link"), uri)
+			if err != nil {
+				return nil, err
+			}
+			if next == "" {
+				return items, nil
+			}
+			uri = next
+		}
+		return nil, fmt.Errorf("upstream tree pagination exceeds limit")
+	}
+
 	commitSha, err := m.fileDao.GetFileCommitSha(repoType, orgRepo, revision, authorization, "meta")
 	if err != nil {
 		return nil, err
@@ -171,6 +221,41 @@ func (m *MetaService) StreamLocalArchive(repoType, orgRepo, revision, repo strin
 	return archive.Close()
 }
 
+// Only carry a pagination query back to the configured provider and same tree
+// path. A Link response cannot redirect a machine/provider credential elsewhere.
+func hfTreeNextURI(link, current string) (string, error) {
+	for _, part := range strings.Split(link, ",") {
+		if !strings.Contains(part, `rel="next"`) && !strings.Contains(part, "rel=next") {
+			continue
+		}
+		start, end := strings.Index(part, "<"), strings.Index(part, ">")
+		if start < 0 || end <= start {
+			return "", fmt.Errorf("invalid upstream pagination link")
+		}
+		next, err := url.Parse(part[start+1 : end])
+		if err != nil {
+			return "", err
+		}
+		base, err := url.Parse(config.SysConfig.GetHFURLBase())
+		if err != nil {
+			return "", err
+		}
+		currentURL, _ := url.Parse(current)
+		if next.Host != "" && next.Host != base.Host && next.Host != "huggingface.co" {
+			return "", fmt.Errorf("upstream pagination host mismatch")
+		}
+		nextPath := next.Path
+		if next.Host == base.Host && base.Path != "" {
+			nextPath = strings.TrimPrefix(nextPath, strings.TrimRight(base.Path, "/"))
+		}
+		if nextPath != currentURL.Path {
+			return "", fmt.Errorf("upstream pagination path mismatch")
+		}
+		return repository.EscapeURLPath(nextPath) + "?" + next.RawQuery, nil
+	}
+	return "", nil
+}
+
 func stableTreeID(path string) string {
 	sum := sha256.Sum256([]byte(path))
 	return hex.EncodeToString(sum[:])
@@ -198,7 +283,7 @@ func (m *MetaService) RepoRefs(c echo.Context, repoType, org, repo string) error
 		return util.ErrorRepoNotFound(c)
 	}
 	authorization := c.Request().Header.Get("authorization")
-	localRefsDir := fmt.Sprintf("%s/api/%s/%s/refs", config.SysConfig.Repos(), repoType, orgRepo)
+	localRefsDir := filepath.Join(dao.RepositoryKey(repoType, orgRepo).APIRoot(config.SysConfig.Repos()), "refs")
 	localRefsPath := fmt.Sprintf("%s/%s", localRefsDir, fmt.Sprintf("refs_get.json"))
 	err := util.MakeDirs(localRefsPath)
 	if err != nil {
@@ -255,9 +340,10 @@ func (m *MetaService) ForwardToNewSite(c echo.Context) error {
 			originalLink := strings.Join(v, ", ")
 			newLink := strings.ReplaceAll(
 				originalLink,
-				"https://huggingface.co",
-				config.SysConfig.Scheduler.LinkDomain,
+				config.SysConfig.GetHFURLBase(),
+				providerLinkBase(c),
 			)
+			newLink = strings.ReplaceAll(newLink, "https://huggingface.co", providerLinkBase(c))
 			response.Header()[k] = []string{newLink}
 		} else {
 			response.Header()[k] = v
@@ -272,11 +358,12 @@ func (m *MetaService) ForwardToNewSite(c echo.Context) error {
 }
 
 func (m *MetaService) RepositoryFiles(repoType, orgRepo, commit, filePath string) ([]*FileDescribe, error) {
-	pathsInfoShaDir := fmt.Sprintf("%s/api/%s/%s/paths-info/%s", config.SysConfig.Repos(), repoType, orgRepo, commit)
+	pathsInfoShaDir := dao.RepositoryKey(repoType, orgRepo).PathsInfo(config.SysConfig.Repos(), commit, "")
 	if filePath != "" {
 		pathsInfoShaDir += fmt.Sprintf("/%s", filePath)
 	}
-	downloadLinkRoot := fmt.Sprintf("%s/%s/%s/resolve/%s", config.SysConfig.Scheduler.PublicDomain, repoType, orgRepo, commit)
+	key, _ := repository.ParseID(repoType, orgRepo)
+	downloadLinkRoot := strings.TrimRight(config.SysConfig.Scheduler.PublicDomain, "/") + "/api/repositories/" + url.PathEscape(repoType) + "/" + url.PathEscape(key.Namespace) + "/file?repo=" + url.QueryEscape(key.Repo) + "&revision=" + url.QueryEscape(commit) + "&path="
 	if dao.IsLocalOrgRepo(orgRepo) {
 		return m.localRepositoryFiles(repoType, orgRepo, commit, filePath, downloadLinkRoot)
 	}
@@ -302,7 +389,7 @@ func (m *MetaService) RepositoryFiles(repoType, orgRepo, commit, filePath string
 				} else {
 					filePathName = item
 				}
-				fileDescribe.Link = fmt.Sprintf("%s/%s", downloadLinkRoot, filePathName)
+				fileDescribe.Link = downloadLinkRoot + url.QueryEscape(filePathName)
 			}
 			fileDescribes = append(fileDescribes, fileDescribe)
 		}
@@ -343,7 +430,7 @@ func (m *MetaService) localRepositoryFiles(repoType, orgRepo, commit, filePath, 
 		fileDescribes = append(fileDescribes, &FileDescribe{
 			Name: rest,
 			Size: item.Size,
-			Link: fmt.Sprintf("%s/%s", downloadLinkRoot, item.Path),
+			Link: downloadLinkRoot + url.QueryEscape(item.Path),
 		})
 	}
 	// 清单本身就是空的（新建还没加文件、或者被清空的 revision），那么仓库根目录下
@@ -408,4 +495,25 @@ type FileDescribe struct {
 	Size  int64  `json:"size"`
 	IsDir bool   `json:"isDir"`
 	Link  string `json:"link"`
+}
+
+func (m *MetaService) RevisionCommit(repoType, id, revision string) (string, error) {
+	return m.fileDao.GetCommitHfOffline(repoType, id, revision)
+}
+
+func escapeRepoPath(path string) string {
+	parts := strings.Split(path, "/")
+	for i := range parts {
+		parts[i] = url.PathEscape(parts[i])
+	}
+	return strings.Join(parts, "/")
+}
+
+func providerLinkBase(c echo.Context) string {
+	base := config.SysConfig.Scheduler.LinkDomain
+	if base == "" {
+		base = c.Scheme() + "://" + c.Request().Host
+	}
+	prefix, _ := c.Get("providerPrefix").(string)
+	return strings.TrimRight(base, "/") + prefix
 }

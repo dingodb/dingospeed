@@ -32,7 +32,9 @@ import (
 	"dingospeed/pkg/common"
 	"dingospeed/pkg/config"
 	"dingospeed/pkg/consts"
+	"dingospeed/pkg/dependency"
 	myerr "dingospeed/pkg/error"
+	"dingospeed/pkg/repository"
 	"dingospeed/pkg/util"
 
 	"github.com/bytedance/sonic"
@@ -72,8 +74,8 @@ func (f *FileDao) CheckCommitHf(repoType, orgRepo, commit, authorization string)
 }
 
 func (f *FileDao) GetFileCommitSha(repoType, orgRepo, commit, authorization string, source string) (string, error) {
-	metaShaKey := GetMetaShaRepoKey(orgRepo, commit, authorization)
-	if v, ok := f.baseData.Cache.Get(metaShaKey); ok {
+	metaShaKey := GetMetaShaRepoKey(repoType+"/"+orgRepo, commit, authorization)
+	if v, ok := f.baseData.Cache.Get(metaShaKey); ok && (IsLocalOrgRepo(orgRepo) || !config.SysConfig.Online()) {
 		return v.(string), nil
 	}
 	var (
@@ -83,10 +85,8 @@ func (f *FileDao) GetFileCommitSha(repoType, orgRepo, commit, authorization stri
 	if IsLocalOrgRepo(orgRepo) {
 		commitSha, err = f.GetCommitHfOffline(repoType, orgRepo, commit)
 		if err != nil {
-			var accessErr *util.FileAccessError
-			if errors.As(err, &accessErr) {
-				zap.S().Errorw("local metadata storage unavailable", "kind", accessErr.Kind, "path", accessErr.Path, "error", accessErr.Err)
-				return "", myerr.Wrap("local metadata storage unavailable", err)
+			if !errors.Is(err, os.ErrNotExist) {
+				return "", localMetadataError(err)
 			}
 			return "", myerr.NewAppendCode(http.StatusNotFound, fmt.Sprintf("%s is not found", orgRepo))
 		}
@@ -97,20 +97,18 @@ func (f *FileDao) GetFileCommitSha(repoType, orgRepo, commit, authorization stri
 	}
 	commitSha, err = f.GetCommitHfOffline(repoType, orgRepo, commit)
 	if err != nil {
-		var accessErr *util.FileAccessError
-		if errors.As(err, &accessErr) {
-			zap.S().Errorw("metadata cache storage unavailable", "kind", accessErr.Kind, "path", accessErr.Path, "error", accessErr.Err)
-			return "", myerr.Wrap("metadata cache storage unavailable", err)
-		}
 		if source == "file" {
 			// 若只是发起文件下载（先在线后离线），将不会校验meta文件是否存在，没有就创建，主要是看文件本身是否存在。
 			goto remoteRequestMeta
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", localMetadataError(err)
 		}
 		zap.S().Warnf("getFileCommitSha GetCommitHfOffline err.%v", err)
 		return "", myerr.NewAppendCode(http.StatusNotFound, fmt.Sprintf("%s is not found", orgRepo))
 	}
 	f.baseData.Cache.Set(metaShaKey, commitSha, config.SysConfig.GetDefaultExpiration())
-	f.baseData.Cache.Set(GetMetaShaRepoKey(orgRepo, commitSha, authorization), commitSha, config.SysConfig.GetDefaultExpiration())
+	f.baseData.Cache.Set(GetMetaShaRepoKey(repoType+"/"+orgRepo, commitSha, authorization), commitSha, config.SysConfig.GetDefaultExpiration())
 	return commitSha, nil
 
 remoteRequestMeta:
@@ -131,7 +129,7 @@ remoteRequestMeta:
 		commitSha = sha
 	}
 	f.baseData.Cache.Set(metaShaKey, commitSha, config.SysConfig.GetDefaultExpiration())
-	f.baseData.Cache.Set(GetMetaShaRepoKey(orgRepo, commitSha, authorization), commitSha, config.SysConfig.GetDefaultExpiration())
+	f.baseData.Cache.Set(GetMetaShaRepoKey(repoType+"/"+orgRepo, commitSha, authorization), commitSha, config.SysConfig.GetDefaultExpiration())
 	return commitSha, nil
 }
 
@@ -151,25 +149,35 @@ func (f *FileDao) getCommitHfRemote(repoType, orgRepo, commit, authorization str
 		zap.S().Errorf("unmarshal content:%s, error:%v", string(resp.Body), err)
 		return http.StatusInternalServerError, "", err
 	}
+	if err := repository.Segment(sha.Sha); err != nil {
+		return 502, "", err
+	}
 	return resp.StatusCode, sha.Sha, nil
 }
 
 func (f *FileDao) RemoteRequestMeta(method, repoType, orgRepo, revision, authorization string) (*common.Response, error) {
+	return f.RemoteRequestMetaContext(context.Background(), method, repoType, orgRepo, revision, authorization)
+}
+func (f *FileDao) RemoteRequestMetaContext(ctx context.Context, method, repoType, orgRepo, revision, authorization string) (*common.Response, error) {
+	upstream, err := UpstreamRepo(repoType, orgRepo)
+	if err != nil {
+		return nil, err
+	}
 	var reqUri string
 	if revision == "" {
-		reqUri = fmt.Sprintf("/api/%s/%s", repoType, orgRepo)
+		reqUri = fmt.Sprintf("/api/%s/%s", repoType, repository.EscapeURLPath(upstream))
 	} else {
-		reqUri = fmt.Sprintf("/api/%s/%s/revision/%s", repoType, orgRepo, revision)
+		reqUri = fmt.Sprintf("/api/%s/%s/revision/%s", repoType, repository.EscapeURLPath(upstream), repository.EscapeURLPath(revision))
 	}
 	headers := map[string]string{}
 	if authorization != "" {
 		headers["authorization"] = authorization
 	}
-	return util.RetryRequest(func() (*common.Response, error) {
+	return util.RetryRequestContext(ctx, func() (*common.Response, error) {
 		if method == consts.RequestTypeHead {
-			return util.Head(reqUri, headers)
+			return util.HeadContext(ctx, reqUri, headers)
 		} else if method == consts.RequestTypeGet {
-			return util.Get(reqUri, headers)
+			return util.GetContext(ctx, reqUri, headers)
 		} else {
 			return nil, fmt.Errorf("request method err")
 		}
@@ -177,35 +185,51 @@ func (f *FileDao) RemoteRequestMeta(method, repoType, orgRepo, revision, authori
 }
 
 func (f *FileDao) GetCommitHfOffline(repoType, orgRepo, commit string) (string, error) {
-	apiPath := fmt.Sprintf("%s/api/%s/%s/revision/%s/meta_get.json", config.SysConfig.Repos(), repoType, orgRepo, commit)
+	apiPath := filepath.Join(RepositoryKey(repoType, orgRepo).Revision(config.SysConfig.Repos(), commit), "meta_get.json")
 	exists, err := util.PathExists(apiPath)
 	if err != nil {
+		util.ObserveFileAccessFailure("stat", err)
 		return "", err
 	}
 	if exists {
 		cacheContent, err := f.ReadCacheRequest(apiPath)
 		if err != nil {
-			if accessErr, ok := util.ClassifyFileAccessError(apiPath, err); ok {
-				return "", accessErr
-			}
+			util.ObserveFileAccessFailure("read", err)
 			return "", err
 		}
 		var sha CommitHfSha
+		dependency.Default.Observe(dependency.MetadataRead, true, time.Now())
 		if err = sonic.Unmarshal(cacheContent.OriginContent, &sha); err != nil {
 			zap.S().Errorf("unmarshal error.%v", err)
 			return "", myerr.Wrap("Unmarshal err", err)
 		}
 		return sha.Sha, nil
 	}
-	return "", myerr.New(fmt.Sprintf("apiPath file not exist, %s", apiPath))
+	return "", fmt.Errorf("apiPath file not exist, %s: %w", apiPath, os.ErrNotExist)
+}
+
+// Keep the cause for internal diagnosis, without exposing paths in HTTP errors.
+func localMetadataError(err error) error {
+	if _, ok := util.ClassifyFileAccessError("", err); ok {
+		return myerr.WrapCode(http.StatusServiceUnavailable, "local metadata storage unavailable", err)
+	}
+	return myerr.WrapCode(http.StatusInternalServerError, "local metadata invalid", err)
 }
 
 func (f *FileDao) FileGetGenerator(c echo.Context, repoType, orgRepo, commit, fileName, method string) error {
+	upstream := orgRepo
+	if !IsLocalOrgRepo(orgRepo) {
+		var err error
+		upstream, err = UpstreamRepo(repoType, orgRepo)
+		if err != nil {
+			return err
+		}
+	}
 	var hfUri string
 	if repoType == "models" {
-		hfUri = fmt.Sprintf("/%s/resolve/%s/%s", orgRepo, commit, fileName)
+		hfUri = fmt.Sprintf("/%s/resolve/%s/%s", repository.EscapeURLPath(upstream), repository.EscapeURLPath(commit), repository.EscapeURLPath(fileName))
 	} else {
-		hfUri = fmt.Sprintf("/%s/%s/resolve/%s/%s", repoType, orgRepo, commit, fileName)
+		hfUri = fmt.Sprintf("/%s/%s/resolve/%s/%s", repoType, repository.EscapeURLPath(upstream), repository.EscapeURLPath(commit), repository.EscapeURLPath(fileName))
 	}
 	authorization := c.Request().Header.Get("Authorization")
 	// _file_realtime_stream
@@ -226,23 +250,79 @@ func (f *FileDao) FileGetGenerator(c echo.Context, repoType, orgRepo, commit, fi
 		zap.S().Warnf("repo:%s, commit:%s, fileName:%s is directory", orgRepo, commit, fileName)
 		return util.ErrorEntryNotFound(c)
 	}
-	respHeaders, etag, startPos, endPos := constructRespHeader(c, pathInfo, commit, fileName)
+	return f.ServePreparedFile(c, RepositoryKey(repoType, orgRepo), commit, fileName, method, pathInfo, hfUri, nil)
+}
+
+// ServePreparedFile serves normalized provider metadata through the existing cache pipeline.
+func (f *FileDao) ServePreparedFile(c echo.Context, key repository.RepoKey, commit, fileName, method string, pathInfo *common.PathsInfo, uri string, source *downloader.RemoteSource) error {
+	var err error
+	repoType, orgRepo := key.RepoType, key.ID()
+	authorization := c.Request().Header.Get("Authorization")
+	var respHeaders map[string]string
+	var etag string
+	var startPos, endPos int64
+	if source == nil {
+		respHeaders, etag, startPos, endPos = constructRespHeader(c, pathInfo, commit, fileName)
+	} else {
+		var err error
+		startPos, endPos, err = util.FileRange(c.Request().Header.Get("Range"), pathInfo.Size)
+		if err != nil {
+			c.Response().Header().Set("Content-Range", fmt.Sprintf("bytes */%d", pathInfo.Size))
+			return echo.NewHTTPError(416, err.Error())
+		}
+		etag = pathInfo.Oid
+		if pathInfo.Lfs.Oid != "" {
+			etag = pathInfo.Lfs.Oid
+		}
+		respHeaders = map[string]string{"Content-Type": "application/octet-stream", "Content-Length": fmt.Sprint(endPos - startPos), "Accept-Ranges": "bytes", "ETag": fmt.Sprintf("%q", etag), "X-Repo-Commit": commit}
+		if c.Request().Header.Get("Range") != "" {
+			respHeaders["Content-Range"] = fmt.Sprintf("bytes %d-%d/%d", startPos, endPos-1, pathInfo.Size)
+		}
+	}
+	if err := repository.Segment(etag); err != nil {
+		return echo.NewHTTPError(502, "invalid upstream content identity")
+	}
+	if !IsLocalOrgRepo(orgRepo) {
+		if err := repository.Register(config.SysConfig.Repos(), repository.Remote(RepositoryKey(repoType, orgRepo))); err != nil {
+			return err
+		}
+	}
 	blobsFile := BlobPath(repoType, orgRepo, etag)
 	filesPath := ResolvePath(repoType, orgRepo, commit, fileName)
+	if err = repository.SafePath(config.SysConfig.Repos(), blobsFile); err != nil {
+		return err
+	}
+	if err = repository.SafePath(config.SysConfig.Repos(), filepath.Dir(filesPath)); err != nil {
+		return err
+	}
+	if IsLocalOrgRepo(orgRepo) {
+		if complete, _, e := inspectCompleteBlob(blobsFile, pathInfo.Size); e != nil || !complete {
+			return echo.NewHTTPError(503, "hosted content unavailable")
+		}
+	}
 	if err = f.ConstructBlobsAndFileFile(blobsFile, filesPath); err != nil {
 		return util.ErrorProxyError(c)
 	}
 	if method == consts.RequestTypeHead {
+		if source != nil {
+			for k, v := range respHeaders {
+				c.Response().Header().Set(k, v)
+			}
+			return c.NoContent(http.StatusOK)
+		}
 		return util.ResponseHeaders(c, http.StatusOK, respHeaders)
 	} else if method == consts.RequestTypeGet {
 		taskParam := &downloader.TaskParam{
 			TaskNo:        0,
+			Revision:      commit,
 			BlobsFile:     blobsFile,
 			FileName:      fileName,
 			FileSize:      pathInfo.Size,
 			OrgRepo:       orgRepo,
 			Authorization: authorization,
-			Uri:           hfUri,
+			Uri:           uri,
+			Source:        source,
+			LocalOnly:     key.Namespace == repository.ModelScope,
 			DataType:      repoType,
 			Etag:          etag,
 		}
@@ -314,7 +394,7 @@ func GetAnalysisFilePosition(dingFile *downloader.DingCache, startPos, endPos in
 // 以及 Windows 上与 filepath 系函数（MakeDirs、Abs/Rel 等）的分隔符不一致。
 // filepath.Join 会做 Clean，两种情况都被吸收掉。
 func BlobPath(repoType, orgRepo, etag string) string {
-	return filepath.Join(config.SysConfig.Repos(), "files", repoType, orgRepo, "blobs", etag)
+	return RepositoryKey(repoType, orgRepo).Blob(config.SysConfig.Repos(), etag)
 }
 
 // CopyLocalBlob streams the payload portion of one complete DingCache blob and
@@ -359,10 +439,16 @@ func (f *FileDao) CopyLocalBlob(repoType, orgRepo, sha string, size int64, w io.
 
 // ResolvePath 是某个快照下仓库内路径对应的软链位置，与 BlobPath 同理只此一处。
 func ResolvePath(repoType, orgRepo, commit, fileName string) string {
-	return filepath.Join(config.SysConfig.Repos(), "files", repoType, orgRepo, "resolve", commit, filepath.FromSlash(fileName))
+	return RepositoryKey(repoType, orgRepo).Resolve(config.SysConfig.Repos(), commit, fileName)
 }
 
+var fileReferenceLocks = newKeyedMutex()
+
 func (f *FileDao) ConstructBlobsAndFileFile(blobsFile, filesPath string) (err error) {
+	// Reference creation may race across requests (and across FileDao instances).
+	// Only serialize this short filesystem operation, never the download itself.
+	fileReferenceLocks.Lock(filesPath)
+	defer fileReferenceLocks.Unlock(filesPath)
 	if err = util.MakeDirs(blobsFile); err != nil {
 		zap.S().Errorf("create %s dir err.%v", blobsFile, err)
 		return err
@@ -377,6 +463,13 @@ func (f *FileDao) ConstructBlobsAndFileFile(blobsFile, filesPath string) (err er
 			return err
 		} else {
 			if !b {
+				// Windows may use the existing hard-link fallback instead of a symlink.
+				// It is already a valid reference, not a legacy file to delete/recreate.
+				srcInfo, srcErr := os.Stat(blobsFile)
+				dstInfo, dstErr := os.Stat(filesPath)
+				if srcErr == nil && dstErr == nil && os.SameFile(srcInfo, dstInfo) {
+					return nil
+				}
 				zap.S().Infof("old data transfer, from %s to %s", filesPath, blobsFile)
 				if blobFileExist := util.FileExists(blobsFile); blobFileExist {
 					if err = util.DeleteFile(filesPath); err != nil {
@@ -445,11 +538,14 @@ func (f *FileDao) InvalidateLocalManifest(repoType, orgRepo, commit string) {
 }
 
 func (f *FileDao) GetPathsInfo(hfUri, repoType, orgRepo, commit, authorization string, pathFileName string) (*common.PathsInfo, error) {
+	return f.GetPathsInfoContext(context.Background(), hfUri, repoType, orgRepo, commit, authorization, pathFileName)
+}
+func (f *FileDao) GetPathsInfoContext(ctx context.Context, hfUri, repoType, orgRepo, commit, authorization string, pathFileName string) (*common.PathsInfo, error) {
 	var pathInfo *common.PathsInfo
 	if pathFileName == "" {
 		return nil, fmt.Errorf("pathFileName is null, %s/%s", orgRepo, commit)
 	}
-	apiPathInfoPath := fmt.Sprintf("%s/api/%s/%s/paths-info/%s/%s/paths-info_post.json", config.SysConfig.Repos(), repoType, orgRepo, commit, pathFileName)
+	apiPathInfoPath := filepath.Join(RepositoryKey(repoType, orgRepo).PathsInfo(config.SysConfig.Repos(), commit, pathFileName), "paths-info_post.json")
 	if IsLocalOrgRepo(orgRepo) {
 		// 本地仓库的文件信息从该快照的清单派生，不依赖逐文件落盘的 paths-info 缓存。
 		manifest, err := f.ReadLocalManifest(repoType, orgRepo, commit)
@@ -499,8 +595,12 @@ func (f *FileDao) GetPathsInfo(hfUri, repoType, orgRepo, commit, authorization s
 	goto requestRemoteFileInfo
 
 requestRemoteFileInfo:
-	pathsInfoUri := fmt.Sprintf("/api/%s/%s/paths-info/%s", repoType, orgRepo, commit)
-	if response, err := f.requestFilePathInfo(pathsInfoUri, authorization, []string{pathFileName}); err != nil {
+	upstream, upstreamErr := UpstreamRepo(repoType, orgRepo)
+	if upstreamErr != nil {
+		return nil, upstreamErr
+	}
+	pathsInfoUri := fmt.Sprintf("/api/%s/%s/paths-info/%s", repoType, repository.EscapeURLPath(upstream), repository.EscapeURLPath(commit))
+	if response, err := f.requestFilePathInfoContext(ctx, pathsInfoUri, authorization, []string{pathFileName}); err != nil {
 		return nil, err
 	} else {
 		if !granted {
@@ -517,7 +617,7 @@ requestRemoteFileInfo:
 			return nil, myerr.NewAppendCode(http.StatusNotFound, "remoteRespPathsInfos is null")
 		}
 		if pathInfo.Size > consts.MAX_HTTP_DOWNLOAD_SIZE {
-			if resolveResp, err := f.requestFileResolve(hfUri, authorization); err != nil {
+			if resolveResp, err := f.requestFileResolveContext(ctx, hfUri, authorization); err != nil {
 				return nil, err
 			} else {
 				pathInfo.XXetHash = resolveResp.GetKey(consts.HUGGINGFACE_HEADER_X_XET_HASH)
@@ -538,16 +638,19 @@ requestRemoteFileInfo:
 }
 
 func (f *FileDao) requestFileResolve(fileResolveUri, authorization string) (*common.Response, error) {
+	return f.requestFileResolveContext(context.Background(), fileResolveUri, authorization)
+}
+func (f *FileDao) requestFileResolveContext(ctx context.Context, fileResolveUri, authorization string) (*common.Response, error) {
 	headers := map[string]string{}
 	if authorization != "" {
 		headers["authorization"] = authorization
 	}
-	response, err := util.RetryRequest(func() (*common.Response, error) {
-		return util.Head(fileResolveUri, headers)
+	response, err := util.RetryRequestContext(ctx, func() (*common.Response, error) {
+		return util.HeadContext(ctx, fileResolveUri, headers)
 	})
 	if err != nil {
 		zap.S().Errorf("req %s err.%v", fileResolveUri, err)
-		return nil, myerr.NewAppendCode(http.StatusInternalServerError, fmt.Sprintf("%v", err))
+		return nil, fmt.Errorf("remote metadata request: %w", err)
 	}
 	// 非成功或重定向
 	if response.StatusCode != http.StatusOK && !(response.StatusCode >= http.StatusMultipleChoices && response.StatusCode <= http.StatusPermanentRedirect) {
@@ -564,6 +667,9 @@ func (f *FileDao) requestFileResolve(fileResolveUri, authorization string) (*com
 }
 
 func (f *FileDao) requestFilePathInfo(pathsInfoUri, authorization string, filePaths []string) (*common.Response, error) {
+	return f.requestFilePathInfoContext(context.Background(), pathsInfoUri, authorization, filePaths)
+}
+func (f *FileDao) requestFilePathInfoContext(ctx context.Context, pathsInfoUri, authorization string, filePaths []string) (*common.Response, error) {
 	reqData := map[string]interface{}{
 		"paths": filePaths,
 	}
@@ -575,11 +681,11 @@ func (f *FileDao) requestFilePathInfo(pathsInfoUri, authorization string, filePa
 	if authorization != "" {
 		headers["authorization"] = authorization
 	}
-	if response, err := util.RetryRequest(func() (*common.Response, error) {
-		return util.Post(pathsInfoUri, "application/json", jsonData, headers)
+	if response, err := util.RetryRequestContext(ctx, func() (*common.Response, error) {
+		return util.PostContext(ctx, pathsInfoUri, "application/json", jsonData, headers)
 	}); err != nil {
 		zap.S().Errorf("req %s err.%v", pathsInfoUri, err)
-		return nil, myerr.NewAppendCode(http.StatusInternalServerError, fmt.Sprintf("%v", err))
+		return nil, fmt.Errorf("remote metadata request: %w", err)
 	} else if response.StatusCode != http.StatusOK {
 		var errorResp common.ErrorResp
 		if len(response.Body) > 0 {
@@ -606,6 +712,14 @@ func (f *FileDao) FileChunkGet(c echo.Context, taskParam *downloader.TaskParam, 
 	if value := c.Request().Header.Get(consts.RequestSourceInner); value == "1" {
 		isInnerRequest = true
 	}
+	if taskParam.Source != nil || c.Request().Header.Get(common.LocalTransferHeader) != "" {
+		taskParam.CacheResult = make(chan error, 1)
+	}
+	ensureCache := taskParam.Source != nil && c.Request().Header.Get("X-Dingo-Ensure-Cache") == "1"
+	if ensureCache {
+		delete(respHeaders, "Content-Length")
+		respHeaders["Trailer"] = "X-Dingo-Cache-Complete"
+	}
 	taskParam.Context = ctx
 	taskParam.ResponseChan = responseChan
 	taskParam.Cancel = cancel
@@ -613,9 +727,24 @@ func (f *FileDao) FileChunkGet(c echo.Context, taskParam *downloader.TaskParam, 
 	if err := f.downloaderDao.FileDownload(startPos, endPos, isInnerRequest, taskParam); err != nil {
 		return util.MultipleErrorProxyError(err, c)
 	}
-	if err := util.ResponseStream(c, fileName, respHeaders, responseChan); err != nil {
+	streamErr := util.ResponseStream(c, fileName, respHeaders, responseChan)
+	if streamErr != nil {
+		cancel()
+		if taskParam.CacheResult != nil {
+			<-taskParam.CacheResult
+		}
+		err := streamErr
 		zap.S().Errorf("FileChunkGet stream err.%v", err)
 		return util.ErrorProxyTimeout(c)
+	}
+	if taskParam.CacheResult != nil {
+		result := <-taskParam.CacheResult
+		if ensureCache {
+			c.Response().Header().Set("X-Dingo-Cache-Complete", fmt.Sprint(result == nil))
+		}
+		if result != nil && ensureCache {
+			return result
+		}
 	}
 	return nil
 }

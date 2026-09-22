@@ -14,10 +14,10 @@ const testSha = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde
 
 func validPublishParam() dao.LocalPublishParam {
 	return dao.LocalPublishParam{
-		RepoType: "models",
-		Org:      "dingo-local",
-		Repo:     "demo",
-		Revision: "main",
+		RepoType:  "models",
+		Namespace: "dingo-local",
+		Repo:      "demo",
+		Revision:  "main",
 		Files: []dao.LocalManifestFile{
 			{Path: "config.json", Sha256: testSha, Size: 10},
 		},
@@ -115,7 +115,7 @@ func TestValidatePublishParamRejectionMatrix(t *testing.T) {
 		})
 		t.Run("org/"+bad.name, func(t *testing.T) {
 			param := validPublishParam()
-			param.Org = bad.value
+			param.Namespace = bad.value
 			if err := validatePublishParam(param); err == nil {
 				t.Fatalf("expected org %q to be rejected", bad.value)
 			}
@@ -124,7 +124,7 @@ func TestValidatePublishParamRejectionMatrix(t *testing.T) {
 
 	t.Run("org outside namespace", func(t *testing.T) {
 		param := validPublishParam()
-		param.Org = "huggingface"
+		param.Namespace = "huggingface"
 		if err := validatePublishParam(param); err == nil {
 			t.Fatalf("expected org outside the reserved namespace to be rejected")
 		}
@@ -214,7 +214,7 @@ func TestValidatePublishParamListShape(t *testing.T) {
 func validPublishTreeParam() dao.LocalPublishTreeParam {
 	return dao.LocalPublishTreeParam{
 		RepoType:   "models",
-		Org:        "dingo-local",
+		Namespace:  "dingo-local",
 		Repo:       "demo",
 		Revision:   "main",
 		BaseCommit: testSha,

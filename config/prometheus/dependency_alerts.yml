@@ -1,0 +1,19 @@
+groups:
+  - name: dingospeed-dependency-observation
+    rules:
+      - alert: DingoSpeedDependencyDegraded
+        expr: dingospeed_dependency_state == 3
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Dependency capability affected: {{ $labels.dependency }}'
+          description: 'Instance {{ $labels.instance }} has sustained failed operations affecting {{ $labels.impact }}. This does not establish whole-node or mount failure; do not automatically restart.'
+      - alert: DingoSpeedDependencyUnresolved
+        expr: dingospeed_dependency_unresolved == 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Dependency failure lacks recovery evidence: {{ $labels.dependency }}'
+          description: 'Instance {{ $labels.instance }} has an unresolved observation affecting {{ $labels.impact }}. Repeated failures or absence of further traffic may explain this; inspect evidence before changing request policy.'

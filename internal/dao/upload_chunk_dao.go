@@ -27,11 +27,11 @@ import (
 // 而 publish 时 verifyPublishContent → inspectCompleteBlob 会检查“位图无空洞 +
 // size 匹配”。因此不完整的 blob 对下载侧天然不可见，分块上传不需要自己的生效开关。
 type LocalChunkUploadParam struct {
-	RepoType string
-	Org      string
-	Repo     string
-	Revision string
-	FilePath string
+	RepoType  string
+	Namespace string
+	Repo      string
+	Revision  string
+	FilePath  string
 	// Sha256 是整文件摘要，也就是 blob 文件名；本接口不校验它。
 	Sha256 string
 	// Size 是整文件总字节数，用于绑定 blob 的 header。
@@ -45,6 +45,7 @@ type LocalChunkUploadParam struct {
 }
 
 type LocalChunkUploadResult struct {
+	Namespace string `json:"namespace"`
 	RepoType  string `json:"repoType"`
 	Repo      string `json:"repo"`
 	Revision  string `json:"revision"`
@@ -72,7 +73,12 @@ func uploadBlobLockKey(repoType, orgRepo, sha string) string {
 // blob 读锁（挡住老接口的 rename 与回收的 remove）、DingCacheManager 的进程内唯一
 // 句柄（位图不丢更新、header 不撕裂）、以及 WriteBlock 内部 fileLock 串行的置位与刷盘。
 func (u *UploadDao) UploadChunk(param LocalChunkUploadParam, body io.Reader) (*LocalChunkUploadResult, error) {
-	orgRepo := util.GetOrgRepo(param.Org, param.Repo)
+	release := holdRepository(param.RepoType, param.Namespace, param.Repo)
+	defer release()
+	if err := RegisterHosted(param.RepoType, param.Namespace, param.Repo); err != nil {
+		return nil, localUploadError{status: 409, code: "REPOSITORY_REGISTRATION_CONFLICT", msg: err.Error()}
+	}
+	orgRepo := util.GetOrgRepo(param.Namespace, param.Repo)
 	repos := config.SysConfig.Repos()
 	blobPath := localBlobPath(param.RepoType, orgRepo, param.Sha256)
 	if err := ensureLocalUploadPathSafe(repos, blobPath); err != nil {
@@ -118,7 +124,8 @@ func (u *UploadDao) UploadChunk(param LocalChunkUploadParam, body io.Reader) (*L
 
 	result := &LocalChunkUploadResult{
 		RepoType:  param.RepoType,
-		Repo:      orgRepo,
+		Namespace: param.Namespace,
+		Repo:      param.Repo,
 		Revision:  param.Revision,
 		FilePath:  param.FilePath,
 		Sha256:    param.Sha256,

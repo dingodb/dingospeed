@@ -8,6 +8,7 @@ import (
 
 	"dingospeed/internal/downloader"
 	"dingospeed/pkg/config"
+	"dingospeed/pkg/repository"
 	"dingospeed/pkg/util"
 
 	"github.com/bytedance/sonic"
@@ -61,6 +62,9 @@ func writeBlobContent(t *testing.T, blobPath string, content []byte) {
 
 func writePathsInfo(t *testing.T, fileDao *FileDao, repoType, orgRepo, commit, path, oid string, size int64) {
 	t.Helper()
+	if err := repository.Register(config.SysConfig.Repos(), repository.Remote(RepositoryKey(repoType, orgRepo))); err != nil {
+		t.Fatal(err)
+	}
 	body, err := sonic.Marshal([]map[string]interface{}{{
 		"type": "file",
 		"oid":  oid,
@@ -83,6 +87,9 @@ func writePathsInfo(t *testing.T, fileDao *FileDao, repoType, orgRepo, commit, p
 // seedRemoteFile 造一份“从上游拉下来并缓存住了”的文件。
 func seedRemoteFile(t *testing.T, fileDao *FileDao, orgRepo, commit, path string, content []byte) string {
 	t.Helper()
+	if err := repository.Register(config.SysConfig.Repos(), repository.Remote(RepositoryKey("models", orgRepo))); err != nil {
+		t.Fatal(err)
+	}
 	etag := sha256Hex(content)
 	blobPath := BlobPath("models", orgRepo, etag)
 	writeBlobContent(t, blobPath, content)
@@ -118,6 +125,9 @@ func findOrphan(rows []*RecycleRow, sha string) *RecycleRow {
 func TestListRepoKeysStopsAtPathsInfo(t *testing.T) {
 	_, _, _ = newTestCacheAdminDao(t)
 	orgRepo := "dingo-local/paths-heavy"
+	if err := RegisterHosted("models", "dingo-local", "paths-heavy"); err != nil {
+		t.Fatal(err)
+	}
 
 	// revision 是一个合法仓库标记，但这里故意把同名目录放在 paths-info
 	// 深处。仓库发现如果进入数据子树，会把这个深层路径误判成另一个仓库。
@@ -215,7 +225,7 @@ func TestListFilesKeepsOneRowPerPathForSharedContent(t *testing.T) {
 
 func TestListFilesShowsRemoteCache(t *testing.T) {
 	admin, u, _ := newTestCacheAdminDao(t)
-	const orgRepo = "Qwen/Qwen2.5-0.5B"
+	const orgRepo = "huggingface/Qwen/Qwen2.5-0.5B"
 
 	content := []byte("remote model shard")
 	etag := seedRemoteFile(t, u.fileDao, orgRepo, "abc123", "model.safetensors", content)
@@ -239,7 +249,7 @@ func TestListFilesShowsRemoteCache(t *testing.T) {
 // 部分缓存必须显示成部分：页面上把半个文件显示成“完整”会让人误以为删了也能重下。
 func TestListFilesReportsPartialCache(t *testing.T) {
 	admin, u, _ := newTestCacheAdminDao(t)
-	const orgRepo = "Qwen/partial"
+	const orgRepo = "huggingface/Qwen/partial"
 
 	full := make([]byte, testBlockSize*4)
 	for i := range full {
@@ -290,7 +300,7 @@ func clearLastBlock(t *testing.T, blobPath string) {
 // 就会以 O_RDWR 打开并可能重写头部，页面刷一下就把缓存改了。
 func TestListFilesDoesNotMutateCache(t *testing.T) {
 	admin, u, _ := newTestCacheAdminDao(t)
-	const orgRepo = "Qwen/readonly"
+	const orgRepo = "huggingface/Qwen/readonly"
 
 	content := []byte("must not be touched")
 	etag := seedRemoteFile(t, u.fileDao, orgRepo, "c1", "f.bin", content)
@@ -325,7 +335,7 @@ func TestListReposAggregatesBothSources(t *testing.T) {
 	payload := []byte("published")
 	mustStage(t, u, deferredParam("a.bin", payload), payload)
 	mustPublish(t, u, publishParam("main", manifestItem("a.bin", payload)))
-	seedRemoteFile(t, u.fileDao, "Qwen/remote-demo", "c1", "f.bin", []byte("remote"))
+	seedRemoteFile(t, u.fileDao, "huggingface/Qwen/remote-demo", "c1", "f.bin", []byte("remote"))
 
 	repos := admin.ListRepos()
 	var upload, remote *CacheRepo
@@ -592,7 +602,7 @@ func TestReuploadAfterSoftDeleteReusesContentAndVoidsTombstone(t *testing.T) {
 
 func TestSoftDeleteRemoteRemovesResolveAndPathsInfo(t *testing.T) {
 	admin, u, _ := newTestCacheAdminDao(t)
-	const orgRepo = "Qwen/Qwen2.5-0.5B"
+	const orgRepo = "huggingface/Qwen/Qwen2.5-0.5B"
 
 	content := []byte("cached from upstream")
 	etag := seedRemoteFile(t, u.fileDao, orgRepo, "c1", "model.bin", content)
@@ -629,7 +639,7 @@ func TestSoftDeleteRemoteRemovesResolveAndPathsInfo(t *testing.T) {
 // 删掉了，把它显示成“待彻底删除”会怂恿用户删掉正常的缓存。
 func TestRemoteBlobWithoutTombstoneIsNotListedAsOrphan(t *testing.T) {
 	admin, u, _ := newTestCacheAdminDao(t)
-	const orgRepo = "Qwen/lru-victim"
+	const orgRepo = "huggingface/Qwen/lru-victim"
 
 	content := []byte("resolve was evicted by lru")
 	etag := seedRemoteFile(t, u.fileDao, orgRepo, "c1", "f.bin", content)
@@ -824,7 +834,7 @@ func TestLegacyUnreferencedContentStillUsesBlobMTime(t *testing.T) {
 // 远端缓存只回收有墓碑的：无差别回收等于改动磁盘清理对公开模型的既有行为。
 func TestCleanupRecycledBlobsOnlyTouchesTombstonedRemoteContent(t *testing.T) {
 	admin, u, _ := newTestCacheAdminDao(t)
-	const orgRepo = "Qwen/Qwen2.5-0.5B"
+	const orgRepo = "huggingface/Qwen/Qwen2.5-0.5B"
 
 	deleted := []byte("deleted by the operator")
 	untouched := []byte("still referenced")

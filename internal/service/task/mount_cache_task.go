@@ -9,8 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"dingospeed/internal/dao"
 	"dingospeed/pkg/config"
 	"dingospeed/pkg/consts"
+	"dingospeed/pkg/hfprojection"
+	"dingospeed/pkg/repository"
 
 	"go.uber.org/zap"
 )
@@ -21,7 +24,20 @@ type MountCacheTask struct {
 }
 
 func (m *MountCacheTask) DoTask() {
-	orgRepo := fmt.Sprintf("%s/%s", m.Job.Org, m.Job.Repo)
+	orgRepo := fmt.Sprintf("%s/%s", m.Job.Namespace, m.Job.Repo)
+	key := repository.RepoKey{Namespace: m.Job.Namespace, RepoType: m.Job.Datatype, Repo: m.Job.Repo}
+	if key.Namespace != repository.HuggingFace {
+		revision := "main"
+		if key.Namespace == repository.ModelScope {
+			revision = "master"
+		}
+		if err := m.mountViaRepositoryAPI(key, revision); err != nil {
+			m.SchedulerDao.ExecUpdateRepositoryMountStatus(m.TaskNo, m.StopStatus(), err.Error())
+		} else {
+			m.SchedulerDao.ExecUpdateRepositoryMountStatus(m.TaskNo, consts.RunningStatusJobComplete, "")
+		}
+		return
+	}
 	var repoType string
 	if m.Job.Datatype == consts.RepoTypeModel.Value() {
 		repoType = "model"
@@ -33,7 +49,7 @@ func (m *MountCacheTask) DoTask() {
 	}
 	modelDirName := filepath.Base(orgRepo)
 	mountDir := config.SysConfig.Cache.MountModelDir
-	localModelDir := filepath.Join(mountDir, m.Job.Datatype, orgRepo)
+	localModelDir := filepath.Join(mountDir, m.Job.Datatype, filepath.FromSlash(key.Repo))
 
 	logDir := filepath.Join(config.SysConfig.Server.Repos, "mount_download_logs")
 	if err := os.MkdirAll(logDir, 0755); err != nil {
@@ -48,15 +64,20 @@ func (m *MountCacheTask) DoTask() {
 		return
 	}
 	defer logF.Close()
-	hfEndpoint := fmt.Sprintf("http://%s:%d", config.SysConfig.Server.Host, config.SysConfig.Server.Port)
+	hfEndpoint := fmt.Sprintf("http://%s:%d/huggingface", config.SysConfig.Server.Host, config.SysConfig.Server.Port)
+	upstream, upErr := dao.UpstreamRepo(m.Job.Datatype, orgRepo)
+	if upErr != nil {
+		m.SchedulerDao.ExecUpdateRepositoryMountStatus(m.TaskNo, m.StopStatus(), upErr.Error())
+		return
+	}
 	token := getToken(m.Authorization)
 	var cmd *exec.Cmd
 	if token != "" {
 		cmd = exec.Command("hf", "download", "--repo-type",
-			repoType, orgRepo, "--local-dir", localModelDir, "--token", token)
+			repoType, upstream, "--local-dir", localModelDir, "--token", token)
 	} else {
 		cmd = exec.Command("hf", "download", "--repo-type",
-			repoType, orgRepo, "--local-dir", localModelDir)
+			repoType, upstream, "--local-dir", localModelDir)
 	}
 	cmd.Env = append(os.Environ(), fmt.Sprintf("HF_ENDPOINT=%s", hfEndpoint))
 	cmd.Stdout = logF
@@ -82,9 +103,10 @@ func (m *MountCacheTask) DoTask() {
 				errMsg = strings.Join(lines, "\n")
 			}
 		}
-		m.SchedulerDao.ExecUpdateRepositoryMountStatus(m.TaskNo, m.RunningStatus, errMsg)
+		m.SchedulerDao.ExecUpdateRepositoryMountStatus(m.TaskNo, m.StopStatus(), errMsg)
 	} else {
 		zap.S().Infof("command success.%d", m.TaskNo)
+		hfprojection.DefaultIndex.Invalidate(config.SysConfig.Repos(), m.Job.Datatype)
 		m.SchedulerDao.ExecUpdateRepositoryMountStatus(m.TaskNo, consts.RunningStatusJobComplete, "")
 	}
 }

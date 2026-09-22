@@ -21,23 +21,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// UploadGuardMiddleware 挡住浏览器发起的跨站请求。
-//
-// 上传口没有任何身份校验，安全性完全建立在“只有本机的 ingest agent 会调它”
-// 这个假设上。但绑在 127.0.0.1 挡不住浏览器——用户的浏览器就在回环上。
-//
-// 具体的攻击路径：上传口的写接口全部读裸 body、不校验 Content-Type，
-// 于是一个 text/plain 的 POST 就能带着 JSON 打进来。而 text/plain 的 POST
-// 属于 CORS 简单请求，不触发预检，浏览器会直接送出去。用户访问任意一个恶意
-// 页面，那个页面就能 POST /api/cache/orphans/delete 把缓存删掉。
-//
-// 这里用 Origin 头来区分：浏览器发起的跨站请求一定带 Origin（简单请求也带），
-// 而 ingest agent、curl 这类服务端调用方不会带。因此拒掉“带 Origin 的写请求”
-// 既能挡住浏览器，又不需要任何调用方改代码。Sec-Fetch-Site 是同一判断的补强，
-// 现代浏览器都会发，且是禁止修改的头。
-//
-// 这不能替代真正的鉴权，只是把浏览器这条路堵死。任何能直接发 HTTP 的进程
-// 仍然可以访问上传口——那个问题要靠给上传口加回身份校验来解决。
+// UploadGuardMiddleware 使用 Origin / Sec-Fetch-Site 拒绝浏览器跨站写入。
+// 浏览器简单请求也带 Origin，因此这里不依赖 CORS 预检或 Content-Type。
 func UploadGuardMiddleware() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {

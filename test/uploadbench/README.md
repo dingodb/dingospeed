@@ -1,16 +1,20 @@
 # uploadbench —— 本地单文件上传接口压测工具
 
-针对 `POST /api/local-upload/:repoType/:org/:repo/:revision/*` 的压测客户端与实验脚本。
+针对 `POST /api/uploads/:repoType/:namespace?repo=...&revision=...&path=...` 的压测客户端与实验脚本。
 结论见 [`docs/upload-load-test-report.md`](../../docs/upload-load-test-report.md)。
 
 ## 构建
 
 ```bash
 go build -o bin/dingospeed-test.exe ./cmd
-go build -o test/uploadbench/uploadbench.exe ./test/uploadbench
+cd test/uploadbench
+go build -o uploadbench.exe .
+cd ../..
 ```
 
 `test/uploadbench` 是独立 module，不会被主 module 的 `go build ./...` 编译进去。
+
+无需新增服务 token 配置。命名空间参数为 `-namespace`，`-repo` 可包含多级目录。
 
 ## 跑全套实验
 

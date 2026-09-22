@@ -15,7 +15,7 @@ import (
 func treeParam(revision, baseCommit string, files ...LocalManifestFile) LocalPublishTreeParam {
 	return LocalPublishTreeParam{
 		RepoType:   "models",
-		Org:        "dingo-local",
+		Namespace:  "dingo-local",
 		Repo:       "demo",
 		Revision:   revision,
 		BaseCommit: baseCommit,

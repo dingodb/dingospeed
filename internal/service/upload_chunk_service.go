@@ -9,6 +9,7 @@ import (
 	"dingospeed/internal/dao"
 	"dingospeed/internal/downloader"
 	"dingospeed/pkg/config"
+	"dingospeed/pkg/transfersettings"
 
 	"go.uber.org/zap"
 )
@@ -25,7 +26,7 @@ type chunkLimiter struct {
 var uploadChunkLimiter chunkLimiter
 
 func (l *chunkLimiter) acquire() bool {
-	limit := config.SysConfig.GetUploadChunkConcurrentLimit()
+	limit := transfersettings.Current().Upload
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.inFlight >= limit {
@@ -50,12 +51,12 @@ func (l *chunkLimiter) release() {
 func (u *UploadService) UploadChunk(param dao.LocalChunkUploadParam, rawSize, rawOffset, chunkSha string,
 	contentLength int64, body io.Reader) (*dao.LocalChunkUploadResult, error) {
 	if err := validateUploadLocator(dao.LocalUploadParam{
-		RepoType: param.RepoType,
-		Org:      param.Org,
-		Repo:     param.Repo,
-		Revision: param.Revision,
-		FilePath: param.FilePath,
-		Sha256:   param.Sha256,
+		RepoType:  param.RepoType,
+		Namespace: param.Namespace,
+		Repo:      param.Repo,
+		Revision:  param.Revision,
+		FilePath:  param.FilePath,
+		Sha256:    param.Sha256,
 	}); err != nil {
 		return nil, chunkArgError(err.Error())
 	}
@@ -113,7 +114,7 @@ func (u *UploadService) UploadChunk(param dao.LocalChunkUploadParam, rawSize, ra
 		return nil, uploadError{status: 500, code: "UPLOAD_INTERNAL_ERROR", msg: err.Error()}
 	}
 	zap.S().Debugf("local chunk upload done: %s/%s/%s/%s offset=%d length=%d status=%s blocks=%d",
-		param.RepoType, param.Org, param.Repo, param.FilePath, param.Offset, param.Length, result.Status, result.Blocks)
+		param.RepoType, param.Namespace, param.Repo, param.FilePath, param.Offset, param.Length, result.Status, result.Blocks)
 	return result, nil
 }
 

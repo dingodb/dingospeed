@@ -17,25 +17,63 @@ type SchedulerService struct {
 	Client       manager.ManagerClient
 	Ctx          context.Context
 	schedulerDao *dao.SchedulerDao
+	metaService  *MetaService
 }
 
-func NewSchedulerService(schedulerDao *dao.SchedulerDao) *SchedulerService {
+func NewSchedulerService(schedulerDao *dao.SchedulerDao, metaService *MetaService) *SchedulerService {
 	return &SchedulerService{
 		schedulerDao: schedulerDao,
+		metaService:  metaService,
 	}
 }
 
+func (s *SchedulerService) BindClient(client manager.ManagerClient) {
+	s.Client = client
+	s.schedulerDao.Client = client
+}
 func (s *SchedulerService) Register() {
-	s.schedulerDao.Client = s.Client
-	response, err := s.schedulerDao.Register()
-	if err != nil {
-		runModeChange(consts.SchedulerModeStandalone)
-		return
-	}
-	zap.S().Infof("enter cluster mode......")
-	config.SysConfig.Id = response.Id
-	go s.Heartbeat()
 	go s.ReportFileProcess()
+	go s.ReconcilePublications()
+	var previous config.Registration
+	registered := false
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		r := config.SysConfig.Registration()
+		if r != previous {
+			registered = false
+			previous = r
+		}
+		if !r.Enabled {
+			registered = false
+			runModeChange(consts.SchedulerModeStandalone)
+			config.SysConfig.SetRegistrationStatus(r, "disabled", nil)
+		} else {
+			var err error
+			if !registered {
+				var response *manager.RegisterResponse
+				response, err = s.schedulerDao.Register()
+				if err == nil {
+					config.SysConfig.SetSchedulerID(response.Id)
+					registered = true
+				}
+			} else {
+				err = s.schedulerDao.Heartbeat()
+			}
+			if err != nil {
+				registered = false
+				runModeChange(consts.SchedulerModeStandalone)
+				config.SysConfig.SetRegistrationStatus(r, "error", err)
+			} else if config.SysConfig.Registration() == r {
+				config.SysConfig.SetRegistrationStatus(r, "connected", nil)
+			}
+		}
+		select {
+		case <-s.Ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func (s *SchedulerService) Heartbeat() {
@@ -46,7 +84,7 @@ func (s *SchedulerService) Heartbeat() {
 		case <-ticker.C:
 			err := s.schedulerDao.Heartbeat()
 			if err != nil {
-				zap.S().Errorf("speed:%s connect err.%v", config.SysConfig.Scheduler.Discovery.InstanceId, err)
+				zap.S().Errorf("speed:%s connect err.%v", config.SysConfig.Registration().NodeID, err)
 				runModeChange(consts.SchedulerModeStandalone)
 				break
 			}

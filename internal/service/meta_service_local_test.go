@@ -40,13 +40,13 @@ func uploadLocalRepoRevision(t *testing.T, revision string, paths []string) (*Me
 		content := []byte("content of " + p)
 		sum := sha256.Sum256(content)
 		result, err := uploadDao.UploadWholeFile(dao.LocalUploadParam{
-			RepoType: "models",
-			Org:      "dingo-local",
-			Repo:     "demo",
-			Revision: revision,
-			FilePath: p,
-			Size:     int64(len(content)),
-			Sha256:   hex.EncodeToString(sum[:]),
+			RepoType:  "models",
+			Namespace: "dingo-local",
+			Repo:      "demo",
+			Revision:  revision,
+			FilePath:  p,
+			Size:      int64(len(content)),
+			Sha256:    hex.EncodeToString(sum[:]),
 		}, bytes.NewReader(content))
 		if err != nil {
 			t.Fatalf("upload %s failed: %v", p, err)
@@ -99,7 +99,7 @@ func TestRepositoryFilesForLocalRepo(t *testing.T) {
 	if root[1].IsDir || root[1].Name != "config.json" || root[1].Size == 0 {
 		t.Fatalf("unexpected root file entry: %+v", root[1])
 	}
-	wantLink := "http://speed.local/models/" + orgRepo + "/resolve/" + commit + "/config.json"
+	wantLink := "http://speed.local/api/repositories/models/dingo-local/file?repo=demo&revision=" + commit + "&path=config.json"
 	if root[1].Link != wantLink {
 		t.Fatalf("unexpected download link:\n got %s\nwant %s", root[1].Link, wantLink)
 	}

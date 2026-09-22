@@ -12,8 +12,9 @@ import (
 )
 
 type LocalOperation struct {
-	Type int    `json:"type"`
-	Body string `json:"body"`
+	IdentityVersion int    `json:"identityVersion,omitempty"`
+	Type            int    `json:"type"`
+	Body            string `json:"body"`
 }
 
 type FileProcessParam struct {
@@ -73,8 +74,9 @@ func WriteLocalOperationChan(operationType int, body interface{}) {
 		return
 	}
 	opera := &LocalOperation{
-		Type: operationType,
-		Body: string(marshal),
+		IdentityVersion: 2,
+		Type:            operationType,
+		Body:            string(marshal),
 	}
 	select {
 	case localOperationChan <- opera:

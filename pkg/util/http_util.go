@@ -17,6 +17,7 @@ package util
 import (
 	"bytes"
 	"context"
+	"dingospeed/pkg/transfersettings"
 	"errors"
 	"fmt"
 	"io"
@@ -47,16 +48,27 @@ var (
 )
 
 func RetryRequest(f func() (*common.Response, error)) (*common.Response, error) {
+	return RetryRequestContext(context.Background(), f)
+}
+
+func RetryRequestContext(ctx context.Context, f func() (*common.Response, error)) (*common.Response, error) {
 	var resp *common.Response
 	err := retry.Do(
 		func() error {
 			var err error
+			if err := ctx.Err(); err != nil {
+				return retry.Unrecoverable(err)
+			}
 			resp, err = f()
+			if isClientCanceled(err) {
+				return retry.Unrecoverable(err)
+			}
 			return err
 		},
 		retry.Delay(time.Duration(config.SysConfig.Retry.Delay)*time.Second),
 		retry.Attempts(config.SysConfig.Retry.Attempts),
 		retry.DelayType(retry.FixedDelay),
+		retry.Context(ctx),
 	)
 	return resp, err
 }
@@ -181,25 +193,36 @@ func constructRoute(method string) (route, error) {
 }
 
 func Head(requestUri string, headers map[string]string) (*common.Response, error) {
+	return HeadContext(context.Background(), requestUri, headers)
+}
+func HeadContext(ctx context.Context, requestUri string, headers map[string]string) (*common.Response, error) {
 	r, err := constructRoute(http.MethodHead)
 	if err != nil {
 		return nil, fmt.Errorf("construct http client err: %v", err)
 	}
 	requestURL := fmt.Sprintf("%s%s", r.domain, requestUri)
-	resp, err := doHead(r.client, requestURL, headers)
-	r.reportResp(resp, err)
+	resp, err := doHeadContext(ctx, r.client, requestURL, headers)
+	if !isClientCanceled(err) {
+		r.reportResp(resp, err)
+	}
 	return resp, err
 }
 
 func doHead(client *http.Client, targetURL string, headers map[string]string) (*common.Response, error) {
-	req, err := http.NewRequest("HEAD", targetURL, nil)
+	return doHeadContext(context.Background(), client, targetURL, headers)
+}
+func doHeadContext(ctx context.Context, client *http.Client, targetURL string, headers map[string]string) (*common.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, "HEAD", targetURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("创建HEAD请求失败: %v", err)
 	}
 	for key, value := range headers {
+		if strings.EqualFold(key, "X-Dingo-Service-Token") {
+			continue
+		}
 		req.Header.Set(key, value)
 	}
-	resp, err := client.Do(req)
+	resp, err := transfersettings.Do("huggingface", client, req)
 	if err != nil {
 		zap.S().Warnf("URL请求失败: %s, 错误: %v", targetURL, err)
 		return nil, fmt.Errorf("执行HEAD请求失败: %v", err)
@@ -221,25 +244,36 @@ func doHead(client *http.Client, targetURL string, headers map[string]string) (*
 }
 
 func Get(requestUri string, headers map[string]string) (*common.Response, error) {
+	return GetContext(context.Background(), requestUri, headers)
+}
+func GetContext(ctx context.Context, requestUri string, headers map[string]string) (*common.Response, error) {
 	r, err := constructRoute(http.MethodGet)
 	if err != nil {
 		return nil, fmt.Errorf("construct http client err: %v", err)
 	}
 	requestURL := fmt.Sprintf("%s%s", r.domain, requestUri)
-	resp, err := doGet(r.client, requestURL, headers)
-	r.reportResp(resp, err)
+	resp, err := doGetContext(ctx, r.client, requestURL, headers)
+	if !isClientCanceled(err) {
+		r.reportResp(resp, err)
+	}
 	return resp, err
 }
 
 func doGet(client *http.Client, targetURL string, headers map[string]string) (*common.Response, error) {
-	req, err := http.NewRequest("GET", targetURL, nil)
+	return doGetContext(context.Background(), client, targetURL, headers)
+}
+func doGetContext(ctx context.Context, client *http.Client, targetURL string, headers map[string]string) (*common.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", targetURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("创建GET请求失败: %v", err)
 	}
 	for key, value := range headers {
+		if strings.EqualFold(key, "X-Dingo-Service-Token") {
+			continue
+		}
 		req.Header.Set(key, value)
 	}
-	resp, err := client.Do(req)
+	resp, err := transfersettings.Do("huggingface", client, req)
 	if err != nil {
 		zap.S().Warnf("URL请求失败: %s, 错误: %v", targetURL, err)
 		return nil, fmt.Errorf("执行GET请求失败: %v", err)
@@ -270,6 +304,10 @@ func doGet(client *http.Client, targetURL string, headers map[string]string) (*c
 }
 
 func GetStream(domain, uri string, headers map[string]string, f func(r *http.Response) error) error {
+	return GetStreamContext(context.Background(), domain, uri, headers, f)
+}
+
+func GetStreamContext(ctx context.Context, domain, uri string, headers map[string]string, f func(r *http.Response) error) error {
 	// 内网目标（兄弟节点互拉、回环上传口）必须旁路代理：
 	// 这些地址走公网出口必然失败，且会把好出口误判成坏出口。
 	if IsInnerDomain(domain) || ProxyPool().ShouldBypass(domain) {
@@ -278,7 +316,7 @@ func GetStream(domain, uri string, headers map[string]string, f func(r *http.Res
 			return fmt.Errorf("construct http client err: %v", err)
 		}
 		headers[consts.RequestSourceInner] = Itoa(1)
-		_, err = doGetStream(client, fmt.Sprintf("%s%s", domain, uri), headers, f)
+		_, err = doGetStreamContext(ctx, client, fmt.Sprintf("%s%s", domain, uri), headers, f)
 		return err
 	}
 	r, err := constructRoute(http.MethodGet)
@@ -286,7 +324,7 @@ func GetStream(domain, uri string, headers map[string]string, f func(r *http.Res
 		return fmt.Errorf("construct http client err: %v", err)
 	}
 	requestURL := fmt.Sprintf("%s%s", r.domain, uri)
-	code, err := doGetStream(r.client, requestURL, headers, f)
+	code, err := doGetStreamContext(ctx, r.client, requestURL, headers, f)
 	// 这里上报的 err 包含了流式传输中途的失败（f 回调里读 body 断掉），
 	// 而这正是 gost 的 TCP 层健康检查看不见的那一类故障。
 	// 但客户端主动取消不能算在出口头上，否则用户中断下载会误伤健康出口。
@@ -304,15 +342,22 @@ func isClientCanceled(err error) bool {
 
 // doGetStream 返回响应状态码与错误，状态码供代理池计分使用；未拿到响应时返回 0。
 func doGetStream(client *http.Client, targetURL string, headers map[string]string, f func(r *http.Response) error) (int, error) {
+	return doGetStreamContext(context.Background(), client, targetURL, headers, f)
+}
+
+func doGetStreamContext(ctx context.Context, client *http.Client, targetURL string, headers map[string]string, f func(r *http.Response) error) (int, error) {
 	escapedURL := strings.ReplaceAll(targetURL, "#", "%23")
-	req, err := http.NewRequest("GET", escapedURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", escapedURL, nil)
 	if err != nil {
 		return 0, fmt.Errorf("创建GET请求失败: %v", err)
 	}
 	for key, value := range headers {
+		if strings.EqualFold(key, "X-Dingo-Service-Token") {
+			continue
+		}
 		req.Header.Set(key, value)
 	}
-	resp, err := client.Do(req)
+	resp, err := transfersettings.Do("huggingface", client, req)
 	if err != nil {
 		return 0, err
 	}
@@ -325,28 +370,39 @@ func doGetStream(client *http.Client, targetURL string, headers map[string]strin
 }
 
 func Post(requestUri string, contentType string, data []byte, headers map[string]string) (*common.Response, error) {
+	return PostContext(context.Background(), requestUri, contentType, data, headers)
+}
+func PostContext(ctx context.Context, requestUri string, contentType string, data []byte, headers map[string]string) (*common.Response, error) {
 	r, err := constructRoute(http.MethodPost)
 	if err != nil {
 		return nil, fmt.Errorf("construct http client err: %v", err)
 	}
 	requestURL := fmt.Sprintf("%s%s", r.domain, requestUri)
-	resp, err := doPost(r.client, requestURL, contentType, data, headers)
-	r.reportResp(resp, err)
+	resp, err := doPostContext(ctx, r.client, requestURL, contentType, data, headers)
+	if !isClientCanceled(err) {
+		r.reportResp(resp, err)
+	}
 	return resp, err
 }
 
 func doPost(client *http.Client, targetURL string, contentType string, data []byte, headers map[string]string) (*common.Response, error) {
-	req, err := http.NewRequest("POST", targetURL, bytes.NewBuffer(data))
+	return doPostContext(context.Background(), client, targetURL, contentType, data, headers)
+}
+func doPostContext(ctx context.Context, client *http.Client, targetURL string, contentType string, data []byte, headers map[string]string) (*common.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewBuffer(data))
 	if err != nil {
 		return nil, fmt.Errorf("创建POST请求失败: %v", err)
 	}
 
 	req.Header.Set("Content-Type", contentType)
 	for key, value := range headers {
+		if strings.EqualFold(key, "X-Dingo-Service-Token") {
+			continue
+		}
 		req.Header.Set(key, value)
 	}
 
-	resp, err := client.Do(req)
+	resp, err := transfersettings.Do("huggingface", client, req)
 	if err != nil {
 		zap.S().Warnf("URL请求失败: %s, 错误: %v", targetURL, err)
 		return nil, fmt.Errorf("执行POST请求失败: %v", err)
@@ -397,6 +453,8 @@ func ResponseStream(c echo.Context, fileName string, headers map[string]string, 
 	}
 	for {
 		select {
+		case <-c.Request().Context().Done():
+			return c.Request().Context().Err()
 		case b, ok := <-content:
 			if !ok {
 				zap.S().Infof("ResponseStream complete, %s", fileName)
@@ -437,16 +495,19 @@ func ForwardRequest(originalReq echo.Context) (*http.Response, error) {
 		Path:     forwardPath,
 		RawQuery: originalReq.Request().URL.RawQuery,
 	}
-	proxyReq, err := http.NewRequest(originalReq.Request().Method, forwardURL.String(), originalReq.Request().Body)
+	proxyReq, err := http.NewRequestWithContext(originalReq.Request().Context(), originalReq.Request().Method, forwardURL.String(), originalReq.Request().Body)
 	if err != nil {
 		return nil, fmt.Errorf("创建转发请求失败: %v", err)
 	}
 	for key, values := range originalReq.Request().Header {
+		if strings.EqualFold(key, "X-Dingo-Service-Token") {
+			continue
+		}
 		for _, value := range values {
 			proxyReq.Header.Add(key, value)
 		}
 	}
-	resp, err := client.Do(proxyReq)
+	resp, err := transfersettings.Do("huggingface", client, proxyReq)
 	if err != nil {
 		r.report(0, err)
 		zap.S().Warnf("转发请求失败: %s, 错误: %v", targetURL, err)

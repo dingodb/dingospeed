@@ -37,11 +37,11 @@ func mustStage(t *testing.T, u *UploadDao, param LocalUploadParam, content []byt
 
 func publishParam(revision string, files ...LocalManifestFile) LocalPublishParam {
 	return LocalPublishParam{
-		RepoType: "models",
-		Org:      "dingo-local",
-		Repo:     "demo",
-		Revision: revision,
-		Files:    files,
+		RepoType:  "models",
+		Namespace: "dingo-local",
+		Repo:      "demo",
+		Revision:  revision,
+		Files:     files,
 	}
 }
 
@@ -666,8 +666,8 @@ func TestPublishMetadataFootprintIsConstant(t *testing.T) {
 	}
 
 	// 发布之前，磁盘上只有内容，没有任何元数据。
-	if got := countFiles(t, repos); got != fileCount {
-		t.Fatalf("staging wrote %d files, want %d blobs and no metadata", got, fileCount)
+	if got := countFiles(t, repos); got != fileCount+2 {
+		t.Fatalf("staging wrote %d files, want %d blobs plus repository registration", got, fileCount)
 	}
 
 	result := mustPublish(t, u, publishParam("main", batch...))
@@ -675,7 +675,7 @@ func TestPublishMetadataFootprintIsConstant(t *testing.T) {
 		t.Fatalf("manifest has %d files, want %d", result.FileCount, fileCount)
 	}
 	// N 个 blob + 1 份清单 + 2 份 commit 元数据 + 2 份版本标签元数据。
-	if want := fileCount + 5; countFiles(t, repos) != want {
+	if want := fileCount + 7; countFiles(t, repos) != want {
 		t.Fatalf("metadata footprint is %d files, want %d", countFiles(t, repos), want)
 	}
 	if got := commitDirs(t, repos, "models", orgRepo); len(got) != 1 {

@@ -72,19 +72,19 @@ func PathExists(filePath string) (bool, error) {
 	if os.IsNotExist(err) {
 		return false, nil
 	}
-	accessErr, _ := ClassifyFileAccessError(filePath, err)
-	return false, accessErr
+	return false, &FileAccessError{Kind: classifyFileAccessError(err), Path: filePath, Err: err}
 }
 
 // ClassifyFileAccessError recognizes filesystem access failures even when
 // another layer has wrapped the original *os.PathError. Content and parsing
 // errors are deliberately left unclassified.
 func ClassifyFileAccessError(filePath string, err error) (*FileAccessError, bool) {
-	if err == nil || os.IsNotExist(err) {
+	if err == nil || errors.Is(err, os.ErrNotExist) {
 		return nil, false
 	}
 	var pathErr *os.PathError
-	if !errors.As(err, &pathErr) {
+	var linkErr *os.LinkError
+	if !errors.As(err, &pathErr) && !errors.As(err, &linkErr) {
 		return nil, false
 	}
 	return &FileAccessError{Kind: classifyFileAccessError(err), Path: filePath, Err: err}, true
@@ -95,7 +95,9 @@ func classifyFileAccessError(err error) FileAccessErrorKind {
 }
 
 func classifyFileAccessErrorForOS(err error, goos string) FileAccessErrorKind {
-	if goos != "linux" && os.IsPermission(err) {
+	var errno syscall.Errno
+	hasErrno := errors.As(err, &errno)
+	if !hasErrno && errors.Is(err, os.ErrPermission) {
 		return FileAccessPermissionDenied
 	}
 
@@ -106,16 +108,17 @@ func classifyFileAccessErrorForOS(err error, goos string) FileAccessErrorKind {
 		linuxENOTCONN syscall.Errno = 107
 		linuxESTALE   syscall.Errno = 116
 	)
-	var errno syscall.Errno
-	if errors.As(err, &errno) {
+	if goos == "linux" && hasErrno {
 		switch errno {
+		case 1, 13: // EPERM, EACCES; use Linux semantics even in cross-platform tests.
+			return FileAccessPermissionDenied
 		case linuxENOTCONN, linuxESTALE:
 			return FileAccessMountDisconnected
 		case linuxEIO:
 			return FileAccessIOFailure
 		}
 	}
-	if os.IsPermission(err) {
+	if (goos == "windows" && hasErrno && errno == 5) || (goos == runtime.GOOS && errors.Is(err, os.ErrPermission)) {
 		return FileAccessPermissionDenied
 	}
 	return FileAccessUnavailable
@@ -130,7 +133,7 @@ func GetOrgRepo(org, repo string) string {
 }
 
 func SplitOrgRepo(orgRepo string) (string, string) {
-	splits := strings.Split(orgRepo, "/")
+	splits := strings.SplitN(orgRepo, "/", 2)
 	if len(splits) == 0 {
 		return "", ""
 	} else if len(splits) == 1 {
@@ -186,10 +189,15 @@ func CreateFile(filePath string) error {
 }
 
 func CreateFileIfNotExist(filePath string) error {
-	if exists := FileExists(filePath); !exists {
-		return CreateFile(filePath)
+	// Exclusive creation never truncates a blob another request already opened.
+	f, err := os.OpenFile(filePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	if os.IsExist(err) {
+		return nil
 	}
-	return nil
+	if err != nil {
+		return err
+	}
+	return f.Close()
 }
 
 func DeleteFile(filePath string) error {

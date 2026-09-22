@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -43,13 +44,13 @@ func shaOf(b []byte) string {
 // doUpload 走一次 POST /api/local-upload/... 的完整 handler 路径。
 func doUpload(t *testing.T, h *UploadHandler, e *echo.Echo, filePath string, content []byte, query string) *httptest.ResponseRecorder {
 	t.Helper()
-	target := fmt.Sprintf("/api/local-upload/models/dingo-local/demo/main/%s?size=%d&sha256=%s&%s",
-		filePath, len(content), shaOf(content), query)
+	target := fmt.Sprintf("/api/uploads/models/dingo-local?repo=demo&revision=main&path=%s&size=%d&sha256=%s&%s",
+		url.QueryEscape(filePath), len(content), shaOf(content), query)
 	req := httptest.NewRequest(http.MethodPost, target, bytes.NewReader(content))
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
-	c.SetParamNames("repoType", "org", "repo", "revision", "*")
-	c.SetParamValues("models", "dingo-local", "demo", "main", filePath)
+	c.SetParamNames("repoType", "namespace")
+	c.SetParamValues("models", "dingo-local")
 	if err := h.UploadWholeFile(c); err != nil {
 		t.Fatalf("upload handler returned error: %v", err)
 	}
@@ -58,12 +59,12 @@ func doUpload(t *testing.T, h *UploadHandler, e *echo.Echo, filePath string, con
 
 func doPublish(t *testing.T, h *UploadHandler, e *echo.Echo, body string, query string) *httptest.ResponseRecorder {
 	t.Helper()
-	target := "/api/local-publish/models/dingo-local/demo/main?" + query
+	target := "/api/publish/models/dingo-local?repo=demo&revision=main&" + query
 	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
-	c.SetParamNames("repoType", "org", "repo", "revision")
-	c.SetParamValues("models", "dingo-local", "demo", "main")
+	c.SetParamNames("repoType", "namespace")
+	c.SetParamValues("models", "dingo-local")
 	if err := h.PublishFiles(c); err != nil {
 		t.Fatalf("publish handler returned error: %v", err)
 	}

@@ -34,14 +34,15 @@ func NewCacheAdminService(cacheAdminDao *dao.CacheAdminDao) *CacheAdminService {
 
 // CacheQuery 是两个列表接口共用的查询条件。
 type CacheQuery struct {
-	RepoType string
-	OrgRepo  string
-	Source   string
-	Keyword  string
-	Sort     string
-	Order    string
-	Page     int
-	PageSize int
+	Namespace string
+	RepoType  string
+	OrgRepo   string
+	Source    string
+	Keyword   string
+	Sort      string
+	Order     string
+	Page      int
+	PageSize  int
 }
 
 type CacheSummary struct {
@@ -103,6 +104,9 @@ func (s *CacheAdminService) ListFiles(query CacheQuery) (*CacheFilePage, error) 
 	rows := s.cacheAdminDao.ListFiles(query.RepoType, query.OrgRepo)
 	filtered := make([]*dao.CacheFileRow, 0, len(rows))
 	for _, row := range rows {
+		if query.Namespace != "" && row.Namespace != query.Namespace {
+			continue
+		}
 		if query.Source != "" && row.Source != query.Source {
 			continue
 		}
@@ -127,6 +131,9 @@ func (s *CacheAdminService) ListOrphans(query CacheQuery) (*RecyclePage, error) 
 	filtered := make([]*dao.RecycleRow, 0, len(rows))
 	var totalSize int64
 	for _, row := range rows {
+		if query.Namespace != "" && row.Namespace != query.Namespace {
+			continue
+		}
 		if query.Source != "" && row.Source != query.Source {
 			continue
 		}
@@ -150,14 +157,22 @@ func (s *CacheAdminService) SoftDelete(items []dao.DeleteItem) ([]*dao.DeleteRes
 	if len(items) == 0 {
 		return nil, uploadError{status: 400, code: "CACHE_INVALID_ARGUMENT", msg: "items is empty"}
 	}
-	return s.cacheAdminDao.SoftDelete(items)
+	result, err := s.cacheAdminDao.SoftDelete(items)
+	if err == nil {
+		dao.NotifyPublished()
+	}
+	return result, err
 }
 
 func (s *CacheAdminService) PurgeOrphans(items []dao.DeleteItem) ([]*dao.DeleteResult, error) {
 	if len(items) == 0 {
 		return nil, uploadError{status: 400, code: "CACHE_INVALID_ARGUMENT", msg: "items is empty"}
 	}
-	return s.cacheAdminDao.PurgeOrphans(items)
+	result, err := s.cacheAdminDao.PurgeOrphans(items)
+	if err == nil {
+		dao.NotifyPublished()
+	}
+	return result, err
 }
 
 // sumDistinctBlobs 按 (repoType, orgRepo, sha) 去重后求和，与 ListRepos/Summary

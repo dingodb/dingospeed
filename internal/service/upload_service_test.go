@@ -10,6 +10,8 @@ import (
 	"dingospeed/internal/dao"
 	"dingospeed/internal/downloader"
 	"dingospeed/pkg/config"
+	"dingospeed/pkg/repository"
+	"dingospeed/pkg/transfersettings"
 )
 
 func withUploadConfig(t *testing.T) {
@@ -24,13 +26,13 @@ func withUploadConfig(t *testing.T) {
 
 func validParam() dao.LocalUploadParam {
 	return dao.LocalUploadParam{
-		RepoType: "models",
-		Org:      "dingo-local",
-		Repo:     "demo",
-		Revision: "main",
-		FilePath: "config.json",
-		Size:     10,
-		Sha256:   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		RepoType:  "models",
+		Namespace: "dingo-local",
+		Repo:      "demo",
+		Revision:  "main",
+		FilePath:  "config.json",
+		Size:      10,
+		Sha256:    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 	}
 }
 
@@ -106,7 +108,7 @@ func TestValidateUploadParamRejectionMatrix(t *testing.T) {
 		})
 		t.Run("org/"+bad.name, func(t *testing.T) {
 			param := validParam()
-			param.Org = bad.value
+			param.Namespace = bad.value
 			if err := validateUploadParam(param); err == nil {
 				t.Fatalf("expected org %q to be rejected", bad.value)
 			}
@@ -136,7 +138,7 @@ func TestValidateUploadParamRejectionMatrix(t *testing.T) {
 	})
 	t.Run("org outside namespace", func(t *testing.T) {
 		param := validParam()
-		param.Org = "huggingface"
+		param.Namespace = "huggingface"
 		if err := validateUploadParam(param); err == nil {
 			t.Fatalf("expected org outside the reserved namespace to be rejected")
 		}
@@ -182,6 +184,19 @@ func TestParseDeclaredSize(t *testing.T) {
 func TestUploadConcurrencyLimit(t *testing.T) {
 	withUploadConfig(t)
 	config.SysConfig.Upload.ConcurrentLimit = 2
+	// Runtime settings are process-wide; other transfer tests may initialize them first.
+	config.SysConfig.Server.Repos = t.TempDir()
+	previous := transfersettings.Current()
+	settings := previous
+	settings.Upload = 2
+	if err := transfersettings.Save(settings); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := transfersettings.Save(previous); err != nil {
+			t.Error(err)
+		}
+	})
 
 	svc := NewUploadService(nil)
 	if !svc.acquireUploadSlot() || !svc.acquireUploadSlot() {
@@ -207,7 +222,10 @@ func errorCodeOf(err error) string {
 func TestIsProtectedLocalUploadCacheFile(t *testing.T) {
 	withUploadConfig(t)
 
-	root := filepath.Join("tmp", "repos")
+	root := t.TempDir()
+	if err := repository.Register(root, repository.Remote(repository.RepoKey{Namespace: "huggingface", RepoType: "models", Repo: "demo"})); err != nil {
+		t.Fatal(err)
+	}
 	protected := []string{
 		filepath.Join(root, "files", "models", "dingo-local", "demo", "blobs", "abc"),
 		filepath.Join(root, "files", "datasets", "dingo-local", "demo", "blobs", "abc"),
@@ -219,10 +237,11 @@ func TestIsProtectedLocalUploadCacheFile(t *testing.T) {
 		}
 	}
 
-	cleanable := []string{
-		filepath.Join(root, "files", "models", "huggingface", "demo", "blobs", "abc"),
-		filepath.Join(root, "files", "datasets", "someorg", "demo", "blobs", "abc"),
-		filepath.Join(root, "files", "models", "dingo-local-lookalike", "demo", "blobs", "abc"),
+	cleanable := []string{filepath.Join(root, "files", "models", "demo", "blobs", "abc")}
+	for _, unknown := range []string{"someorg", "dingo-local-lookalike"} {
+		if !isProtectedLocalUploadCacheFile(root, filepath.Join(root, "files", "models", unknown, "demo", "blobs", "abc")) {
+			t.Fatal("unknown source must remain protected")
+		}
 	}
 	for _, path := range cleanable {
 		if isProtectedLocalUploadCacheFile(root, path) {
@@ -265,7 +284,10 @@ func TestDiskCleanKeepsLocalUploadsAndStillCleansPublicCache(t *testing.T) {
 	localBlob := write("files", "models", "dingo-local", "demo", "blobs", "aaa")
 	localResolve := write("files", "models", "dingo-local", "demo", "resolve", "commit", "config.json")
 	localDataset := write("files", "datasets", "dingo-local", "demo", "blobs", "bbb")
-	publicBlob := write("files", "models", "huggingface", "demo", "blobs", "ccc")
+	publicBlob := write("files", "models", "demo", "blobs", "ccc")
+	if err := repository.Register(repos, repository.Remote(repository.RepoKey{Namespace: "huggingface", RepoType: "models", Repo: "demo"})); err != nil {
+		t.Fatal(err)
+	}
 
 	(&SysService{}).checkDiskUsage()
 

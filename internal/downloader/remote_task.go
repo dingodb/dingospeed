@@ -29,12 +29,17 @@ import (
 	"dingospeed/pkg/consts"
 	myerr "dingospeed/pkg/error"
 	"dingospeed/pkg/prom"
+	"dingospeed/pkg/repository"
 	"dingospeed/pkg/util"
 
 	"go.uber.org/zap"
 )
 
 type RemoteFileTask struct {
+	Source      *RemoteSource
+	LocalOnly   bool
+	Peer        bool
+	UpstreamURI string
 	*DownloadTask
 	Authorization string
 	Domain        string
@@ -43,6 +48,7 @@ type RemoteFileTask struct {
 	Etag          string
 	Queue         chan []byte `json:"-"`
 	Cancel        context.CancelFunc
+	ResultError   error
 }
 
 func NewRemoteFileTask(taskNo int, rangeStartPos int64, rangeEndPos int64) *RemoteFileTask {
@@ -60,6 +66,8 @@ func (r *RemoteFileTask) DoTask() {
 		curBlock    int64
 		wg          sync.WaitGroup
 		streamCache = bytes.Buffer{}
+		fetchErr    error
+		cacheErr    error
 	)
 	contentChan := make(chan []byte, consts.RespChanSize)
 	rangeStartPos, rangeEndPos := r.RangeStartPos, r.RangeEndPos
@@ -67,11 +75,11 @@ func (r *RemoteFileTask) DoTask() {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		if err := r.getFileRangeFromRemote(rangeStartPos, rangeEndPos, contentChan); err != nil {
+		defer close(contentChan)
+		fetchErr = r.getFileRangeFromRemote(rangeStartPos, rangeEndPos, contentChan)
+		if err := fetchErr; err != nil {
 			zap.S().Errorf("getFileRangeFromRemote err.%v", err)
 			r.Cancel()
-		} else {
-			close(contentChan)
 		}
 	}()
 	curPos, lastReportPos := rangeStartPos, rangeStartPos
@@ -94,7 +102,6 @@ func (r *RemoteFileTask) DoTask() {
 					case r.Queue <- chunk:
 					case <-r.Context.Done():
 						zap.S().Warnf("send chunk err:%s/%s, task %d, ctx done, DoTask exit.", r.OrgRepo, r.FileName, r.TaskNo)
-						data.ReportFileProcess(r.Context, r.constructFileProcessParam(lastReportPos, lastBlockEndPos, consts.StatusDownloadBreak))
 						return
 					}
 					chunkLen := int64(len(chunk))
@@ -105,12 +112,15 @@ func (r *RemoteFileTask) DoTask() {
 						prom.PromRequestByteCounter(prom.RequestRemoteByte, source, r.OrgRepo, r.Domain, chunkLen)
 					}
 
+					if cacheErr != nil {
+						continue // Cache failure must not cancel delivery of upstream bytes.
+					}
 					if len(chunk) != 0 {
 						streamCache.Write(chunk)
 					}
 					curBlock = curPos / r.DingFile.GetBlockSize()
 					// 若是一个新的数据块，则将上一个数据块持久化。
-					if curBlock != lastBlock {
+					for curBlock > lastBlock && (lastBlock+1)*r.DingFile.GetBlockSize() <= r.DingFile.GetFileSize() && cacheErr == nil {
 						splitPos := lastBlockEndPos - max(lastBlockStartPos, rangeStartPos)
 						cacheLen := int64(streamCache.Len())
 						if splitPos > cacheLen {
@@ -124,13 +134,16 @@ func (r *RemoteFileTask) DoTask() {
 							hasBlockBool, err := r.DingFile.HasBlock(lastBlock)
 							if err != nil {
 								zap.S().Errorf("HasBlock err.%v", err)
+								cacheErr = err
 							}
 							if err == nil && !hasBlockBool {
-								if err = r.DingFile.WriteBlock(lastBlock, rawBlock); err != nil {
+								if err = r.writeCacheBlock(lastBlock, rawBlock); err != nil {
 									zap.S().Errorf("writeBlock err.%v", err)
+									cacheErr = err
+									continue
 								}
 								zap.S().Debugf("from:%s, %s/%s, taskNo:%d, block：%d(%d)write done, range：%d-%d.", r.Domain, r.OrgRepo, r.FileName, r.TaskNo, lastBlock, blockNumber, lastBlockStartPos, lastBlockEndPos)
-								if interval == config.SysConfig.GetSyncProcessInterval() {
+								if !r.LocalOnly && interval == config.SysConfig.GetSyncProcessInterval() {
 									data.ReportFileProcess(r.Context, r.constructFileProcessParam(lastReportPos, lastBlockEndPos, consts.StatusDownloading))
 									lastReportPos = lastBlockEndPos
 									interval = 1
@@ -142,17 +155,37 @@ func (r *RemoteFileTask) DoTask() {
 						nextBlock := streamCacheBytes[splitPos:] // 下一个块的数据
 						streamCache.Truncate(0)
 						streamCache.Write(nextBlock)
-						lastBlock, lastBlockStartPos, lastBlockEndPos = GetBlockInfo(curPos, r.DingFile.GetBlockSize(), r.DingFile.GetFileSize())
+						lastBlock, lastBlockStartPos, lastBlockEndPos = GetBlockInfo(lastBlockEndPos, r.DingFile.GetBlockSize(), r.DingFile.GetFileSize())
 					}
 				}
 			case <-r.Context.Done():
 				zap.S().Warnf("file:%s/%s taskNo:%d ctx done, DoTask exit.", r.OrgRepo, r.FileName, r.TaskNo)
-				data.ReportFileProcess(r.Context, r.constructFileProcessParam(lastReportPos, lastBlockEndPos, consts.StatusDownloadBreak))
 				return
 			}
 		}
 	}()
 	wg.Wait()
+	defer func() {
+		if cacheErr != nil {
+			r.ResultError = cacheErr
+		} else if fetchErr != nil {
+			r.ResultError = fetchErr
+		}
+	}()
+	// Report exactly one terminal outcome, after both transfer and cache writes finish.
+	completed := false
+	defer func() {
+		status := int32(consts.StatusDownloadBreak)
+		if completed {
+			status = consts.StatusDownloaded
+		}
+		if !r.LocalOnly {
+			data.ReportFileProcess(r.Context, r.constructFileProcessParam(lastReportPos, rangeEndPos, status))
+		}
+	}()
+	if fetchErr != nil || cacheErr != nil || curPos != rangeEndPos {
+		return
+	}
 	rawBlock := streamCache.Bytes()
 	if curBlock == r.DingFile.getBlockNumber()-1 {
 		// 对不足一个block的数据做补全
@@ -162,32 +195,40 @@ func (r *RemoteFileTask) DoTask() {
 		}
 		lastBlock = curBlock
 	}
-	// 一个空文件，或文件刚好为blocksize的整数倍，直接标记为完成
-	if len(rawBlock) == 0 {
-		data.ReportFileProcess(r.Context, r.constructFileProcessParam(lastReportPos, curPos, consts.StatusDownloaded))
-	} else if int64(len(rawBlock)) == r.DingFile.GetBlockSize() {
+	// Commit the remaining block before checking cache coverage.
+	if int64(len(rawBlock)) == r.DingFile.GetBlockSize() {
 		hasBlockBool, err := r.DingFile.HasBlock(lastBlock)
 		if err != nil {
+			cacheErr = err
 			zap.S().Errorf("HasBlock err.%v", err)
 			return
 		}
 		if !hasBlockBool {
-			if err = r.DingFile.WriteBlock(lastBlock, rawBlock); err != nil {
+			if err = r.writeCacheBlock(lastBlock, rawBlock); err != nil {
+				cacheErr = err
 				zap.S().Errorf("last writeBlock err.%v", err)
+				return
 			}
 			zap.S().Debugf("from:%s, %s/%s, taskNo:%d, last block：%d(%d)write done, range：%d-%d.", r.Domain, r.OrgRepo, r.FileName, r.TaskNo, lastBlock, blockNumber, lastBlockStartPos, lastBlockEndPos)
-			data.ReportFileProcess(r.Context, r.constructFileProcessParam(lastReportPos, curPos, consts.StatusDownloaded))
 		}
 	}
-	if curPos != rangeEndPos {
-		zap.S().Errorf("file:%s/%s, taskNo:%d, remote range (%d) is different from sent size (%d).", r.OrgRepo, r.FileName, r.TaskNo, rangeEndPos-rangeStartPos, curPos-rangeStartPos)
-		return
+	// Receiving all bytes alone does not establish that the requested cache range exists.
+	for block := rangeStartPos / r.DingFile.GetBlockSize(); block*r.DingFile.GetBlockSize() < rangeEndPos; block++ {
+		has, err := r.DingFile.HasBlock(block)
+		if err != nil || !has {
+			zap.S().Errorf("remote cache incomplete: block=%d, err=%v", block, err)
+			return
+		}
 	}
+	// A client may close its connection after receiving Content-Length bytes while
+	// the final cache write is still running. Completed cache coverage survives
+	// that cancellation; incomplete transfers and failed writes are rejected above.
+	completed = true
 	zap.S().Infof("end remote dotask:%s/%s, taskNo:%d, size:%d, domain:%s, startPos:%d, endPos:%d", r.OrgRepo, r.FileName, r.TaskNo, r.TaskSize, r.Domain, rangeStartPos, rangeEndPos)
 }
 
 func (r *RemoteFileTask) constructFileProcessParam(startPos, endPos int64, status int32) *data.FileProcessParam {
-	org, repo := util.SplitOrgRepo(r.OrgRepo)
+	org, repo := r.RepoKey.Namespace, r.RepoKey.Repo
 	return &data.FileProcessParam{
 		Datatype: r.DataType,
 		Org:      org,
@@ -236,6 +277,11 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 		n               int
 		headers         = make(map[string]string)
 	)
+	if r.Source != nil {
+		for k, v := range r.Source.Headers {
+			headers[k] = v
+		}
+	}
 	if r.Authorization != "" {
 		headers["authorization"] = r.Authorization
 	}
@@ -243,8 +289,29 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 		headers["range"] = fmt.Sprintf("bytes=%d-%d", startPos, endPos-1)
 	}
 	for i := 0; i < attempts; {
-		if _, err = util.RetryRequest(func() (*common.Response, error) {
-			err = util.GetStream(r.Domain, r.Uri, headers, func(resp *http.Response) error {
+		if _, err = util.RetryRequestContext(r.Context, func() (*common.Response, error) {
+			trace := common.CacheTrace(r.Context)
+			if !trace.Begin() {
+				return nil, context.Canceled
+			}
+			defer func() { trace.End(r.Context.Err() != nil) }()
+
+			fetch := func(domain, uri string, headers map[string]string, cb func(*http.Response) error) error {
+				return util.GetStreamContext(r.Context, domain, uri, headers, cb)
+			}
+			if r.Peer {
+				fetch = func(domain, uri string, headers map[string]string, cb func(*http.Response) error) error {
+					return util.GetPeerStreamContext(r.Context, domain, uri, headers, cb)
+				}
+			} else if r.Source != nil && r.Source.Fetch != nil {
+				fetch = func(domain, uri string, headers map[string]string, cb func(*http.Response) error) error {
+					return r.Source.Fetch(r.Context, domain, uri, headers, cb)
+				}
+			}
+			err = fetch(r.Domain, r.Uri, headers, func(resp *http.Response) error {
+				if headers["range"] != "" && resp.StatusCode == http.StatusOK {
+					return fmt.Errorf("source ignored Range request")
+				}
 				contentEncoding = resp.Header.Get("content-encoding")
 				code := resp.StatusCode
 				if code != http.StatusOK && code != http.StatusPartialContent {
@@ -300,15 +367,23 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 			})
 			return nil, err
 		}); err != nil {
+			if r.Context.Err() != nil {
+				return r.Context.Err()
+			}
 			var t myerr.Error
 			if errors.As(err, &t) {
 				break
 			}
-			// 若从内部其他节点获取数据出现异常，则切换到官网获取。
-			if config.SysConfig.IsCluster() && util.IsInnerDomain(r.Domain) {
+			// 若从内部其他节点获取数据出现异常，则切换到对应 provider 的官网获取。
+			if r.Peer && (r.RepoKey.Namespace == repository.HuggingFace || r.Source != nil) {
 				officialDomain := config.SysConfig.GetHFURLBase()
+				if r.Source != nil {
+					officialDomain = r.Source.Domain
+				}
 				zap.S().Infof("request fail %s/%s req from %s to %s", r.OrgRepo, r.FileName, r.Domain, officialDomain)
 				r.Domain = officialDomain
+				r.Uri = r.UpstreamURI
+				r.Peer = false
 				if chunkByteLen > 0 {
 					headers["range"] = fmt.Sprintf("bytes=%d-%d", startPos+int64(chunkByteLen), endPos-1)
 				}
@@ -321,7 +396,7 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 		}
 	}
 	if err != nil {
-		return fmt.Errorf("GetStream err.%v", err)
+		return fmt.Errorf("GetStream: %w", err)
 	}
 	if contentEncoding != "" {
 		// 这里需要实现解压缩逻辑
@@ -330,12 +405,24 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 			zap.S().Errorf("DecompressData err.%v", err)
 			return err
 		}
-		contentChan <- finalData      // 返回解码后的数据流
+		select {
+		case contentChan <- finalData:
+		case <-r.Context.Done():
+			return r.Context.Err()
+		}
 		chunkByteLen = len(finalData) // 将解码后的长度复制为原始的chunkByteLen
 	}
 	expectedLength := endPos - startPos
 	if expectedLength != int64(chunkByteLen) {
 		return fmt.Errorf("file:%s/%s, taskNo:%d,The block is incomplete. Expected-%d. Accepted-%d", r.OrgRepo, r.FileName, r.TaskNo, expectedLength, chunkByteLen)
 	}
+	return nil
+}
+
+func (r *RemoteFileTask) writeCacheBlock(block int64, data []byte) error {
+	if err := r.DingFile.WriteBlock(block, data); err != nil {
+		return err
+	}
+	common.CacheTrace(r.Context).Wrote(int64(len(data)))
 	return nil
 }

@@ -15,16 +15,22 @@
 package dao
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"dingospeed/internal/data"
 	"dingospeed/pkg/common"
 	"dingospeed/pkg/config"
+	"dingospeed/pkg/dependency"
 	myerr "dingospeed/pkg/error"
+	"dingospeed/pkg/repository"
 	"dingospeed/pkg/util"
 
 	"github.com/bytedance/sonic"
@@ -73,26 +79,24 @@ func (m *MetaDao) WhoamiV2Generator(c echo.Context) error {
 }
 
 func (m *MetaDao) ReposGenerator(c echo.Context) error {
-	reposPath := config.SysConfig.Repos()
-
-	datasets, _ := filepath.Glob(filepath.Join(reposPath, "api/datasets/*/*"))
-	datasetsRepos := util.ProcessPaths(datasets)
-
-	models, _ := filepath.Glob(filepath.Join(reposPath, "api/models/*/*"))
-	modelsRepos := util.ProcessPaths(models)
-
-	spaces, _ := filepath.Glob(filepath.Join(reposPath, "api/spaces/*/*"))
-	spacesRepos := util.ProcessPaths(spaces)
-
-	return c.Render(http.StatusOK, "repos.html", map[string]interface{}{
-		"datasets_repos": datasetsRepos,
-		"models_repos":   modelsRepos,
-		"spaces_repos":   spacesRepos,
-	})
+	all, err := repository.List(config.SysConfig.Repos())
+	if err != nil {
+		return echo.NewHTTPError(500, "repository registry unavailable")
+	}
+	groups := map[string]interface{}{"datasets_repos": []string{}, "models_repos": []string{}, "spaces_repos": []string{}}
+	for _, d := range all {
+		name := d.RepoType + "_repos"
+		groups[name] = append(groups[name].([]string), d.ID())
+	}
+	return c.Render(http.StatusOK, "repos.html", groups)
 }
 
 func (m *MetaDao) RepoRefs(repoType string, orgRepo string, authorization string) (*common.Response, error) {
-	refsUri := fmt.Sprintf("/api/%s/%s/refs", repoType, orgRepo)
+	upstream, err := UpstreamRepo(repoType, orgRepo)
+	if err != nil {
+		return nil, err
+	}
+	refsUri := fmt.Sprintf("/api/%s/%s/refs", repoType, repository.EscapeURLPath(upstream))
 	headers := map[string]string{}
 	if authorization != "" {
 		headers["authorization"] = authorization
@@ -105,6 +109,53 @@ func (m *MetaDao) RepoRefs(repoType string, orgRepo string, authorization string
 
 func (m *MetaDao) ForwardRefs(originalReq echo.Context) (*http.Response, error) {
 	return util.ForwardRequest(originalReq)
+}
+
+// RefreshPreheatMetadata resolves a moving HF branch once for an explicit task.
+// Ordinary catalog browsing never calls this method.
+func (m *MetaDao) RefreshPreheatMetadata(k repository.RepoKey, revision, authorization string) (*CommitHfSha, error) {
+	return m.RefreshPreheatMetadataContext(context.Background(), k, revision, authorization)
+}
+func (m *MetaDao) RefreshPreheatMetadataContext(ctx context.Context, k repository.RepoKey, revision, authorization string) (*CommitHfSha, error) {
+	if err := k.Validate(); err != nil {
+		return nil, err
+	}
+	if k.Namespace != repository.HuggingFace || !config.SysConfig.Online() {
+		return nil, fmt.Errorf("HF prewarm requires an online Hugging Face source")
+	}
+	if err := repository.Segment(revision); err != nil {
+		return nil, err
+	}
+	lock := m.lockDao.getMetaDataReqLock(GetMetaDataReqKey(k.RepoType, k.ID(), revision))
+	lock.Lock()
+	defer lock.Unlock()
+	resp, err := m.fileDao.RemoteRequestMetaContext(ctx, "get", k.RepoType, k.ID(), revision, authorization)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, myerr.NewAppendCode(resp.StatusCode, "HF prewarm metadata request failed")
+	}
+	var meta CommitHfSha
+	if err := sonic.Unmarshal(resp.Body, &meta); err != nil {
+		return nil, err
+	}
+	if err := repository.Segment(meta.Sha); err != nil {
+		return nil, err
+	}
+	for _, file := range meta.Siblings {
+		if err := repository.Relative(file.Rfilename); err != nil {
+			return nil, err
+		}
+	}
+	headers := resp.ExtractHeaders(resp.Headers)
+	if err := m.writeApiMetaFile(k.RepoType, k.ID(), meta.Sha, "get", resp.StatusCode, headers, resp.Body); err != nil {
+		return nil, err
+	}
+	if err := m.writeApiMetaFile(k.RepoType, k.ID(), revision, "get", resp.StatusCode, headers, resp.Body); err != nil {
+		return nil, err
+	}
+	return &meta, nil
 }
 
 func (m *MetaDao) GetMetadata(repoType, orgRepo, revision, method, authorization string) (*common.CacheContent, error) {
@@ -120,9 +171,9 @@ func (m *MetaDao) GetMetadata(repoType, orgRepo, revision, method, authorization
 	if err != nil {
 		return nil, err
 	}
-	apiDir := fmt.Sprintf("%s/api/%s/%s/revision/%s", config.SysConfig.Repos(), repoType, orgRepo, commitSha)
-	apiMetaPath := fmt.Sprintf("%s/%s", apiDir, fmt.Sprintf("meta_%s.json", method))
-	if config.SysConfig.Online() {
+	apiDir := RepositoryKey(repoType, orgRepo).Revision(config.SysConfig.Repos(), commitSha)
+	apiMetaPath := filepath.Join(apiDir, "meta_"+method+".json")
+	if config.SysConfig.Online() && !IsLocalOrgRepo(orgRepo) {
 		if util.FileExists(apiMetaPath) {
 			if cacheContent, err = m.fileDao.ReadCacheRequest(apiMetaPath); err != nil {
 				zap.S().Errorf("ReadCacheRequest err.%v", err)
@@ -136,11 +187,21 @@ func (m *MetaDao) GetMetadata(repoType, orgRepo, revision, method, authorization
 			}
 		}
 	} else {
-		if util.FileExists(apiMetaPath) {
+		exists, accessErr := util.PathExists(apiMetaPath)
+		if accessErr != nil {
+			util.ObserveFileAccessFailure("stat", accessErr)
+			return nil, localMetadataError(accessErr)
+		}
+		if exists {
 			if cacheContent, err = m.fileDao.ReadCacheRequest(apiMetaPath); err != nil {
+				util.ObserveFileAccessFailure("read", err)
 				zap.S().Errorf("ReadCacheRequest err.%v", err)
-				return nil, err
+				if errors.Is(err, os.ErrNotExist) {
+					return nil, myerr.NewAppendCode(http.StatusNotFound, fmt.Sprintf("%s not exist", orgRepo))
+				}
+				return nil, localMetadataError(err)
 			}
+			dependency.Default.Observe(dependency.MetadataRead, true, time.Now())
 		} else {
 			return nil, myerr.NewAppendCode(http.StatusNotFound, fmt.Sprintf("%s not exist", orgRepo))
 		}
@@ -148,6 +209,19 @@ func (m *MetaDao) GetMetadata(repoType, orgRepo, revision, method, authorization
 	cacheContent, err = m.ensureLocalMetadataID(orgRepo, cacheContent)
 	if err != nil {
 		return nil, err
+	}
+	if !IsLocalOrgRepo(orgRepo) {
+		k, err := repository.ParseID(repoType, orgRepo)
+		if err != nil {
+			return nil, err
+		}
+		if err = repository.Register(config.SysConfig.Repos(), repository.Remote(k)); err != nil {
+			// Recording a remote cache descriptor is not required to deliver an
+			// online response. Validation/conflict errors still fail closed.
+			if !config.SysConfig.Online() || !metadataCacheIOError(err) {
+				return nil, err
+			}
+		}
 	}
 	return cacheContent, nil
 }
@@ -188,60 +262,64 @@ func (m *MetaDao) requestAndSaveMeta(repoType, orgRepo, revision, commitSha, met
 		return nil, myerr.NewAppendCode(resp.StatusCode, "request err")
 	}
 	extractHeaders := resp.ExtractHeaders(resp.Headers)
+	content := &common.CacheContent{StatusCode: resp.StatusCode, Headers: extractHeaders, OriginContent: resp.Body}
+	// This helper is used only for online metadata delivery. Keep failures in
+	// writeApiMetaFile visible to durable writers; tolerate filesystem cache
+	// failures here only after a complete successful upstream response exists.
+	cacheResult := func(err error) (*common.CacheContent, error) {
+		if metadataCacheIOError(err) {
+			return content, nil
+		}
+		return nil, err
+	}
 	mainVersion := "main"
 	if revision == mainVersion {
 		err = m.writeApiMetaFile(repoType, orgRepo, revision, method, resp.StatusCode, extractHeaders, resp.Body)
 		if err != nil {
-			m.logMetadataCacheWriteFailure(orgRepo, revision, method, err)
+			return cacheResult(err)
 		}
 	} else {
-		apiDir := fmt.Sprintf("%s/api/%s/%s/revision/%s", config.SysConfig.Repos(), repoType, orgRepo, mainVersion)
-		apiMetaPath := fmt.Sprintf("%s/%s", apiDir, fmt.Sprintf("meta_%s.json", method))
+		apiDir := RepositoryKey(repoType, orgRepo).Revision(config.SysConfig.Repos(), mainVersion)
+		apiMetaPath := filepath.Join(apiDir, "meta_"+method+".json")
 		if !util.FileExists(apiMetaPath) {
 			err = m.writeApiMetaFile(repoType, orgRepo, mainVersion, method, resp.StatusCode, extractHeaders, resp.Body) // create main dir
 			if err != nil {
-				m.logMetadataCacheWriteFailure(orgRepo, mainVersion, method, err)
+				return cacheResult(err)
 			}
 		}
 	}
 
 	err = m.writeApiMetaFile(repoType, orgRepo, commitSha, method, resp.StatusCode, extractHeaders, resp.Body)
 	if err != nil {
-		m.logMetadataCacheWriteFailure(orgRepo, commitSha, method, err)
+		return cacheResult(err)
 	}
-	return &common.CacheContent{
-		StatusCode:    resp.StatusCode,
-		Headers:       extractHeaders,
-		OriginContent: resp.Body,
-	}, nil
+	return content, nil
 }
 
-func (m *MetaDao) logMetadataCacheWriteFailure(orgRepo, revision, method string, err error) {
-	fields := []interface{}{"repo", orgRepo, "revision", revision, "method", method, "error", err}
-	var accessErr *util.FileAccessError
-	if errors.As(err, &accessErr) {
-		fields = append(fields, "kind", accessErr.Kind, "path", accessErr.Path)
-	}
-	zap.S().Warnw("serving remote metadata without cache", fields...)
+// Only for cache persistence operations: ENOENT during a write is a failed
+// cache write too. flock may return a bare errno rather than an os.PathError.
+// Validation, namespace conflicts and lock contention are not I/O errors.
+func metadataCacheIOError(err error) bool {
+	var pathErr *os.PathError
+	var linkErr *os.LinkError
+	var errno syscall.Errno
+	return errors.As(err, &pathErr) || errors.As(err, &linkErr) || errors.As(err, &errno)
 }
 
 func (m *MetaDao) writeApiMetaFile(repoType, orgRepo, commitSha, method string, statusCode int, extractHeaders map[string]string, body []byte) error {
-	apiDir := fmt.Sprintf("%s/api/%s/%s/revision/%s", config.SysConfig.Repos(), repoType, orgRepo, commitSha)
-	apiMetaPath := fmt.Sprintf("%s/%s", apiDir, fmt.Sprintf("meta_%s.json", method))
+	apiDir := RepositoryKey(repoType, orgRepo).Revision(config.SysConfig.Repos(), commitSha)
+	apiMetaPath := filepath.Join(apiDir, "meta_"+method+".json")
 	err := util.MakeDirs(apiMetaPath)
 	if err != nil {
+		util.ObserveFileAccessFailure("mkdir", err)
 		zap.S().Errorf("create %s dir err.%v", apiMetaPath, err)
-		if accessErr, ok := util.ClassifyFileAccessError(apiMetaPath, err); ok {
-			return accessErr
-		}
 		return err
 	}
 	if err = m.fileDao.WriteCacheRequest(apiMetaPath, statusCode, extractHeaders, body); err != nil {
+		util.ObserveFileAccessFailure("write", err)
 		zap.S().Errorf("writeCacheRequest err.%v", err)
-		if accessErr, ok := util.ClassifyFileAccessError(apiMetaPath, err); ok {
-			return accessErr
-		}
 		return err
 	}
+	dependency.Default.Observe(dependency.MetadataWrite, true, time.Now())
 	return nil
 }

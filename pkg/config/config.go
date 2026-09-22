@@ -17,6 +17,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -36,20 +37,31 @@ var SysConfig *Config
 var SystemInfo *model.SystemInfo
 
 type Config struct {
-	Id               int32
-	Server           ServerConfig     `json:"server" yaml:"server"`
-	Download         Download         `json:"download" yaml:"download"`
-	Cache            Cache            `json:"cache" yaml:"cache"`
-	Log              LogConfig        `json:"log" yaml:"log"`
-	Retry            Retry            `json:"retry" yaml:"retry"`
-	TokenBucketLimit TokenBucketLimit `json:"tokenBucketLimit" yaml:"tokenBucketLimit"`
-	DiskClean        DiskClean        `json:"diskClean" yaml:"diskClean"`
-	DynamicProxy     DynamicProxy     `json:"dynamicProxy" yaml:"dynamicProxy"`
-	ProxyPool        ProxyPool        `json:"proxyPool" yaml:"proxyPool"`
-	Scheduler        Scheduler        `json:"scheduler" yaml:"scheduler"`
-	Upload           Upload           `json:"upload" yaml:"upload"`
-	mu               sync.RWMutex
-	Modelscope       Modelscope `yaml:"modelscope"`
+	Id                    int32
+	Server                ServerConfig     `json:"server" yaml:"server"`
+	Download              Download         `json:"download" yaml:"download"`
+	Cache                 Cache            `json:"cache" yaml:"cache"`
+	Log                   LogConfig        `json:"log" yaml:"log"`
+	Retry                 Retry            `json:"retry" yaml:"retry"`
+	TokenBucketLimit      TokenBucketLimit `json:"tokenBucketLimit" yaml:"tokenBucketLimit"`
+	DiskClean             DiskClean        `json:"diskClean" yaml:"diskClean"`
+	DynamicProxy          DynamicProxy     `json:"dynamicProxy" yaml:"dynamicProxy"`
+	ProxyPool             ProxyPool        `json:"proxyPool" yaml:"proxyPool"`
+	Scheduler             Scheduler        `json:"scheduler" yaml:"scheduler"`
+	Upload                Upload           `json:"upload" yaml:"upload"`
+	StorageProbe          StorageProbe     `json:"storageProbe" yaml:"storageProbe"`
+	mu                    sync.RWMutex
+	registrationOnce      sync.Once
+	registration          *Registration
+	registrationErr       error
+	registrationPersisted bool
+	registrationStatus    RegistrationStatus
+	Modelscope            Modelscope `yaml:"modelscope"`
+}
+
+// StorageProbe is opt-in because probing adds filesystem I/O.
+type StorageProbe struct {
+	Enabled bool `json:"enabled" yaml:"enabled"`
 }
 
 type ServerConfig struct {
@@ -200,7 +212,36 @@ type Modelscope struct {
 	RetryDelay      int    `yaml:"retryDelay"`
 }
 
+// ModelScope is available without a provider-specific YAML section. Explicit
+// overrides are preserved; invalid values fail at startup instead of on download.
+func (m *Modelscope) setDefaults() {
+	if m.OfficialBaseURL == "" {
+		m.OfficialBaseURL = "https://www.modelscope.cn"
+	}
+	if m.ChunkSize == 0 {
+		m.ChunkSize = 8388608
+	}
+	if m.MaxRetry == 0 {
+		m.MaxRetry = 5
+	}
+	if m.RetryDelay == 0 {
+		m.RetryDelay = 3
+	}
+}
+
+func (m Modelscope) validate() error {
+	u, err := url.Parse(m.OfficialBaseURL)
+	if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("modelscope.officialBaseURL must be an absolute HTTP(S) base URL without query or fragment")
+	}
+	if m.ChunkSize < 1 || m.MaxRetry < 1 || m.RetryDelay < 0 {
+		return fmt.Errorf("modelscope requires chunkSize > 0, maxRetry > 0 and retryDelay >= 0")
+	}
+	return nil
+}
+
 type Upload struct {
+	AdvertiseURL                  string `json:"advertiseUrl" yaml:"advertiseUrl"`
 	Host                          string `json:"host" yaml:"host"`
 	Port                          int    `json:"port" yaml:"port"`
 	Namespace                     string `json:"namespace" yaml:"namespace"`
@@ -464,7 +505,10 @@ func (c *Config) GetSchedulerModel() string {
 }
 
 func (c *Config) GetOriginSchedulerModel() string {
-	return c.Scheduler.OriginMode
+	if c.Registration().Enabled {
+		return consts.SchedulerModeCluster
+	}
+	return consts.SchedulerModeStandalone
 }
 
 func (c *Config) GetModelCacheRoot() string {
@@ -476,6 +520,7 @@ func (c *Config) GetDatasetCacheRoot() string {
 }
 
 func (c *Config) SetDefaults() {
+	c.Modelscope.setDefaults()
 	if c.Server.Port == 0 {
 		c.Server.Port = 8090
 	}
@@ -552,6 +597,9 @@ func Scan(path string) (*Config, error) {
 		return nil, err
 	}
 	c.SetDefaults()
+	if err := c.Modelscope.validate(); err != nil {
+		return nil, err
+	}
 
 	if c.Download.RemoteFileRangeSize%c.Download.BlockSize != 0 {
 		return nil, myerr.New("RemoteFileRangeSize must be a multiple of BlockSize")

@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"dingospeed/internal/service"
+	"dingospeed/pkg/config"
+	"dingospeed/pkg/repository"
 	"dingospeed/pkg/util"
 
 	"github.com/labstack/echo/v4"
@@ -31,7 +33,14 @@ func (m *ModelscopeHandler) ModelInfoHandler(c echo.Context) error {
 		return util.ResponseError(c, err)
 	}
 
-	org, repo, repoType := parts[3], parts[4], parts[2]
+	org, repo, repoType := c.Param("org"), c.Param("repo"), c.Param("repoType")
+	key := repository.RepoKey{Namespace: repository.ModelScope, RepoType: repoType, Repo: org + "/" + repo}
+	if err := key.Validate(); err != nil {
+		return echo.NewHTTPError(400, err.Error())
+	}
+	if err := repository.Register(config.SysConfig.Repos(), repository.Remote(key)); err != nil {
+		return err
+	}
 	if err := m.modelscopeService.ForwardModelInfo(c, org, repo, repoType); err != nil {
 		return util.ResponseError(c, err)
 	}
@@ -47,7 +56,14 @@ func (m *ModelscopeHandler) RevisionsHandler(c echo.Context) error {
 		return util.ResponseError(c, err)
 	}
 
-	org, repo, repoType := parts[3], parts[4], parts[2]
+	org, repo, repoType := c.Param("org"), c.Param("repo"), c.Param("repoType")
+	key := repository.RepoKey{Namespace: repository.ModelScope, RepoType: repoType, Repo: org + "/" + repo}
+	if err := key.Validate(); err != nil {
+		return echo.NewHTTPError(400, err.Error())
+	}
+	if err := repository.Register(config.SysConfig.Repos(), repository.Remote(key)); err != nil {
+		return err
+	}
 	if err := m.modelscopeService.ForwardRevisions(c, org, repo, repoType); err != nil {
 		return util.ResponseError(c, err)
 	}
@@ -63,7 +79,14 @@ func (m *ModelscopeHandler) FileListHandler(c echo.Context) error {
 		return util.ResponseError(c, err)
 	}
 
-	org, repo, repoType := parts[3], parts[4], parts[2]
+	org, repo, repoType := c.Param("org"), c.Param("repo"), c.Param("repoType")
+	key := repository.RepoKey{Namespace: repository.ModelScope, RepoType: repoType, Repo: org + "/" + repo}
+	if err := key.Validate(); err != nil {
+		return echo.NewHTTPError(400, err.Error())
+	}
+	if err := repository.Register(config.SysConfig.Repos(), repository.Remote(key)); err != nil {
+		return err
+	}
 	if err := m.modelscopeService.ForwardFileList(c, org, repo, repoType); err != nil {
 		return util.ResponseError(c, err)
 	}
@@ -79,11 +102,15 @@ func (m *ModelscopeHandler) FileDownloadHandler(c echo.Context) error {
 		return util.ResponseError(c, err)
 	}
 
-	org, repo, repoType := parts[3], parts[4], parts[2]
-	if err := m.modelscopeService.HandleFileDownload(c, org, repo, repoType); err != nil {
-		return util.ResponseError(c, err)
+	org, repo, repoType := c.Param("org"), c.Param("repo"), c.Param("repoType")
+	key := repository.RepoKey{Namespace: repository.ModelScope, RepoType: repoType, Repo: org + "/" + repo}
+	if err := key.Validate(); err != nil {
+		return echo.NewHTTPError(400, err.Error())
 	}
-	return nil
+	if err := repository.Register(config.SysConfig.Repos(), repository.Remote(key)); err != nil {
+		return err
+	}
+	return m.modelscopeService.HandleFileDownload(c, org, repo, repoType)
 }
 
 // FileTreeHandler 处理数据集文件列表请求
@@ -95,7 +122,14 @@ func (m *ModelscopeHandler) FileTreeHandler(c echo.Context) error {
 		return util.ResponseError(c, err)
 	}
 
-	org, repo, repoType := parts[3], parts[4], parts[2]
+	org, repo, repoType := c.Param("org"), c.Param("repo"), c.Param("repoType")
+	key := repository.RepoKey{Namespace: repository.ModelScope, RepoType: repoType, Repo: org + "/" + repo}
+	if err := key.Validate(); err != nil {
+		return echo.NewHTTPError(400, err.Error())
+	}
+	if err := repository.Register(config.SysConfig.Repos(), repository.Remote(key)); err != nil {
+		return err
+	}
 	if err := m.modelscopeService.ForwardRepoTree(c, org, repo, repoType); err != nil {
 		return util.ResponseError(c, err)
 	}
