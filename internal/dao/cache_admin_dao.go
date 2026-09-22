@@ -16,6 +16,7 @@ package dao
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -29,6 +30,7 @@ import (
 	"dingospeed/pkg/common"
 	"dingospeed/pkg/config"
 	"dingospeed/pkg/consts"
+	"dingospeed/pkg/repository"
 	"dingospeed/pkg/util"
 
 	"github.com/bytedance/sonic"
@@ -64,8 +66,10 @@ func NewCacheAdminDao(fileDao *FileDao) *CacheAdminDao {
 
 // CacheRepo 是仓库维度的汇总，供页面左侧的仓库树使用。
 type CacheRepo struct {
+	Namespace string `json:"namespace"`
+	Repo      string `json:"repo"`
 	RepoType  string `json:"repoType"`
-	OrgRepo   string `json:"orgRepo"`
+	OrgRepo   string `json:"-"`
 	Source    string `json:"source"`
 	FileCount int    `json:"fileCount"`
 	TotalSize int64  `json:"totalSize"`
@@ -80,8 +84,10 @@ type CacheRepo struct {
 // 同一份内容在同一个快照里被多个路径引用，那也是两行。行的身份是 (path, sha)，
 // 与一级删除的粒度严格一致。
 type CacheFileRow struct {
+	Namespace   string   `json:"namespace"`
+	Repo        string   `json:"repo"`
 	RepoType    string   `json:"repoType"`
-	OrgRepo     string   `json:"orgRepo"`
+	OrgRepo     string   `json:"-"`
 	Path        string   `json:"path"`
 	Sha         string   `json:"sha"`
 	Size        int64    `json:"size"`
@@ -104,6 +110,8 @@ type CacheFileRow struct {
 // 一个 sha 一个文件，而不是每个仓库一份索引：并发删除各写各的文件，
 // 不需要读改写合并，天然原子。
 type RecycleEntry struct {
+	Namespace string   `json:"namespace"`
+	Repo      string   `json:"repo"`
 	RepoType  string   `json:"repoType"`
 	OrgRepo   string   `json:"orgRepo"`
 	Sha       string   `json:"sha"`
@@ -128,10 +136,12 @@ type RecycleRow struct {
 
 // DeleteItem 是删除请求里的一条。二级删除只用 RepoType/OrgRepo/Sha。
 type DeleteItem struct {
-	RepoType string `json:"repoType"`
-	OrgRepo  string `json:"orgRepo"`
-	Path     string `json:"path"`
-	Sha      string `json:"sha"`
+	Namespace string `json:"namespace"`
+	Repo      string `json:"repo"`
+	RepoType  string `json:"repoType"`
+	OrgRepo   string `json:"-"`
+	Path      string `json:"path"`
+	Sha       string `json:"sha"`
 }
 
 // DeleteResult 逐条返回，不因为其中一条失败就整批回滚：
@@ -235,11 +245,11 @@ func repoSource(orgRepo string) string {
 }
 
 func repoFilesRoot(repoType, orgRepo string) string {
-	return filepath.Join(config.SysConfig.Repos(), "files", repoType, filepath.FromSlash(orgRepo))
+	return RepositoryKey(repoType, orgRepo).FilesRoot(config.SysConfig.Repos())
 }
 
 func repoApiRoot(repoType, orgRepo string) string {
-	return filepath.Join(config.SysConfig.Repos(), "api", repoType, filepath.FromSlash(orgRepo))
+	return RepositoryKey(repoType, orgRepo).APIRoot(config.SysConfig.Repos())
 }
 
 func recycleEntryPath(repoType, orgRepo, sha string) string {
@@ -390,7 +400,17 @@ func collectRemoteRefs(idx *repoIndex) {
 		if len(parts) < 2 {
 			return nil
 		}
-		addRef(readPathsInfoOid(path), parts[0], strings.Join(parts[1:], "/"))
+		oid := readPathsInfoOid(path)
+		if stat := idx.Blobs[oid]; !stat.Exists {
+			if content, err := readCacheContent(path); err == nil {
+				var infos []common.PathsInfo
+				if sonic.Unmarshal(content, &infos) == nil && len(infos) > 0 {
+					stat.Size = infos[0].Size
+					idx.Blobs[oid] = stat
+				}
+			}
+		}
+		addRef(oid, parts[0], strings.Join(parts[1:], "/"))
 		return nil
 	})
 
@@ -483,20 +503,16 @@ type repoKey struct {
 
 // listRepoKeys 枚举所有仓库。
 //
-// orgRepo 的层级不固定（有 org 时是 org/repo，没有时就是 repo），所以不能按固定深度
-// glob，只能向下找到“含 blobs 或 resolve 子目录”的那一层作为仓库根，找到就不再深入。
+// 身份完全来自经过校验的描述符，不从 blobs/resolve 目录名推测仓库边界。
 func listRepoKeys() []repoKey {
-	keys := make(map[repoKey]struct{})
-	repos := config.SysConfig.Repos()
-	for _, repoType := range []string{"models", "datasets", "spaces"} {
-		scanRepoRoots(filepath.Join(repos, "files", repoType), repoType, []string{"blobs", "resolve"}, keys)
-		// paths-info 和 recycle 都是仓库根下的数据子树。它们本身足以证明仓库
-		// 存在；命中后必须停止向下遍历，否则仓库发现会退化为扫描全部文件。
-		scanRepoRoots(filepath.Join(repos, "api", repoType), repoType, []string{"revision", "paths-info", recycleDirName}, keys)
+	all, err := repository.List(config.SysConfig.Repos())
+	if err != nil {
+		zap.S().Errorf("repository enumeration failed: %v", err)
+		return nil
 	}
-	result := make([]repoKey, 0, len(keys))
-	for k := range keys {
-		result = append(result, k)
+	result := make([]repoKey, 0, len(all))
+	for _, d := range all {
+		result = append(result, repoKey{RepoType: d.RepoType, OrgRepo: d.ID()})
 	}
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].RepoType != result[j].RepoType {
@@ -505,25 +521,6 @@ func listRepoKeys() []repoKey {
 		return result[i].OrgRepo < result[j].OrgRepo
 	})
 	return result
-}
-
-func scanRepoRoots(root, repoType string, markers []string, out map[repoKey]struct{}) {
-	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil || !entry.IsDir() || path == root {
-			return nil
-		}
-		for _, marker := range markers {
-			if entry.Name() == marker {
-				// 命中标记目录，它的父目录就是仓库根。
-				rel, relErr := filepath.Rel(root, filepath.Dir(path))
-				if relErr == nil && rel != "." && !strings.HasPrefix(rel, "..") {
-					out[repoKey{RepoType: repoType, OrgRepo: filepath.ToSlash(rel)}] = struct{}{}
-				}
-				return fs.SkipDir
-			}
-		}
-		return nil
-	})
 }
 
 // ---------------------------------------------------------------------------
@@ -537,6 +534,7 @@ func (d *CacheAdminDao) ListRepos() []*CacheRepo {
 		rows := indexRows(idx)
 		repo := &CacheRepo{
 			RepoType:  key.RepoType,
+			Namespace: RepositoryKey(key.RepoType, key.OrgRepo).Namespace, Repo: RepositoryKey(key.RepoType, key.OrgRepo).Repo,
 			OrgRepo:   key.OrgRepo,
 			Source:    idx.Source,
 			FileCount: len(rows),
@@ -597,7 +595,8 @@ func indexRows(idx *repoIndex) []*CacheFileRow {
 			row, ok := byKey[key]
 			if !ok {
 				row = &CacheFileRow{
-					RepoType:    idx.RepoType,
+					RepoType:  idx.RepoType,
+					Namespace: RepositoryKey(idx.RepoType, idx.OrgRepo).Namespace, Repo: RepositoryKey(idx.RepoType, idx.OrgRepo).Repo,
 					OrgRepo:     idx.OrgRepo,
 					Path:        ref.Path,
 					Sha:         sha,
@@ -684,7 +683,8 @@ func indexOrphans(idx *repoIndex) []*RecycleRow {
 				continue
 			}
 			entry = RecycleEntry{
-				RepoType:   idx.RepoType,
+				RepoType:  idx.RepoType,
+				Namespace: RepositoryKey(idx.RepoType, idx.OrgRepo).Namespace, Repo: RepositoryKey(idx.RepoType, idx.OrgRepo).Repo,
 				OrgRepo:    idx.OrgRepo,
 				Sha:        sha,
 				Size:       stat.Size,
@@ -694,6 +694,8 @@ func indexOrphans(idx *repoIndex) []*RecycleRow {
 				UnlinkedAt: stat.ModTime.Unix(),
 			}
 		}
+		entry.Namespace = RepositoryKey(idx.RepoType, idx.OrgRepo).Namespace
+		entry.Repo = RepositoryKey(idx.RepoType, idx.OrgRepo).Repo
 		if entry.Size == 0 {
 			entry.Size = stat.Size
 		}
@@ -785,6 +787,9 @@ func (d *CacheAdminDao) softDeleteRepo(key repoKey, items []DeleteItem) []*Delet
 	uploadRepoLocks.Lock(lockKey)
 	defer uploadRepoLocks.Unlock(lockKey)
 
+	if err := validateRepositoryReferences(key.RepoType, key.OrgRepo); err != nil {
+		return failAll(items, err.Error())
+	}
 	idx := buildRepoIndex(key.RepoType, key.OrgRepo)
 	results := make([]*DeleteResult, 0, len(items))
 	for _, item := range items {
@@ -846,7 +851,8 @@ func (d *CacheAdminDao) softDeleteOne(idx *repoIndex, item DeleteItem) *DeleteRe
 		stat := idx.Blobs[item.Sha]
 		paths := []string{item.Path}
 		if err := writeRecycleEntry(RecycleEntry{
-			RepoType:   idx.RepoType,
+			RepoType:  idx.RepoType,
+			Namespace: RepositoryKey(idx.RepoType, idx.OrgRepo).Namespace, Repo: RepositoryKey(idx.RepoType, idx.OrgRepo).Repo,
 			OrgRepo:    idx.OrgRepo,
 			Sha:        item.Sha,
 			Size:       stat.Size,
@@ -1060,6 +1066,11 @@ func (d *CacheAdminDao) purgeOne(item DeleteItem) *DeleteResult {
 
 	// 重新算一遍引用而不是信任前端传来的状态：从页面加载到点确认之间，
 	// 完全可能有一次发布或下载把这份内容重新引用起来。
+	if err := validateRepositoryReferences(item.RepoType, item.OrgRepo); err != nil {
+		result.Status = "failed"
+		result.Reason = err.Error()
+		return result
+	}
 	idx := buildRepoIndex(item.RepoType, item.OrgRepo)
 	if len(idx.BySha[item.Sha]) > 0 {
 		removeRecycleEntry(item.RepoType, item.OrgRepo, item.Sha)
@@ -1089,6 +1100,15 @@ func (d *CacheAdminDao) purgeOne(item DeleteItem) *DeleteResult {
 // 的动作，必须与正在写入的分块上传互斥。Linux 上少了这条，unlink 之后分块 writer
 // 会继续往孤儿 inode 上写，位图更新全部丢失且无人知晓。
 func reclaimBlobFile(repoType, orgRepo, sha string) error {
+	if err := validateRepoKey(repoKey{RepoType: repoType, OrgRepo: orgRepo}); err != nil {
+		return err
+	}
+	if err := repository.Segment(sha); err != nil {
+		return err
+	}
+	if err := repository.SafePath(config.SysConfig.Repos(), BlobPath(repoType, orgRepo, sha)); err != nil {
+		return err
+	}
 	blobPath := localBlobPath(repoType, orgRepo, sha)
 	blobKey := uploadBlobLockKey(repoType, orgRepo, sha)
 	uploadBlobLocks.Lock(blobKey)
@@ -1105,16 +1125,16 @@ func reclaimBlobFile(repoType, orgRepo, sha string) error {
 }
 
 func validateRepoKey(key repoKey) error {
-	if key.RepoType != "models" && key.RepoType != "datasets" && key.RepoType != "spaces" {
-		return fmt.Errorf("invalid repoType: %s", key.RepoType)
+	k, err := repository.ParseID(key.RepoType, key.OrgRepo)
+	if err != nil {
+		return err
 	}
-	if key.OrgRepo == "" {
-		return fmt.Errorf("orgRepo is required")
+	d, err := repository.Read(config.SysConfig.Repos(), k)
+	if err != nil {
+		return fmt.Errorf("repository policy unavailable: %w", err)
 	}
-	// orgRepo 直接参与拼路径，必须挡住 .. 与绝对路径。
-	clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(key.OrgRepo)))
-	if clean != key.OrgRepo || strings.HasPrefix(clean, "..") || strings.HasPrefix(clean, "/") || filepath.IsAbs(clean) {
-		return fmt.Errorf("invalid orgRepo: %s", key.OrgRepo)
+	if d.Format != "dingcache" {
+		return fmt.Errorf("provider cache management requires provider-aware operation")
 	}
 	return nil
 }
@@ -1125,4 +1145,49 @@ func failAll(items []DeleteItem, reason string) []*DeleteResult {
 		results = append(results, &DeleteResult{DeleteItem: item, Status: "failed", Reason: reason})
 	}
 	return results
+}
+
+// Validate all durable reference records before deletion. Listing can be best
+// effort; interpreting an unreadable record as an unreferenced blob cannot.
+func validateRepositoryReferences(repoType, id string) error {
+	if err := validateRepoKey(repoKey{RepoType: repoType, OrgRepo: id}); err != nil {
+		return err
+	}
+	root := repoApiRoot(repoType, id)
+	return filepath.WalkDir(root, func(p string, e fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if e.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(e.Name(), ".json") {
+			return nil
+		}
+		if err = repository.SafePath(config.SysConfig.Repos(), p); err != nil {
+			return err
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		var value interface{}
+		return sonic.Unmarshal(b, &value)
+	})
+}
+
+// Persisted tombstones retain their historical full-ID field. The HTTP row
+// exposes only independent namespace/repo fields.
+func (r RecycleRow) MarshalJSON() ([]byte, error) {
+	type plain RecycleRow
+	b, err := json.Marshal(plain(r))
+	if err != nil {
+		return nil, err
+	}
+	var fields map[string]interface{}
+	if err = json.Unmarshal(b, &fields); err != nil {
+		return nil, err
+	}
+	delete(fields, "orgRepo")
+	return json.Marshal(fields)
 }

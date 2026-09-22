@@ -1,0 +1,19 @@
+groups:
+  - name: dingospeed-storage-probes
+    rules:
+      - alert: DingoSpeedStorageProbeBlocked
+        expr: dingospeed_storage_probe_blocked == 1
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Storage probe still blocked: {{ $labels.operation }}'
+          description: 'Instance {{ $labels.instance }} has a timed-out dedicated probe still running. Its slot remains occupied; no replacement is launched. This does not establish whole-mount failure.'
+      - alert: DingoSpeedStorageProbeUnresolved
+        expr: dingospeed_storage_probe_unresolved == 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Storage probe lacks recovery evidence: {{ $labels.operation }}'
+          description: 'Instance {{ $labels.instance }} has unresolved dedicated probe evidence. Compare business dependency metrics; probe success cannot clear business file errors.'

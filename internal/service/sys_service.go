@@ -14,6 +14,7 @@ import (
 	"dingospeed/internal/dao"
 	"dingospeed/pkg/config"
 	"dingospeed/pkg/proto/manager"
+	"dingospeed/pkg/repository"
 	"dingospeed/pkg/util"
 
 	"github.com/shirou/gopsutil/mem"
@@ -106,6 +107,11 @@ func (s *SysService) checkDiskUsage() {
 	zap.S().Infof("Cache size exceeded! Limit: %s, Current: %s.\n", limitSizeH, currentSizeH)
 	zap.S().Infof("Cleaning...")
 
+	registered, err := repository.List(baseRepoPath)
+	if err != nil {
+		zap.S().Errorf("Skip disk clean: repository registry unavailable: %v", err)
+		return
+	}
 	filesPath := filepath.Join(config.SysConfig.Repos(), "files")
 	var allFiles []util.FileWithPath
 	switch config.SysConfig.CacheCleanStrategy() {
@@ -132,20 +138,21 @@ func (s *SysService) checkDiskUsage() {
 		return
 	}
 
-	instanceID := config.SysConfig.Scheduler.Discovery.InstanceId
+	instanceID := config.SysConfig.Registration().NodeID
 	for _, file := range allFiles {
 		if currentSize < limitSize {
 			break
 		}
 		filePath := file.Path
 		fileSize := file.Info.Size()
-		if isProtectedLocalUploadCacheFile(baseRepoPath, filePath) {
+		descriptor, relative, locateErr := repository.LocateRegistered(baseRepoPath, filePath, registered)
+		if locateErr != nil || descriptor.Persistent || descriptor.Source != "remote" || repository.SafePath(baseRepoPath, filepath.Dir(filePath)) != nil {
 			zap.S().Infof("Skip local upload cache file during disk clean: %s", filePath)
 			continue
 		}
 
 		if s.Client != nil {
-			s.deleteRecordByFilePath(baseRepoPath, filePath, instanceID)
+			s.deleteRecordForRepository(descriptor, relative, instanceID)
 		}
 
 		err := os.Remove(filePath)
@@ -167,58 +174,27 @@ func (s *SysService) checkDiskUsage() {
 }
 
 func isProtectedLocalUploadCacheFile(baseRepoPath, filePath string) bool {
-	relPath, err := filepath.Rel(baseRepoPath, filePath)
+	d, _, err := repository.Locate(baseRepoPath, filePath)
+	return err != nil || d.Persistent || d.Source != "remote"
+}
+func (s *SysService) deleteRecordByFilePath(baseRepoPath, filePath, instanceID string) {
+	d, rel, err := repository.Locate(baseRepoPath, filePath)
 	if err != nil {
-		return false
+		return
 	}
-	parts := strings.Split(relPath, string(filepath.Separator))
-	if len(parts) < 4 || parts[0] != "files" {
-		return false
-	}
-	if parts[1] != "models" && parts[1] != "datasets" {
-		return false
-	}
-	namespace := config.SysConfig.Upload.Namespace
-	if namespace == "" {
-		namespace = "dingo-local"
-	}
-	return parts[2] == namespace
+	s.deleteRecordForRepository(d, rel, instanceID)
 }
 
-func (s *SysService) deleteRecordByFilePath(baseRepoPath, filePath, instanceID string) {
-	relPath, err := filepath.Rel(baseRepoPath, filePath)
-	if err != nil {
-		zap.S().Errorf("Failed to get relative path for %s: %v", filePath, err)
-		return
-	}
-
-	parts := strings.Split(relPath, string(filepath.Separator))
-	req := &manager.DeleteByEtagsAndFieldsRequest{
-		InstanceID: instanceID, // 设置实例ID
-	}
-
-	if len(parts) >= 6 && parts[0] == "files" && (parts[1] == "datasets" || parts[1] == "models") {
-		req.Datatype = parts[1]
-		req.Org = parts[2]
-		req.Repo = parts[3]
-
-		if parts[4] == "blobs" {
-			req.Etag = parts[5]
-			zap.S().Debugf("Deleting record by etag: %s (path type: %s, org: %s, repo: %s) for file %s",
-				req.Etag, req.Datatype, req.Org, req.Repo, filePath)
-		} else if parts[4] == "resolve" {
-			req.Name = parts[len(parts)-1]
-			zap.S().Debugf("Deleting record by fields - datatype: %s, org: %s, repo: %s, name: %s",
-				req.Datatype, req.Org, req.Repo, req.Name)
-		} else {
-			zap.S().Warnf("Unrecognized subpath: %s in path %s", parts[4], filePath)
-			return
-		}
+func (s *SysService) deleteRecordForRepository(d repository.Descriptor, rel, instanceID string) {
+	req := &manager.DeleteByEtagsAndFieldsRequest{InstanceID: instanceID, Datatype: d.RepoType, Org: d.Namespace, Repo: d.Repo}
+	p := strings.SplitN(rel, "/", 3)
+	if len(p) == 2 && p[0] == "blobs" {
+		req.Etag = p[1]
+	} else if len(p) == 3 && p[0] == "resolve" {
+		req.Name = p[2]
 	} else {
-		zap.S().Warnf("Unrecognized file path structure: %s, cannot determine delete parameters", filePath)
 		return
 	}
-
 	s.schedulerDao.DeleteByEtagsAndFields(req)
 }
 

@@ -14,7 +14,6 @@ server:
 upload:
     host: 127.0.0.1
     port: 18091
-    token: bench-token
     namespace: dingo-local
     concurrentLimit: __LIMIT__
     stagingRetentionHours: 168

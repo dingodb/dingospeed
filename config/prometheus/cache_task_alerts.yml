@@ -1,0 +1,22 @@
+groups:
+  - name: cache-task-lifecycle
+    rules:
+      - alert: DingoCacheTaskStoppingStalled
+        expr: dingospeed_cache_transition_oldest_seconds{state=~"pausing|canceling"} > 30
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Cache task has not completed its stop barrier
+      - alert: DingoCacheActivityAfterStop
+        expr: increase(dingospeed_cache_activity_after_stop_total[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: Cache activity occurred after confirmed stop
+      - alert: DingoCacheSnapshotPersistenceFailure
+        expr: increase(dingospeed_cache_snapshot_write_failures_total[5m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Cache lifecycle state could not be saved

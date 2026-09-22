@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/bytedance/sonic"
@@ -21,14 +22,14 @@ func doChunk(t *testing.T, h *UploadHandler, e *echo.Echo, filePath string, cont
 	if chunkSha == "" {
 		chunkSha = shaOf(body)
 	}
-	target := fmt.Sprintf("/api/local-upload-chunk/models/dingo-local/demo/main/%s?size=%d&sha256=%s&offset=%d&chunkSha256=%s",
-		filePath, len(content), shaOf(content), offset, chunkSha)
+	target := fmt.Sprintf("/api/upload-chunks/models/dingo-local?repo=demo&revision=main&path=%s&size=%d&sha256=%s&offset=%d&chunkSha256=%s",
+		url.QueryEscape(filePath), len(content), shaOf(content), offset, chunkSha)
 	req := httptest.NewRequest(http.MethodPut, target, bytes.NewReader(body))
 	// httptest.NewRequest 已按 body 长度填好 ContentLength，分块接口依赖它。
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
-	c.SetParamNames("repoType", "org", "repo", "revision", "*")
-	c.SetParamValues("models", "dingo-local", "demo", "main", filePath)
+	c.SetParamNames("repoType", "namespace")
+	c.SetParamValues("models", "dingo-local")
 	if err := h.UploadChunk(c); err != nil {
 		t.Fatalf("chunk handler returned error: %v", err)
 	}
@@ -113,12 +114,12 @@ func TestChunkProgressReportsMissingRanges(t *testing.T) {
 	content := bytes.Repeat([]byte("q"), handlerBlockSize*4)
 	doChunk(t, h, e, "weights.bin", content, 0, handlerBlockSize, "")
 
-	target := fmt.Sprintf("/api/local-upload-progress/models/dingo-local/demo/main/weights.bin?sha256=%s", shaOf(content))
+	target := fmt.Sprintf("/api/upload-progress/models/dingo-local?repo=demo&revision=main&path=weights.bin&sha256=%s", shaOf(content))
 	req := httptest.NewRequest(http.MethodGet, target, nil)
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
-	c.SetParamNames("repoType", "org", "repo", "revision", "*")
-	c.SetParamValues("models", "dingo-local", "demo", "main", "weights.bin")
+	c.SetParamNames("repoType", "namespace")
+	c.SetParamValues("models", "dingo-local", "weights.bin")
 	if err := h.QueryProgress(c); err != nil {
 		t.Fatalf("progress handler returned error: %v", err)
 	}

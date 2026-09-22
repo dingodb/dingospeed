@@ -17,6 +17,7 @@ package router
 import (
 	"dingospeed/internal/handler"
 	"dingospeed/pkg/config"
+	"dingospeed/pkg/middleware"
 
 	"github.com/labstack/echo/v4"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -46,6 +47,9 @@ func NewHttpRouter(echo *echo.Echo, fileHandler *handler.FileHandler, metaHandle
 }
 
 func (r *HttpRouter) initRouter() {
+	r.echo.Pre(providerPrefix)
+	r.echo.Use(middleware.DecodeRouteParams)
+	r.echo.Use(handler.LimitDownload)
 	// 系统信息
 	r.echo.GET("/info", r.sysHandler.Info)
 	if config.SysConfig.EnableMetric() {
@@ -60,21 +64,30 @@ func (r *HttpRouter) initRouter() {
 }
 
 func (r *HttpRouter) routerForSpeed() { // alayanew
-	// The local repository contract is opt-in so existing deployments keep the
-	// exact same route table until their control plane is ready to consume it.
-	if config.SysConfig.Server.LocalRepositoryAPI {
-		r.echo.GET("/api/local-repositories/:repoType/:org/:repo/revisions/:revision", r.metaHandler.GetLocalSnapshotHandler)
-		r.echo.GET("/api/local-repositories/:repoType/:org/:repo/revisions/:revision/archive", r.metaHandler.GetLocalArchiveHandler)
-		r.echo.HEAD("/api/local-repositories/:repoType/:org/:repo/revisions/:revision/archive", r.metaHandler.GetLocalArchiveHandler)
-	}
+	p := "/api/repositories/:repoType/:namespace"
+	r.echo.GET(p+"/local-catalog", handler.HFLocalCatalog)
+	r.echo.GET(p+"/local-manifest", handler.HFLocalManifest, handler.RepositoryLocator(false, true))
+	r.echo.GET(p+"/local-file", handler.HFLocalFile, handler.RepositoryLocator(true, true))
+	r.echo.GET(p+"/directories", r.metaHandler.RepositoryDirectories)
+	r.echo.GET(p+"/revisions", r.metaHandler.RepositoryRevisions, handler.RepositoryLocator(false, false))
+	r.echo.GET(p+"/snapshot", r.metaHandler.RepositorySnapshot, handler.RepositoryLocator(false, true))
+	r.echo.GET(p+"/files", r.metaHandler.RepositoryFiles, handler.RepositoryLocator(false, true))
+	r.echo.GET(p+"/offset", r.fileHandler.RepositoryOffset, handler.RepositoryLocator(false, false))
+	r.echo.GET(p+"/tree", r.metaHandler.RepositoryTree, handler.RepositoryLocator(false, true))
+	r.echo.GET(p+"/metadata", r.metaHandler.RepositoryMetadata, handler.RepositoryLocator(false, true))
+	r.echo.HEAD(p+"/metadata", r.metaHandler.RepositoryMetadata, handler.RepositoryLocator(false, true))
+	r.echo.GET(p+"/archive", r.metaHandler.RepositoryArchive, handler.RepositoryLocator(false, true))
+	r.echo.HEAD(p+"/archive", r.metaHandler.RepositoryArchive, handler.RepositoryLocator(false, true))
+	r.echo.GET(p+"/file", r.fileHandler.RepositoryFile, handler.RepositoryLocator(true, true))
+	r.echo.HEAD(p+"/file", r.fileHandler.RepositoryFile, handler.RepositoryLocator(true, true))
 
 	// 单个文件下载
-	r.echo.HEAD("/:repoType/:org/:repo/resolve/:commit/:filePath", r.fileHandler.HeadFileHandler1)
-	r.echo.HEAD("/:orgOrRepoType/:repo/resolve/:commit/:filePath", r.fileHandler.HeadFileHandler2)
-	r.echo.HEAD("/:repo/resolve/:commit/:filePath", r.fileHandler.HeadFileHandler3)
-	r.echo.GET("/:repoType/:org/:repo/resolve/:commit/:filePath", r.fileHandler.GetFileHandler1)
-	r.echo.GET("/:orgOrRepoType/:repo/resolve/:commit/:filePath", r.fileHandler.GetFileHandler2)
-	r.echo.GET("/:repo/resolve/:commit/:filePath", r.fileHandler.GetFileHandler3)
+	r.echo.HEAD("/:repoType/:org/:repo/resolve/:commit/*", r.fileHandler.HeadFileHandler1)
+	r.echo.HEAD("/:orgOrRepoType/:repo/resolve/:commit/*", r.fileHandler.HeadFileHandler2)
+	r.echo.HEAD("/:repo/resolve/:commit/*", r.fileHandler.HeadFileHandler3)
+	r.echo.GET("/:repoType/:org/:repo/resolve/:commit/*", r.fileHandler.GetFileHandler1)
+	r.echo.GET("/:orgOrRepoType/:repo/resolve/:commit/*", r.fileHandler.GetFileHandler2)
+	r.echo.GET("/:repo/resolve/:commit/*", r.fileHandler.GetFileHandler3)
 
 	// 模型&数据集元数据
 	r.echo.HEAD("/api/:repoType/:org/:repo/revision/:revision", r.metaHandler.GetMetadataHandler)
@@ -83,22 +96,20 @@ func (r *HttpRouter) routerForSpeed() { // alayanew
 	r.echo.GET("/api/:repoType/:org/:repo/tree/:revision/*", r.metaHandler.GetRepoTreeHandler)
 
 	// refs
+	r.echo.GET("/api/:repoType/:org/:repo/refs", r.metaHandler.ProtocolRefs)
 	// r.echo.GET("/api/:repoType/:org/:repo/refs", r.metaHandler.RepoRefsHandler)  修复转发响应码，走统一转发。
 	r.echo.GET("/api/whoami-v2", r.metaHandler.WhoamiV2Handler)
 	r.echo.GET("/repos", r.metaHandler.ReposHandler)
 	r.echo.Any("/*", r.metaHandler.ForwardToNewSiteHandler)
 }
 
-func (r *HttpRouter) routerForScheduler() { // alayanew
-	r.echo.GET("/api/:repoType/:org/:repo/files/:commit/", r.metaHandler.RepositoryFilesHandler)
-	r.echo.GET("/api/:repoType/:org/:repo/files/:commit/:filePath", r.metaHandler.RepositoryFilesHandler)
-
-	r.echo.GET("/api/fileOffset/:dataType/:org/:repo/:etag/:fileSize", r.fileHandler.GetFileOffset)
+func (r *HttpRouter) routerForScheduler() {
 	r.echo.GET("/api/fileProcessSync", r.fileHandler.FileProcessSync)
-
+	r.echo.GET("/api/upload-inventory", handler.UploadInventory)
 }
 
 func (r *HttpRouter) routerForCacheJob() { // alayanew
+	r.echo.GET("/api/cacheJob/status", r.cacheJobHandler.CacheJobStatus)
 	r.echo.POST("/api/cacheJob/create", r.cacheJobHandler.CreateCacheJobHandler)
 	r.echo.POST("/api/cacheJob/stop", r.cacheJobHandler.StopCacheJobHandler)
 	r.echo.POST("/api/cacheJob/resume", r.cacheJobHandler.ResumeCacheJobHandler)
@@ -110,6 +121,7 @@ func (r *HttpRouter) routerForModelscope() { // modelscope
 	r.echo.GET("/api/v1/:repoType/:org/:repo/revisions", r.modelscopeHandler.RevisionsHandler)
 	r.echo.GET("/api/v1/:repoType/:org/:repo/repo/files", r.modelscopeHandler.FileListHandler)
 	r.echo.GET("/api/v1/:repoType/:org/:repo/repo", r.modelscopeHandler.FileDownloadHandler)
+	r.echo.HEAD("/api/v1/:repoType/:org/:repo/repo", r.modelscopeHandler.FileDownloadHandler)
 	r.echo.GET("/api/v1/:repoType/:org/:repo/repo/tree", r.modelscopeHandler.FileTreeHandler)
 	r.echo.GET("/api/v1/datasets/:datasetId/repo/tree", r.modelscopeHandler.DatasetFileTreeHandler)
 }

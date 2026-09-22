@@ -4,8 +4,6 @@ set -uo pipefail
 
 DL=http://127.0.0.1:18090
 UP=http://127.0.0.1:18091
-TOKEN=debug-upload-token
-HDR="X-Dingo-Upload-Token: $TOKEN"
 SRC=./src
 OUT=./out
 FAIL=0
@@ -32,8 +30,8 @@ ITEMS=""
 for f in $FILES; do
   sha=$(sha_of "$SRC/$f"); size=$(size_of "$SRC/$f")
   code=$(curl -s -o ./tmpdir/up.json -w '%{http_code}' -X POST \
-    -H "$HDR" --data-binary "@$SRC/$f" \
-    "$UP/api/local-upload/models/dingo-local/batch-demo/main/$f?size=$size&sha256=$sha&defer=true")
+    --data-binary "@$SRC/$f" \
+    "$UP/api/uploads/models/dingo-local?repo=batch-demo&revision=main&path=$f&size=$size&sha256=$sha&defer=true")
   status=$(python -c "import json,sys;print(json.load(open('./tmpdir/up.json')).get('status',''))" 2>/dev/null)
   commit=$(python -c "import json,sys;print(json.load(open('./tmpdir/up.json')).get('commit',''))" 2>/dev/null)
   if [ "$code" = "201" ] && [ "$status" = "staged" ] && [ -z "$commit" ]; then
@@ -54,10 +52,10 @@ commit_dirs=$(ls ./repos/api/models/dingo-local/batch-demo/revision 2>/dev/null 
 check "no metadata on disk before publish" "$commit_dirs" "0"
 
 echo "=== 3. 一条 curl 完成发布 ==="
-pub_code=$(curl -s -o ./tmpdir/pub.json -w '%{http_code}' -X POST -H "$HDR" \
+pub_code=$(curl -s -o ./tmpdir/pub.json -w '%{http_code}' -X POST \
   -H 'Content-Type: application/json' \
   -d "{\"files\":[$ITEMS]}" \
-  "$UP/api/local-publish/models/dingo-local/batch-demo/main")
+  "$UP/api/publish/models/dingo-local?repo=batch-demo&revision=main")
 check "publish http status" "$pub_code" "201"
 BATCH_COMMIT=$(python -c "import json;print(json.load(open('./tmpdir/pub.json'))['commit'])")
 pub_status=$(python -c "import json;print(json.load(open('./tmpdir/pub.json'))['status'])")
@@ -72,8 +70,8 @@ echo "=== 4. 顺序路径：同一组文件逐个即时生效上传到另一个�
 for f in $FILES; do
   sha=$(sha_of "$SRC/$f"); size=$(size_of "$SRC/$f")
   code=$(curl -s -o ./tmpdir/up2.json -w '%{http_code}' -X POST \
-    -H "$HDR" --data-binary "@$SRC/$f" \
-    "$UP/api/local-upload/models/dingo-local/seq-demo/main/$f?size=$size&sha256=$sha")
+    --data-binary "@$SRC/$f" \
+    "$UP/api/uploads/models/dingo-local?repo=seq-demo&revision=main&path=$f&size=$size&sha256=$sha")
   [ "$code" = "201" ] || fail "sequential upload $f (http $code)"
   SEQ_COMMIT=$(python -c "import json;print(json.load(open('./tmpdir/up2.json'))['commit'])")
 done
@@ -120,13 +118,13 @@ printf 'extra payload two' > "$SRC/subdir/extra2.bin"
 ITEMS2=""
 for f in extra1.bin subdir/extra2.bin; do
   sha=$(sha_of "$SRC/$f"); size=$(size_of "$SRC/$f")
-  curl -s -o /dev/null -X POST -H "$HDR" --data-binary "@$SRC/$f" \
-    "$UP/api/local-upload/models/dingo-local/batch-demo/main/$f?size=$size&sha256=$sha&defer=true"
+  curl -s -o /dev/null -X POST --data-binary "@$SRC/$f" \
+    "$UP/api/uploads/models/dingo-local?repo=batch-demo&revision=main&path=$f&size=$size&sha256=$sha&defer=true"
   [ -n "$ITEMS2" ] && ITEMS2="$ITEMS2,"
   ITEMS2="$ITEMS2{\"path\":\"$f\",\"sha256\":\"$sha\",\"size\":$size}"
 done
-curl -s -o ./tmpdir/pub2.json -X POST -H "$HDR" -d "{\"files\":[$ITEMS2]}" \
-  "$UP/api/local-publish/models/dingo-local/batch-demo/main"
+curl -s -o ./tmpdir/pub2.json -X POST -d "{\"files\":[$ITEMS2]}" \
+  "$UP/api/publish/models/dingo-local?repo=batch-demo&revision=main"
 APPEND_COMMIT=$(python -c "import json;print(json.load(open('./tmpdir/pub2.json'))['commit'])")
 append_count=$(python -c "import json;print(json.load(open('./tmpdir/pub2.json'))['fileCount'])")
 check "追加后清单文件总数" "$append_count" "7"
@@ -140,11 +138,11 @@ if [ "$code" = "200" ] && cmp -s "$SRC/config.json" ./tmpdir/old.bin; then pass 
 echo "=== 8. 覆盖：未声明覆盖必须整次拒绝，声明后客户端能拿到新内容 ==="
 printf '{"model_type":"demo","hidden":1024}' > "$SRC/config.json"
 sha=$(sha_of "$SRC/config.json"); size=$(size_of "$SRC/config.json")
-curl -s -o /dev/null -X POST -H "$HDR" --data-binary "@$SRC/config.json" \
-  "$UP/api/local-upload/models/dingo-local/batch-demo/main/config.json?size=$size&sha256=$sha&defer=true"
-code=$(curl -s -o ./tmpdir/conflict.json -w '%{http_code}' -X POST -H "$HDR" \
+curl -s -o /dev/null -X POST --data-binary "@$SRC/config.json" \
+  "$UP/api/uploads/models/dingo-local?repo=batch-demo&revision=main&path=config.json&size=$size&sha256=$sha&defer=true"
+code=$(curl -s -o ./tmpdir/conflict.json -w '%{http_code}' -X POST \
   -d "{\"files\":[{\"path\":\"config.json\",\"sha256\":\"$sha\",\"size\":$size}]}" \
-  "$UP/api/local-publish/models/dingo-local/batch-demo/main")
+  "$UP/api/publish/models/dingo-local?repo=batch-demo&revision=main")
 check "未声明覆盖时的响应码" "$code" "409"
 ccode=$(python -c "import json;print(json.load(open('./tmpdir/conflict.json'))['code'])")
 check "未声明覆盖时的错误码" "$ccode" "PUBLISH_OVERWRITE_REQUIRED"
@@ -152,9 +150,9 @@ curl -s -o ./tmpdir/still.json "$DL/api/models/dingo-local/batch-demo/revision/m
 still=$(python -c "import json;print(json.load(open('./tmpdir/still.json'))['sha'])")
 check "被拒绝的发布没有改变快照标识" "$still" "$APPEND_COMMIT"
 
-curl -s -o ./tmpdir/pub3.json -X POST -H "$HDR" \
+curl -s -o ./tmpdir/pub3.json -X POST \
   -d "{\"files\":[{\"path\":\"config.json\",\"sha256\":\"$sha\",\"size\":$size}]}" \
-  "$UP/api/local-publish/models/dingo-local/batch-demo/main?overwrite=true"
+  "$UP/api/publish/models/dingo-local?repo=batch-demo&revision=main&overwrite=true"
 OVER_COMMIT=$(python -c "import json;print(json.load(open('./tmpdir/pub3.json'))['commit'])")
 if [ "$OVER_COMMIT" != "$APPEND_COMMIT" ]; then pass "覆盖产生了新的快照标识"; else fail "覆盖没有改变快照标识"; fi
 code=$(curl -s -o ./tmpdir/new.bin -w '%{http_code}' "$DL/models/dingo-local/batch-demo/resolve/main/config.json")
@@ -162,9 +160,9 @@ if [ "$code" = "200" ] && cmp -s "$SRC/config.json" ./tmpdir/new.bin; then pass 
 
 echo "=== 9. 发布前置校验：清单里有没传完的文件 ==="
 ghost_sha=$(printf 'never uploaded' | sha256sum | cut -d' ' -f1)
-code=$(curl -s -o ./tmpdir/ghost.json -w '%{http_code}' -X POST -H "$HDR" \
+code=$(curl -s -o ./tmpdir/ghost.json -w '%{http_code}' -X POST \
   -d "{\"files\":[{\"path\":\"ghost.bin\",\"sha256\":\"$ghost_sha\",\"size\":14}]}" \
-  "$UP/api/local-publish/models/dingo-local/batch-demo/main")
+  "$UP/api/publish/models/dingo-local?repo=batch-demo&revision=main")
 check "缺内容时的响应码" "$code" "409"
 gcode=$(python -c "import json;print(json.load(open('./tmpdir/ghost.json'))['code'])")
 check "缺内容时的错误码" "$gcode" "PUBLISH_CONTENT_NOT_READY"
@@ -173,11 +171,11 @@ case "$gmsg" in *ghost.bin*) pass "错误信息指出了缺失路径";; *) fail 
 
 echo "=== 10. 数据集类型 ==="
 sha=$(sha_of "$SRC/README.md"); size=$(size_of "$SRC/README.md")
-curl -s -o /dev/null -X POST -H "$HDR" --data-binary "@$SRC/README.md" \
-  "$UP/api/local-upload/datasets/dingo-local/ds-demo/main/data/train.md?size=$size&sha256=$sha&defer=true"
-curl -s -o ./tmpdir/pubds.json -X POST -H "$HDR" \
+curl -s -o /dev/null -X POST --data-binary "@$SRC/README.md" \
+  "$UP/api/uploads/datasets/dingo-local?repo=ds-demo&revision=main&path=data/train.md&size=$size&sha256=$sha&defer=true"
+curl -s -o ./tmpdir/pubds.json -X POST \
   -d "{\"files\":[{\"path\":\"data/train.md\",\"sha256\":\"$sha\",\"size\":$size}]}" \
-  "$UP/api/local-publish/datasets/dingo-local/ds-demo/main"
+  "$UP/api/publish/datasets/dingo-local?repo=ds-demo&revision=main"
 DS_COMMIT=$(python -c "import json;print(json.load(open('./tmpdir/pubds.json')).get('commit',''))")
 if [ -n "$DS_COMMIT" ]; then pass "数据集发布成功"; else fail "数据集发布失败: $(cat ./tmpdir/pubds.json)"; fi
 code=$(curl -s -o ./tmpdir/ds.bin -w '%{http_code}' "$DL/datasets/dingo-local/ds-demo/resolve/main/data/train.md")

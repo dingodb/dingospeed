@@ -1,7 +1,10 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
+	"os"
+	"strconv"
 
 	"dingospeed/internal/model/query"
 	"dingospeed/internal/service"
@@ -11,6 +14,18 @@ import (
 	"github.com/labstack/echo/v4"
 	"go.uber.org/zap"
 )
+
+func (handler *CacheJobHandler) CacheJobStatus(c echo.Context) error {
+	id, err := strconv.ParseInt(c.QueryParam("id"), 10, 64)
+	if err != nil || id <= 0 {
+		return echo.NewHTTPError(400, "invalid job id")
+	}
+	status, err := handler.cacheJobService.CacheJobStatus(id)
+	if err != nil {
+		return repositoryHTTPError(err)
+	}
+	return c.JSON(200, status)
+}
 
 type CacheJobHandler struct {
 	cacheJobService *service.CacheJobService
@@ -33,15 +48,15 @@ func (handler *CacheJobHandler) CreateCacheJobHandler(c echo.Context) error {
 		zap.S().Errorf("MetaProxyCommon repoType:%s is not exist RepoTypesMapping", createCacheJobReq.Datatype)
 		return util.ErrorPageNotFound(c)
 	}
-	if createCacheJobReq.Org == "" && createCacheJobReq.Repo == "" {
+	if createCacheJobReq.Namespace == "" && createCacheJobReq.Repo == "" {
 		zap.S().Errorf("MetaProxyCommon org and repo is null")
 		return util.ErrorRepoNotFound(c)
 	}
-	jobId, err := handler.cacheJobService.CreateCacheJob(c, createCacheJobReq)
+	result, err := handler.cacheJobService.CreateCacheJobResult(c, createCacheJobReq)
 	if err != nil {
 		return util.ResponseError(c, err)
 	}
-	return util.ResponseData(c, util.Body{Msg: "success", Data: jobId})
+	return c.JSON(http.StatusOK, result)
 }
 
 func (handler *CacheJobHandler) StopCacheJobHandler(c echo.Context) error {
@@ -52,10 +67,7 @@ func (handler *CacheJobHandler) StopCacheJobHandler(c echo.Context) error {
 		})
 	}
 	err := handler.cacheJobService.StopCacheJob(jobStatusReq)
-	if err != nil {
-		return util.ResponseError(c, err)
-	}
-	return util.ResponseData(c, nil)
+	return handler.cacheActionResponse(c, jobStatusReq.Id, err)
 }
 
 func (handler *CacheJobHandler) ResumeCacheJobHandler(c echo.Context) error {
@@ -66,10 +78,7 @@ func (handler *CacheJobHandler) ResumeCacheJobHandler(c echo.Context) error {
 		})
 	}
 	err := handler.cacheJobService.ResumeCacheJob(c, resumeJobReq)
-	if err != nil {
-		return util.ResponseError(c, err)
-	}
-	return util.ResponseData(c, nil)
+	return handler.cacheActionResponse(c, resumeJobReq.Id, err)
 }
 
 func (handler *CacheJobHandler) RealtimeCacheJobHandler(c echo.Context) error {
@@ -81,4 +90,26 @@ func (handler *CacheJobHandler) RealtimeCacheJobHandler(c echo.Context) error {
 	}
 	resp := handler.cacheJobService.RealtimeCacheJob(realtimeReq)
 	return util.ResponseData(c, resp)
+}
+
+func (handler *CacheJobHandler) cacheActionResponse(c echo.Context, id int64, err error) error {
+	if err != nil {
+		var conflict *service.CacheJobConflict
+		if errors.As(err, &conflict) {
+			return c.JSON(409, map[string]any{"error": conflict.Code, "code": conflict.Code, "activeJobId": conflict.ActiveJobID})
+		}
+		return repositoryHTTPError(err)
+	}
+	status, err := handler.cacheJobService.CacheJobStatus(id)
+	if errors.Is(err, os.ErrNotExist) {
+		return util.ResponseData(c, nil)
+	} // Legacy mount jobs have no preheat snapshot.
+	if err != nil {
+		return repositoryHTTPError(err)
+	}
+	code := http.StatusOK
+	if status.State == "pausing" || status.State == "canceling" || status.State == "resuming" {
+		code = http.StatusAccepted
+	}
+	return c.JSON(code, status)
 }

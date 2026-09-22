@@ -335,10 +335,23 @@ func (c *DingCache) WriteBlock(blockIndex int64, blockBytes []byte) error {
 	// 加锁顺序固定为 fileLock → headerLock，与 Resize 一致，不会反向获取。
 	c.headerLock.Lock()
 	defer c.headerLock.Unlock()
+	return c.commitHeaderBlock(blockIndex)
+}
+
+// Caller holds fileLock and headerLock. A failed header write must not leave
+// a newly cached block visible to subsequent readers in memory.
+func (c *DingCache) commitHeaderBlock(blockIndex int64) error {
+	wasSet, err := c.header.BlockMask.Test(uint64(blockIndex))
+	if err != nil {
+		return err
+	}
 	if err = c.setHeaderBlock(blockIndex); err != nil {
 		return err
 	}
 	if err = c.flushHeader(); err != nil {
+		if !wasSet {
+			_ = c.header.BlockMask.Clear(uint64(blockIndex))
+		}
 		return err
 	}
 	// key := c.getBlockKey(blockIndex)  不需要删除，本来就没有

@@ -114,7 +114,7 @@ proxyPool:
     #       url: http://10.220.70.213:8121
     #       weight: 1
 
-modelscope:
+modelscope: # 可省略整个配置段；以下为程序默认值，按需覆盖
     officialBaseURL: https://www.modelscope.cn  # ModelScope官方基础地址
     chunkSize: 8388608  # 8MB分块，16*1024*1024的数值结果
     maxRetry: 5  # 超时重试次数

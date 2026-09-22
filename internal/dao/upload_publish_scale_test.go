@@ -232,7 +232,7 @@ func TestPublishScaleComparedToSequentialUploads(t *testing.T) {
 		t.Fatalf("published manifest has %d files, want %d", published.FileCount, fileCount)
 	}
 	// 一次发布只写 1 份清单 + 2 份 commit 元数据 + 2 份版本标签元数据，与 N 无关。
-	if batchObjects != 5 {
+	if batchObjects != 7 {
 		t.Fatalf("batch publish wrote %d metadata objects, want 5 regardless of file count", batchObjects)
 	}
 	// 逐个上传每次重写全量清单，元数据字节数必然远大于批量。

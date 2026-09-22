@@ -13,6 +13,8 @@ import (
 	"dingospeed/internal/dao"
 	"dingospeed/internal/downloader"
 	"dingospeed/pkg/config"
+	"dingospeed/pkg/repository"
+	"dingospeed/pkg/transfersettings"
 
 	"go.uber.org/zap"
 )
@@ -25,6 +27,10 @@ type UploadService struct {
 
 func NewUploadService(uploadDao *dao.UploadDao) *UploadService {
 	return &UploadService{uploadDao: uploadDao}
+}
+
+func (u *UploadService) DeleteRepository(k repository.RepoKey) (*dao.RepositoryDeleteResult, error) {
+	return u.uploadDao.DeleteHostedRepository(k)
 }
 
 // UploadWholeFile 一次调用上传一个完整文件。rawSize 是调用方声明的完整字节大小，
@@ -55,7 +61,7 @@ func (u *UploadService) UploadWholeFile(param dao.LocalUploadParam, rawSize, raw
 		startLog = fmt.Sprintf("%d", *param.Start)
 	}
 	zap.S().Infof("local upload start: %s/%s/%s/%s size=%d sha256=%s overwrite=%t start=%s",
-		param.RepoType, param.Org, param.Repo, param.FilePath, param.Size, param.Sha256, param.Overwrite, startLog)
+		param.RepoType, param.Namespace, param.Repo, param.FilePath, param.Size, param.Sha256, param.Overwrite, startLog)
 	result, err := u.uploadDao.UploadWholeFile(param, body)
 	if err != nil {
 		if _, ok := err.(interface{ StatusCode() int }); ok {
@@ -64,7 +70,8 @@ func (u *UploadService) UploadWholeFile(param dao.LocalUploadParam, rawSize, raw
 		return nil, uploadError{status: 500, code: "UPLOAD_INTERNAL_ERROR", msg: err.Error()}
 	}
 	zap.S().Infof("local upload done: %s/%s/%s/%s status=%s commit=%s blobReused=%t",
-		param.RepoType, param.Org, param.Repo, param.FilePath, result.Status, result.Commit, result.BlobReused)
+		param.RepoType, param.Namespace, param.Repo, param.FilePath, result.Status, result.Commit, result.BlobReused)
+	dao.NotifyPublished()
 	return result, nil
 }
 
@@ -74,7 +81,7 @@ func (u *UploadService) PublishFiles(param dao.LocalPublishParam) (*dao.LocalPub
 		return nil, uploadError{status: 400, code: "PUBLISH_INVALID_ARGUMENT", msg: err.Error()}
 	}
 	zap.S().Infof("local publish start: %s/%s/%s revision=%s files=%d overwrite=%t",
-		param.RepoType, param.Org, param.Repo, param.Revision, len(param.Files), param.Overwrite)
+		param.RepoType, param.Namespace, param.Repo, param.Revision, len(param.Files), param.Overwrite)
 	result, err := u.uploadDao.PublishFiles(param)
 	if err != nil {
 		if _, ok := err.(interface{ StatusCode() int }); ok {
@@ -83,13 +90,14 @@ func (u *UploadService) PublishFiles(param dao.LocalPublishParam) (*dao.LocalPub
 		return nil, uploadError{status: 500, code: "PUBLISH_INTERNAL_ERROR", msg: err.Error()}
 	}
 	zap.S().Infof("local publish done: %s/%s/%s revision=%s commit=%s status=%s added=%d replaced=%d unchanged=%d total=%d",
-		param.RepoType, param.Org, param.Repo, param.Revision, result.Commit, result.Status,
+		param.RepoType, param.Namespace, param.Repo, param.Revision, result.Commit, result.Status,
 		result.Added, result.Replaced, result.Unchanged, result.FileCount)
+	dao.NotifyPublished()
 	return result, nil
 }
 
 func validatePublishParam(param dao.LocalPublishParam) error {
-	if err := validateRepoLocator(param.RepoType, param.Org, param.Repo, param.Revision); err != nil {
+	if err := validateRepoLocator(param.RepoType, param.Namespace, param.Repo, param.Revision); err != nil {
 		return err
 	}
 	return validateManifestList(param.Files)
@@ -134,7 +142,7 @@ func (u *UploadService) PublishTree(param dao.LocalPublishTreeParam) (*dao.Local
 		return nil, uploadError{status: 400, code: "PUBLISH_TREE_INVALID_ARGUMENT", msg: err.Error()}
 	}
 	zap.S().Infof("local publish tree start: %s/%s/%s revision=%s base=%s files=%d",
-		param.RepoType, param.Org, param.Repo, param.Revision, param.BaseCommit, len(param.Files))
+		param.RepoType, param.Namespace, param.Repo, param.Revision, param.BaseCommit, len(param.Files))
 	result, err := u.uploadDao.PublishTree(param)
 	if err != nil {
 		if _, ok := err.(interface{ StatusCode() int }); ok {
@@ -143,13 +151,14 @@ func (u *UploadService) PublishTree(param dao.LocalPublishTreeParam) (*dao.Local
 		return nil, uploadError{status: 500, code: "PUBLISH_TREE_INTERNAL_ERROR", msg: err.Error()}
 	}
 	zap.S().Infof("local publish tree done: %s/%s/%s revision=%s commit=%s previous=%s status=%s added=%d replaced=%d removed=%d total=%d",
-		param.RepoType, param.Org, param.Repo, param.Revision, result.Commit, result.PreviousCommit, result.Status,
+		param.RepoType, param.Namespace, param.Repo, param.Revision, result.Commit, result.PreviousCommit, result.Status,
 		result.Added, result.Replaced, result.Removed, result.FileCount)
+	dao.NotifyPublished()
 	return result, nil
 }
 
 func validatePublishTreeParam(param dao.LocalPublishTreeParam) error {
-	if err := validateRepoLocator(param.RepoType, param.Org, param.Repo, param.Revision); err != nil {
+	if err := validateRepoLocator(param.RepoType, param.Namespace, param.Repo, param.Revision); err != nil {
 		return err
 	}
 	if !sha256Pattern.MatchString(param.BaseCommit) {
@@ -198,7 +207,7 @@ func ParseResumeStart(raw string) (*int64, error) {
 }
 
 func validateUploadLocator(param dao.LocalUploadParam) error {
-	if err := validateRepoLocator(param.RepoType, param.Org, param.Repo, param.Revision); err != nil {
+	if err := validateRepoLocator(param.RepoType, param.Namespace, param.Repo, param.Revision); err != nil {
 		return err
 	}
 	return validateFileLocator(param.FilePath, param.Sha256)
@@ -210,10 +219,13 @@ func validateRepoLocator(repoType, org, repo, revision string) error {
 	if repoType != "models" && repoType != "datasets" {
 		return fmt.Errorf("repoType must be models or datasets")
 	}
-	if org != config.SysConfig.Upload.Namespace {
-		return fmt.Errorf("org must be %s", config.SysConfig.Upload.Namespace)
+	if org == repository.HuggingFace || org == repository.ModelScope {
+		return fmt.Errorf("remote namespaces do not accept uploads")
 	}
-	if !validRepoSegment(org) || !validRepoSegment(repo) || !validRepoSegment(revision) {
+	if _, _, err := (repository.RepoKey{Namespace: org, RepoType: repoType, Repo: repo}).Storage(); err != nil {
+		return err
+	}
+	if !validRepoSegment(revision) || repository.Segment(revision) != nil {
 		return fmt.Errorf("org, repo, and revision must be safe relative path segments")
 	}
 	return nil
@@ -254,7 +266,7 @@ func validateUploadParam(param dao.LocalUploadParam) error {
 
 const (
 	maxSegmentLen  = 255
-	maxFilePathLen = 1024
+	maxFilePathLen = 1000
 )
 
 // repoSegmentPattern 约束组织名、仓库名与版本标签。这三者会出现在对外 URL 和目录名里，
@@ -320,7 +332,7 @@ func (e uploadError) ErrorCode() string {
 }
 
 func (u *UploadService) acquireUploadSlot() bool {
-	limit := config.SysConfig.Upload.ConcurrentLimit
+	limit := transfersettings.Current().Upload
 	if limit <= 0 {
 		limit = 1
 	}

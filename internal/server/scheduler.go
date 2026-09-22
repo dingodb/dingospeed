@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"io/ioutil"
+	"sync"
 
 	"dingospeed/internal/service"
 	"dingospeed/pkg/config"
@@ -16,7 +18,7 @@ import (
 )
 
 type SchedulerServer struct {
-	conn                  *grpc.ClientConn
+	conn                  *registrationConnection
 	schedulerService      *service.SchedulerService
 	localOperationService *service.LocalOperationService
 	sysService            *service.SysService
@@ -31,25 +33,85 @@ func NewSchedulerServer(schedulerService *service.SchedulerService, sysService *
 }
 
 func (s *SchedulerServer) Start(ctx context.Context) error {
-	if !config.SysConfig.IsCluster() {
-		return nil
-	}
-	ssl := config.SysConfig.Server.Ssl
-	creds := credential(ssl.CrtFile, ssl.KeyFile, ssl.CaFile, "zetyun.com")
-	conn, err := grpc.NewClient(config.SysConfig.Scheduler.Addr, grpc.WithTransportCredentials(creds))
-	if err != nil {
-		zap.S().Errorf("连接失败: %v", err)
-		return err
-	}
+	config.SysConfig.Registration()
+	config.SysConfig.SetSchedulerModel("standalone")
+	conn := &registrationConnection{}
 	s.conn = conn
 	client := manager.NewManagerClient(conn)
-	s.schedulerService.Client = client
+	s.schedulerService.BindClient(client)
 	s.sysService.Client = client
 	s.schedulerService.Ctx = ctx
-	s.schedulerService.Register()
+	go s.schedulerService.Register()
 
 	s.localOperationService.Ctx = ctx
 	s.localOperationService.Initialize()
+	return nil
+}
+
+// One stable client is shared by all services. Configuration changes replace only
+// its transport, not service pointers or background consumers.
+type registrationConnection struct {
+	mu      sync.Mutex
+	conn    *grpc.ClientConn
+	address string
+	closed  bool
+}
+
+func (c *registrationConnection) current() (*grpc.ClientConn, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	r := config.SysConfig.Registration()
+	if c.closed {
+		return nil, errors.New("scheduler client stopped")
+	}
+	if !r.Enabled {
+		if c.conn != nil {
+			_ = c.conn.Close()
+			c.conn = nil
+		}
+		return nil, errors.New("scheduler registration disabled")
+	}
+	if c.conn != nil && c.address == r.Address {
+		return c.conn, nil
+	}
+	if c.conn != nil {
+		_ = c.conn.Close()
+		c.conn = nil
+	}
+	ssl := config.SysConfig.Server.Ssl
+	creds := credential(ssl.CrtFile, ssl.KeyFile, ssl.CaFile, "zetyun.com")
+	if creds == nil {
+		return nil, errors.New("scheduler TLS certificate/key/CA unavailable")
+	}
+	conn, err := grpc.NewClient(r.Address, grpc.WithTransportCredentials(creds))
+	if err != nil {
+		return nil, err
+	}
+	c.conn = conn
+	c.address = r.Address
+	return conn, nil
+}
+func (c *registrationConnection) Invoke(ctx context.Context, method string, args, reply any, opts ...grpc.CallOption) error {
+	conn, err := c.current()
+	if err != nil {
+		return err
+	}
+	return conn.Invoke(ctx, method, args, reply, opts...)
+}
+func (c *registrationConnection) NewStream(ctx context.Context, desc *grpc.StreamDesc, method string, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+	conn, err := c.current()
+	if err != nil {
+		return nil, err
+	}
+	return conn.NewStream(ctx, desc, method, opts...)
+}
+func (c *registrationConnection) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed = true
+	if c.conn != nil {
+		return c.conn.Close()
+	}
 	return nil
 }
 

@@ -54,7 +54,7 @@ func wireApp(configConfig *config.Config) (*app.App, func(), error) {
 	uploadRouter := router.NewUploadRouter(uploadEcho, uploadHandler, cacheAdminHandler)
 	uploadServer := server.NewUploadServer(configConfig, uploadRouter)
 	uploadCleanupServer := server.NewUploadCleanupServer(uploadDao)
-	schedulerService := service.NewSchedulerService(schedulerDao)
+	schedulerService := service.NewSchedulerService(schedulerDao, metaService)
 	schedulerServer := server.NewSchedulerServer(schedulerService, sysService, localOperationService)
 	appApp := newApp(httpServer, uploadServer, uploadCleanupServer, schedulerServer)
 	return appApp, func() {

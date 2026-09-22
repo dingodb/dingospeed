@@ -45,7 +45,11 @@ func (handler *MetaHandler) GetMetadataHandler(c echo.Context) error {
 	repo := c.Param("repo")
 	revision := c.Param("revision")
 	method := strings.ToLower(c.Request().Method)
-	orgRepo := util.GetOrgRepo(org, repo)
+	key, keyErr := HFProtocolKey(c, repoType, org, repo)
+	if keyErr != nil {
+		return keyErr
+	}
+	orgRepo := key.ID()
 	c.Set(consts.PromOrgRepo, orgRepo)
 	if _, ok := consts.RepoTypesMapping[repoType]; !ok {
 		zap.S().Errorf("repoType:%s is not exist RepoTypesMapping", repoType)
@@ -84,7 +88,11 @@ func (handler *MetaHandler) GetRepoTreeHandler(c echo.Context) error {
 	repo := c.Param("repo")
 	revision := c.Param("revision")
 	pathInRepo := c.Param("*")
-	orgRepo := util.GetOrgRepo(org, repo)
+	key, keyErr := HFProtocolKey(c, repoType, org, repo)
+	if keyErr != nil {
+		return keyErr
+	}
+	orgRepo := key.ID()
 	c.Set(consts.PromOrgRepo, orgRepo)
 	if _, ok := consts.RepoTypesMapping[repoType]; !ok {
 		zap.S().Errorf("repoType:%s is not exist RepoTypesMapping", repoType)
@@ -173,6 +181,21 @@ func (handler *MetaHandler) RepoRefsHandler(c echo.Context) error {
 }
 
 func (handler *MetaHandler) ForwardToNewSiteHandler(c echo.Context) error {
+	if c.Get("forcedLocal") == true {
+		return echo.NewHTTPError(http.StatusNotFound, "hosted operation is not available via proxy")
+	}
+	if ownAPIPath(c.Request().URL.Path) {
+		return echo.NewHTTPError(404, "endpoint removed")
+	}
+	segments := strings.Split(strings.TrimPrefix(c.Request().URL.Path, "/"), "/")
+	if len(segments) > 2 && segments[0] == "api" && segments[1] != "v1" {
+		segments = segments[2:]
+	}
+	if len(segments) >= 2 {
+		if c.Get("forcedProvider") != "huggingface" && segments[0] == "dingo-local" {
+			return echo.NewHTTPError(http.StatusNotFound, "hosted operation is not available via proxy")
+		}
+	}
 	return handler.metaService.ForwardToNewSite(c)
 }
 
@@ -197,4 +220,13 @@ func (handler *MetaHandler) RepositoryFilesHandler(c echo.Context) error {
 		return util.ResponseError(c, err)
 	}
 	return util.ResponseData(c, files)
+}
+
+func ownAPIPath(path string) bool {
+	for _, prefix := range []string{"/api/local-", "/api/repositories/", "/api/uploads/", "/api/upload-chunks/", "/api/upload-progress/", "/api/publish/", "/api/publish-tree/", "/api/cache/", "/api/fileOffset/"} {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
 }

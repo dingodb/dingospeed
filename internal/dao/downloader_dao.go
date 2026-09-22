@@ -16,18 +16,21 @@ package dao
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
+	"dingospeed/internal/data"
 	"dingospeed/internal/downloader"
 	"dingospeed/pkg/common"
 	"dingospeed/pkg/config"
 	"dingospeed/pkg/consts"
 	myerr "dingospeed/pkg/error"
 	"dingospeed/pkg/proto/manager"
-	"dingospeed/pkg/util"
+	"dingospeed/pkg/repository"
 
 	"go.uber.org/zap"
 )
@@ -44,6 +47,14 @@ func NewDownloaderDao(schedulerDao *SchedulerDao) *DownloaderDao {
 
 // 整个文件
 func (d *DownloaderDao) FileDownload(startPos, endPos int64, isInnerRequest bool, taskParam *downloader.TaskParam) error {
+	key, identityErr := repository.ParseID(taskParam.DataType, taskParam.OrgRepo)
+	if identityErr != nil {
+		return identityErr
+	}
+	taskParam.RepoKey = key
+	if !taskParam.LocalOnly && key.Namespace == repository.HuggingFace && config.SysConfig.IsCluster() && taskParam.FileSize > config.SysConfig.GetMinimumFileSize() {
+		taskParam.OnCacheComplete = func() { d.reconcileCachedFile(taskParam) }
+	}
 	dingCacheManager := downloader.GetInstance()
 	dingFile, err := dingCacheManager.GetDingFile(taskParam.BlobsFile, taskParam.FileSize)
 	if err != nil {
@@ -53,13 +64,15 @@ func (d *DownloaderDao) FileDownload(startPos, endPos int64, isInnerRequest bool
 	taskParam.DingFile = dingFile
 	tasks, err := d.constructTask(startPos, endPos, isInnerRequest, taskParam)
 	if err != nil {
+		dingCacheManager.ReleasedDingFile(taskParam.BlobsFile)
 		return err
 	}
+	// Both OutResult and DoTask read TaskSize. Initialize it before either starts.
+	for _, task := range tasks {
+		task.SetTaskSize(len(tasks))
+	}
 	go func() {
-		defer close(taskParam.ResponseChan)
-		defer func() {
-			dingCacheManager.ReleasedDingFile(taskParam.BlobsFile)
-		}()
+
 		var wg sync.WaitGroup
 		wg.Add(1)
 		go func() {
@@ -72,7 +85,11 @@ func (d *DownloaderDao) FileDownload(startPos, endPos int64, isInnerRequest bool
 				}
 				task := tasks[i]
 				if i == 0 {
-					task.GetResponseChan() <- []byte{} // 先建立长连接
+					select {
+					case task.GetResponseChan() <- []byte{}:
+					case <-taskParam.Context.Done():
+						return
+					}
 				}
 				task.OutResult()
 			}
@@ -87,6 +104,25 @@ func (d *DownloaderDao) FileDownload(startPos, endPos int64, isInnerRequest bool
 			}()
 		}
 		wg.Wait() // 等待协程池所有远程下载任务执行完毕
+		complete, _ := analysisFilePosition(dingFile, 0, taskParam.FileSize)
+		dingCacheManager.ReleasedDingFile(taskParam.BlobsFile)
+		close(taskParam.ResponseChan)
+		if taskParam.CacheResult != nil {
+			var result error
+			if !complete {
+				result = fmt.Errorf("file cache incomplete")
+				if taskParam.Context.Err() != nil {
+					result = taskParam.Context.Err()
+				}
+			}
+			for _, child := range tasks {
+				if remote, ok := child.(*downloader.RemoteFileTask); ok && remote.ResultError != nil && !errors.Is(remote.ResultError, context.Canceled) {
+					result = remote.ResultError
+					break
+				}
+			}
+			taskParam.CacheResult <- result
+		}
 	}()
 	return nil
 }
@@ -108,7 +144,7 @@ func (d *DownloaderDao) constructTask(startPos, endPos int64, isInnerRequest boo
 		return nil, myerr.NewAppendCode(http.StatusNotFound, "Entry not found")
 	}
 	// isInnerRequest为true，即内部请求，是已经被调度过后，设置为内部域名的请求，这种请求将不会再次参与调度，直接做下载即可。
-	if !isInnerRequest && config.SysConfig.IsCluster() && !fileComplete {
+	if !taskParam.LocalOnly && !isInnerRequest && config.SysConfig.IsCluster() && !fileComplete {
 		if response, err := d.getRequestDomainScheduler(taskParam.DataType, taskParam.OrgRepo, taskParam.FileName, taskParam.Etag, curPos, endPos, taskParam.FileSize); err != nil {
 			zap.S().Errorf("getRequestDomainScheduler err.%v", err)
 			goto localTask
@@ -122,15 +158,18 @@ func (d *DownloaderDao) constructTask(startPos, endPos int64, isInnerRequest boo
 				}
 				speedDomain := fmt.Sprintf("http://%s:%d", response.Host, response.Port) // 此刻向该节点发起远程下载请求
 				if endPos <= response.MaxOffset {
+					taskParam.Peer = true
 					taskParam.Domain = speedDomain
 					speedTasks := getContiguousRanges(curPos, endPos, taskParam)
 					tasks = append(tasks, speedTasks...)
 				} else {
 					// 需要重新拆分任务
+					taskParam.Peer = true
 					taskParam.Domain = speedDomain
 					beforeTasks := getContiguousRanges(curPos, response.MaxOffset, taskParam)
 					tasks = append(tasks, beforeTasks...)
-					taskParam.Domain = config.SysConfig.GetHFURLBase()
+					taskParam.Peer = false
+					taskParam.Domain = upstreamDomain(taskParam)
 					afterTasks := getContiguousRanges(response.MaxOffset, endPos, taskParam)
 					tasks = append(tasks, afterTasks...)
 				}
@@ -144,20 +183,32 @@ func (d *DownloaderDao) constructTask(startPos, endPos int64, isInnerRequest boo
 	}
 
 localTask:
-	taskParam.Domain = config.SysConfig.GetHFURLBase()
+	taskParam.Peer = false
+	taskParam.Domain = upstreamDomain(taskParam)
 	tasks = getContiguousRanges(startPos, endPos, taskParam)
 	return tasks, nil
 }
 
+func upstreamDomain(p *downloader.TaskParam) string {
+	if p.Source != nil {
+		return p.Source.Domain
+	}
+	return config.SysConfig.GetHFURLBase()
+}
+
 func (d *DownloaderDao) getRequestDomainScheduler(dataType, orgRepo, fileName, etag string, startPos, endPos, fileSize int64) (*manager.SchedulerFileResponse, error) {
-	org, repo := util.SplitOrgRepo(orgRepo)
+	key, err := repository.ParseID(dataType, orgRepo)
+	if err != nil {
+		return nil, err
+	}
+	org, repo := key.Namespace, key.Repo
 	response, err := d.schedulerDao.SchedulerFile(&manager.SchedulerFileRequest{
 		DataType:   dataType,
 		Org:        org,
 		Repo:       repo,
 		Name:       fileName,
 		Etag:       etag,
-		InstanceId: config.SysConfig.Scheduler.Discovery.InstanceId,
+		InstanceId: config.SysConfig.Registration().NodeID,
 		StartPos:   startPos,
 		EndPos:     endPos,
 		FileSize:   fileSize,
@@ -190,13 +241,18 @@ func doTask(ctx context.Context, tasks []common.DownloadTask) {
 			return
 		}
 		task := tasks[i]
-		task.SetTaskSize(taskLen)
 		if err := pool.Submit(ctx, task); err != nil {
 			zap.S().Errorf("submit task err.%v", err)
 			return
 		}
 		if config.SysConfig.GetRemoteFileRangeWaitTime() != 0 {
-			time.Sleep(config.SysConfig.GetRemoteFileRangeWaitTime())
+			timer := time.NewTimer(config.SysConfig.GetRemoteFileRangeWaitTime())
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			}
 		}
 	}
 }
@@ -317,25 +373,68 @@ func createCacheTask(taskNo int, start, end int64, taskParam *downloader.TaskPar
 	cache.DingFile = taskParam.DingFile
 	cache.TaskSize = taskParam.TaskSize
 	cache.FileName = taskParam.FileName
-	cache.OrgRepo = taskParam.OrgRepo
+	cache.RepoKey = taskParam.RepoKey
+	cache.OrgRepo = taskParam.RepoKey.ID()
 	cache.ResponseChan = taskParam.ResponseChan
+	cache.OnComplete = taskParam.OnCacheComplete
 	return cache
+}
+
+// Sync by file identity, without scheduling another download or resetting an
+// existing process. StartPos equals the verified full prefix, so the existing
+// monotonic SQL guard accepts both missing and partially reported progress.
+func (d *DownloaderDao) reconcileCachedFile(p *downloader.TaskParam) {
+	entry := &manager.FileProcessEntry{
+		DataType: p.DataType, Org: p.RepoKey.Namespace, Repo: p.RepoKey.Repo,
+		Name: p.FileName, Etag: p.Etag, FileSize: p.FileSize,
+		InstanceId: config.SysConfig.Registration().NodeID,
+		StartPos:   p.FileSize, EndPos: p.FileSize, Status: consts.StatusDownloaded,
+	}
+	if err := d.schedulerDao.SyncFileProcess(&manager.SyncFileProcessReq{FileProcessEntries: []*manager.FileProcessEntry{entry}}); err != nil {
+		zap.S().Errorf("reconcile cached file %s/%s: %v", p.OrgRepo, p.FileName, err)
+		data.WriteLocalOperationChan(consts.OperationProcess, &data.FileProcessParam{
+			Datatype: p.DataType, Org: p.RepoKey.Namespace, Repo: p.RepoKey.Repo,
+			Name: p.FileName, Etag: p.Etag, FileSize: p.FileSize,
+			StartPos: p.FileSize, EndPos: p.FileSize, Status: consts.StatusDownloaded,
+		})
+	}
 }
 
 func createRemoteTask(taskNo int, start, end int64, taskParam *downloader.TaskParam) *downloader.RemoteFileTask {
 	remote := downloader.NewRemoteFileTask(taskNo, start, end)
+	remote.Source = taskParam.Source
+	remote.LocalOnly = taskParam.LocalOnly
 	remote.Context = taskParam.Context
 	remote.DingFile = taskParam.DingFile
 	remote.Authorization = taskParam.Authorization
 	remote.Domain = taskParam.Domain
 	remote.Uri = taskParam.Uri
+	remote.UpstreamURI = taskParam.Uri
+	remote.Peer = taskParam.Peer
+	if taskParam.Peer {
+		remote.Uri = peerFileURI(taskParam)
+	}
 	remote.Queue = make(chan []byte, getQueueSize(remote.RangeStartPos, remote.RangeEndPos))
 	remote.ResponseChan = taskParam.ResponseChan
 	remote.TaskSize = taskParam.TaskSize
 	remote.FileName = taskParam.FileName
-	remote.OrgRepo = taskParam.OrgRepo
+	remote.RepoKey = taskParam.RepoKey
+	remote.OrgRepo = taskParam.RepoKey.ID()
 	remote.DataType = taskParam.DataType
 	remote.Etag = taskParam.Etag
 	remote.Cancel = taskParam.Cancel
 	return remote
+}
+
+func peerFileURI(p *downloader.TaskParam) string {
+	if p.RepoKey.Namespace == repository.HuggingFace {
+		prefix := ""
+		if p.RepoKey.RepoType != "models" {
+			prefix = "/" + p.RepoKey.RepoType
+		}
+		return prefix + "/" + repository.EscapeURLPath(p.RepoKey.Repo) + "/resolve/" + url.PathEscape(p.Revision) + "/" + repository.EscapeURLPath(p.FileName)
+	}
+
+	q := url.Values{"repo": {p.RepoKey.Repo}, "revision": {p.Revision}, "path": {p.FileName}}
+	return "/api/repositories/" + url.PathEscape(p.RepoKey.RepoType) + "/" + url.PathEscape(p.RepoKey.Namespace) + "/file?" + q.Encode()
 }

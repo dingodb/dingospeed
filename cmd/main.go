@@ -43,7 +43,7 @@ func init() {
 
 func newApp(s *server.HTTPServer, uploadServer *server.UploadServer, uploadCleanupServer *server.UploadCleanupServer, schedulerServer *server.SchedulerServer) *app.App {
 	app := app.New(app.ID(id), app.Name(Name), app.Version(Version),
-		app.Server(s, uploadServer, uploadCleanupServer, schedulerServer))
+		app.Server(s, uploadServer, uploadCleanupServer, schedulerServer, server.NewStorageProbeServer(config.SysConfig)))
 	return app
 }
 

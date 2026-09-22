@@ -46,3 +46,7 @@ func NewAppendCode(code int, msg string) Error {
 func Wrap(msg string, err error) Error {
 	return Error{msg: msg, err: err}
 }
+
+func WrapCode(code int, msg string, err error) Error {
+	return Error{statusCode: code, msg: msg, err: err}
+}

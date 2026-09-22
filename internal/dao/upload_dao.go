@@ -17,6 +17,7 @@ import (
 
 	"dingospeed/internal/downloader"
 	"dingospeed/pkg/config"
+	"dingospeed/pkg/repository"
 	"dingospeed/pkg/util"
 
 	"github.com/bytedance/sonic"
@@ -30,7 +31,7 @@ type UploadDao struct {
 
 type LocalUploadParam struct {
 	RepoType  string
-	Org       string
+	Namespace string
 	Repo      string
 	Revision  string
 	FilePath  string
@@ -47,19 +48,21 @@ type LocalUploadParam struct {
 // 服务端不记忆“哪些上传属于哪一批”——理由与“不另建进度状态”完全一致：
 // 独立状态与实际落盘内容之间必然出现不一致，而清单三个字段本来就是上传时的必填项。
 type LocalPublishParam struct {
-	RepoType  string
-	Org       string
-	Repo      string
-	Revision  string
-	Overwrite bool
-	Files     []LocalManifestFile
+	CreateOnly bool
+	RepoType   string
+	Namespace  string
+	Repo       string
+	Revision   string
+	Overwrite  bool
+	Files      []LocalManifestFile
 }
 
 type LocalPublishResult struct {
-	RepoType string `json:"repoType"`
-	Repo     string `json:"repo"`
-	Revision string `json:"revision"`
-	Commit   string `json:"commit"`
+	Namespace string `json:"namespace"`
+	RepoType  string `json:"repoType"`
+	Repo      string `json:"repo"`
+	Revision  string `json:"revision"`
+	Commit    string `json:"commit"`
 	// Published 是本批次声明的条目数，FileCount 是合并后该版本的文件总数。
 	Published int `json:"published"`
 	FileCount int `json:"fileCount"`
@@ -72,25 +75,27 @@ type LocalPublishResult struct {
 }
 
 type LocalUploadResult struct {
-	RepoType string `json:"repoType"`
-	Repo     string `json:"repo"`
-	Revision string `json:"revision"`
-	Commit   string `json:"commit"`
-	FilePath string `json:"filePath"`
-	Size     int64  `json:"size"`
-	Sha256   string `json:"sha256"`
-	Status   string `json:"status"`
+	Namespace string `json:"namespace"`
+	RepoType  string `json:"repoType"`
+	Repo      string `json:"repo"`
+	Revision  string `json:"revision"`
+	Commit    string `json:"commit"`
+	FilePath  string `json:"filePath"`
+	Size      int64  `json:"size"`
+	Sha256    string `json:"sha256"`
+	Status    string `json:"status"`
 	// BlobReused 为 true 表示本次未重复写入内容，走的是 FR-2 6.2.5 的幂等快路径。
 	BlobReused bool `json:"blobReused"`
 }
 
 type LocalUploadProgress struct {
-	RepoType string `json:"repoType"`
-	Repo     string `json:"repo"`
-	Revision string `json:"revision"`
-	FilePath string `json:"filePath"`
-	Size     int64  `json:"size"`
-	Sha256   string `json:"sha256"`
+	Namespace string `json:"namespace"`
+	RepoType  string `json:"repoType"`
+	Repo      string `json:"repo"`
+	Revision  string `json:"revision"`
+	FilePath  string `json:"filePath"`
+	Size      int64  `json:"size"`
+	Sha256    string `json:"sha256"`
 	// ResumeOffset 是第一个空洞的位置，也就是顺序续传（老接口的 start）该从哪里接上。
 	// 乱序并发的分块上传下它没有意义，用 MissingRanges。
 	ResumeOffset int64 `json:"resumeOffset"`
@@ -122,7 +127,7 @@ type LocalManifestFile struct {
 const localManifestFileName = "dingo-local-manifest.json"
 
 func LocalManifestPath(repoType, orgRepo, commit string) string {
-	return filepath.Join(config.SysConfig.Repos(), "api", repoType, orgRepo, "revision", commit, localManifestFileName)
+	return filepath.Join(RepositoryKey(repoType, orgRepo).Revision(config.SysConfig.Repos(), commit), localManifestFileName)
 }
 
 func NewUploadDao(fileDao *FileDao, lockDao *LockDao) *UploadDao {
@@ -266,11 +271,32 @@ func IsLocalOrgRepo(orgRepo string) bool {
 	if config.SysConfig != nil && config.SysConfig.Upload.Namespace != "" {
 		namespace = config.SysConfig.Upload.Namespace
 	}
-	return orgRepo == namespace || strings.HasPrefix(orgRepo, namespace+"/")
+	if orgRepo == namespace || strings.HasPrefix(orgRepo, namespace+"/") {
+		return true
+	}
+	if config.SysConfig == nil {
+		return false
+	}
+	for _, typ := range []string{"models", "datasets", "spaces"} {
+		k, err := repository.ParseID(typ, orgRepo)
+		if err != nil {
+			return false
+		}
+		d, err := repository.Read(config.SysConfig.Repos(), k)
+		if err == nil && d.Source == "hosted" && d.Persistent {
+			return true
+		}
+	}
+	return false
 }
 
 func (u *UploadDao) UploadWholeFile(param LocalUploadParam, body io.Reader) (*LocalUploadResult, error) {
-	orgRepo := util.GetOrgRepo(param.Org, param.Repo)
+	release := holdRepository(param.RepoType, param.Namespace, param.Repo)
+	defer release()
+	if err := RegisterHosted(param.RepoType, param.Namespace, param.Repo); err != nil {
+		return nil, localUploadError{status: 409, code: "REPOSITORY_REGISTRATION_CONFLICT", msg: err.Error()}
+	}
+	orgRepo := util.GetOrgRepo(param.Namespace, param.Repo)
 	fileKey := fmt.Sprintf("%s:%s:%s:%s", param.RepoType, orgRepo, param.Revision, param.FilePath)
 	if !tryEnterLocalUpload(fileKey) {
 		return nil, localUploadError{status: http.StatusConflict, code: "UPLOAD_FILE_BUSY", msg: "same file is already being uploaded"}
@@ -289,7 +315,8 @@ func (u *UploadDao) UploadWholeFile(param LocalUploadParam, body io.Reader) (*Lo
 		}
 		return &LocalUploadResult{
 			RepoType:   param.RepoType,
-			Repo:       orgRepo,
+			Namespace:  param.Namespace,
+			Repo:       param.Repo,
 			Revision:   param.Revision,
 			FilePath:   param.FilePath,
 			Size:       param.Size,
@@ -346,7 +373,8 @@ func (u *UploadDao) UploadWholeFile(param LocalUploadParam, body io.Reader) (*Lo
 	}
 	return &LocalUploadResult{
 		RepoType:   param.RepoType,
-		Repo:       orgRepo,
+		Namespace:  param.Namespace,
+		Repo:       param.Repo,
 		Revision:   param.Revision,
 		Commit:     commit,
 		FilePath:   param.FilePath,
@@ -363,7 +391,9 @@ func (u *UploadDao) UploadWholeFile(param LocalUploadParam, body io.Reader) (*Lo
 // 只要合并后的清单相同，快照标识就必然逐字符相同，两条路径进系统的内容不会被
 // 客户端当成两个不同的版本。
 func (u *UploadDao) PublishFiles(param LocalPublishParam) (*LocalPublishResult, error) {
-	orgRepo := util.GetOrgRepo(param.Org, param.Repo)
+	release := holdRepository(param.RepoType, param.Namespace, param.Repo)
+	defer release()
+	orgRepo := util.GetOrgRepo(param.Namespace, param.Repo)
 
 	// 发布之间必须明确拒绝而不是排队（BR-4.2.1），所以这里用 try-enter 而不是版本锁。
 	publishKey := fmt.Sprintf("upload-publish:%s:%s:%s", param.RepoType, orgRepo, param.Revision)
@@ -383,6 +413,18 @@ func (u *UploadDao) PublishFiles(param LocalPublishParam) (*LocalPublishResult, 
 	defer uploadRepoLocks.Unlock(repoLockKey)
 
 	// 版本锁与即时生效上传共用同一把：两者都要“读清单 → 合并 → 写回”，
+	if param.CreateOnly {
+		_, err := repository.Read(config.SysConfig.Repos(), RepositoryKey(param.RepoType, orgRepo))
+		if err == nil {
+			return nil, localUploadError{status: 409, code: "REPOSITORY_EXISTS", msg: "repository already exists on this node"}
+		}
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+	}
+	if err := RegisterHosted(param.RepoType, param.Namespace, param.Repo); err != nil {
+		return nil, localUploadError{status: 409, code: "REPOSITORY_REGISTRATION_CONFLICT", msg: err.Error()}
+	}
 	// 不共用就会各自基于陈旧清单重建，后写的覆盖先写的。
 	revisionLockKey := fmt.Sprintf("upload-revision:%s:%s:%s", param.RepoType, orgRepo, param.Revision)
 	uploadRevisionLocks.Lock(revisionLockKey)
@@ -405,7 +447,8 @@ func (u *UploadDao) PublishFiles(param LocalPublishParam) (*LocalPublishResult, 
 
 	result := &LocalPublishResult{
 		RepoType:  param.RepoType,
-		Repo:      orgRepo,
+		Namespace: param.Namespace,
+		Repo:      param.Repo,
 		Revision:  param.Revision,
 		Commit:    commit,
 		Published: len(param.Files),
@@ -531,7 +574,8 @@ func (u *UploadDao) precheck(revisionLockKey string, param LocalUploadParam, org
 	}
 	return &LocalUploadResult{
 		RepoType:   param.RepoType,
-		Repo:       orgRepo,
+		Namespace:  param.Namespace,
+		Repo:       param.Repo,
 		Revision:   param.Revision,
 		Commit:     currentCommit,
 		FilePath:   param.FilePath,
@@ -799,14 +843,15 @@ func hashDingCachePayload(path string, size int64) (string, error) {
 }
 
 func (u *UploadDao) QueryProgress(param LocalUploadParam) (*LocalUploadProgress, error) {
-	orgRepo := util.GetOrgRepo(param.Org, param.Repo)
+	orgRepo := util.GetOrgRepo(param.Namespace, param.Repo)
 	blobPath := localBlobPath(param.RepoType, orgRepo, param.Sha256)
 	if err := ensureLocalUploadPathSafe(config.SysConfig.Repos(), blobPath); err != nil {
 		return nil, err
 	}
 	result := &LocalUploadProgress{
 		RepoType:      param.RepoType,
-		Repo:          orgRepo,
+		Namespace:     param.Namespace,
+		Repo:          param.Repo,
 		Revision:      param.Revision,
 		FilePath:      param.FilePath,
 		Sha256:        param.Sha256,
@@ -958,13 +1003,17 @@ func (u *UploadDao) CleanupExpiredStagedUploads(retention time.Duration) (int, e
 	}
 	cutoff := time.Now().Add(-retention)
 	removed := 0
-	namespace := "dingo-local"
-	if config.SysConfig != nil && config.SysConfig.Upload.Namespace != "" {
-		namespace = config.SysConfig.Upload.Namespace
+	all, listErr := repository.List(config.SysConfig.Repos())
+	if listErr != nil {
+		return 0, listErr
 	}
 	filesRoot := filepath.Join(config.SysConfig.Repos(), "files")
-	for _, repoType := range []string{"models", "datasets"} {
-		root := filepath.Join(filesRoot, repoType, namespace)
+	for _, descriptor := range all {
+		if descriptor.Source != "hosted" || !descriptor.Persistent {
+			continue
+		}
+		repoType := descriptor.RepoType
+		root := filepath.Join(descriptor.FilesRoot(config.SysConfig.Repos()), "blobs")
 		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 			if err != nil {
 				if os.IsNotExist(err) {
@@ -1059,31 +1108,47 @@ type localRepoKey struct {
 // 那是在改动磁盘清理对公开模型的既有行为。
 func collectLocalBlobs(root string) (map[localRepoKey][]string, error) {
 	result := make(map[localRepoKey][]string)
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil
-			}
-			return err
-		}
-		if entry.IsDir() || strings.HasSuffix(entry.Name(), localUploadStageSuffix) {
-			return nil
-		}
-		repoType, orgRepo, sha, ok := stagedBlobIdentity(root, path)
-		if !ok || !IsLocalOrgRepo(orgRepo) {
-			return nil
-		}
-		key := localRepoKey{repoType: repoType, orgRepo: orgRepo}
-		result[key] = append(result[key], sha)
-		return nil
-	})
-	if os.IsNotExist(err) {
-		return result, nil
+	repos := filepath.Dir(root)
+	all, err := repository.List(repos)
+	if err != nil {
+		return nil, err
 	}
-	return result, err
+	for _, d := range all {
+		if d.Source != "hosted" || !d.Persistent {
+			continue
+		}
+		blobRoot := filepath.Join(d.FilesRoot(repos), "blobs")
+		if err := repository.SafePath(repos, blobRoot); err != nil {
+			return nil, err
+		}
+		entries, err := os.ReadDir(blobRoot)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || strings.HasSuffix(entry.Name(), localUploadStageSuffix) {
+				continue
+			}
+			if err := repository.Segment(entry.Name()); err != nil {
+				return nil, err
+			}
+			if entry.Type()&os.ModeSymlink != 0 {
+				return nil, fmt.Errorf("symlink in hosted blob directory")
+			}
+			key := localRepoKey{repoType: d.RepoType, orgRepo: d.ID()}
+			result[key] = append(result[key], entry.Name())
+		}
+	}
+	return result, nil
 }
 
 func (u *UploadDao) cleanupRepoBlobs(repos, repoType, orgRepo string, blobs []string, cutoff time.Time) (int, error) {
+	if err := validateRepositoryReferences(repoType, orgRepo); err != nil {
+		return 0, err
+	}
 	// 仓库锁挡住并发的发布：引用集合在这把锁下算出来之后就不会再被追加引用。
 	repoLockKey := uploadRepoLockKey(repoType, orgRepo)
 	uploadRepoLocks.Lock(repoLockKey)
@@ -1172,6 +1237,9 @@ func (u *UploadDao) CleanupRecycledBlobs(retention time.Duration) (int, error) {
 }
 
 func (u *UploadDao) cleanupRecycledRepo(repoType, orgRepo string, cutoff time.Time) int {
+	if err := validateRepositoryReferences(repoType, orgRepo); err != nil {
+		return 0
+	}
 	tombstones := readRecycleEntries(repoType, orgRepo)
 	if len(tombstones) == 0 {
 		return 0
@@ -1209,7 +1277,7 @@ func (u *UploadDao) cleanupRecycledRepo(repoType, orgRepo string, cutoff time.Ti
 // 扫的是全部 commit 清单，不是版本标签当前指向的那一份。
 func (u *UploadDao) referencedShas(repos, repoType, orgRepo string) (map[string]struct{}, error) {
 	referenced := make(map[string]struct{})
-	revisionRoot := filepath.Join(repos, "api", repoType, filepath.FromSlash(orgRepo), "revision")
+	revisionRoot := filepath.Join(RepositoryKey(repoType, orgRepo).APIRoot(repos), "revision")
 	entries, err := os.ReadDir(revisionRoot)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -1221,7 +1289,17 @@ func (u *UploadDao) referencedShas(repos, repoType, orgRepo string) (map[string]
 		if !entry.IsDir() {
 			continue
 		}
-		for _, item := range u.readManifest(repoType, orgRepo, entry.Name()) {
+		manifest, readErr := readManifestFile(LocalManifestPath(repoType, orgRepo, entry.Name()))
+		if os.IsNotExist(readErr) {
+			commit := readMetaSha(filepath.Join(revisionRoot, entry.Name(), "meta_get.json"))
+			if commit != "" && commit != entry.Name() {
+				manifest, readErr = readManifestFile(LocalManifestPath(repoType, orgRepo, commit))
+			}
+		}
+		if readErr != nil {
+			return nil, readErr
+		}
+		for _, item := range manifest {
 			referenced[item.Sha256] = struct{}{}
 		}
 	}
@@ -1251,31 +1329,23 @@ func (u *UploadDao) RunStagedUploadCleanup(ctx context.Context) {
 }
 
 func stagedBlobIdentity(root, stagePath string) (repoType, orgRepo, sha string, ok bool) {
-	rel, err := filepath.Rel(root, stagePath)
-	if err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+	d, rel, err := repository.Locate(filepath.Dir(root), stagePath)
+	if err != nil || d.Source != "hosted" || !d.Persistent {
 		return "", "", "", false
 	}
-	parts := strings.Split(filepath.ToSlash(rel), "/")
-	if len(parts) < 5 || parts[len(parts)-2] != "blobs" {
+	parts := strings.Split(rel, "/")
+	if len(parts) != 2 || parts[0] != "blobs" {
 		return "", "", "", false
 	}
-	repoType = parts[0]
-	if repoType != "models" && repoType != "datasets" {
-		return "", "", "", false
-	}
-	sha = strings.TrimSuffix(parts[len(parts)-1], localUploadStageSuffix)
+	sha = strings.TrimSuffix(parts[1], localUploadStageSuffix)
 	if sha == "" {
 		return "", "", "", false
 	}
-	orgRepo = strings.Join(parts[1:len(parts)-2], "/")
-	if orgRepo == "" {
-		return "", "", "", false
-	}
-	return repoType, orgRepo, sha, true
+	return d.RepoType, d.ID(), sha, true
 }
 
 func (u *UploadDao) currentManifest(param LocalUploadParam) (string, []LocalManifestFile) {
-	return u.currentManifestOf(param.RepoType, util.GetOrgRepo(param.Org, param.Repo), param.Revision)
+	return u.currentManifestOf(param.RepoType, util.GetOrgRepo(param.Namespace, param.Repo), param.Revision)
 }
 
 func (u *UploadDao) currentManifestOf(repoType, orgRepo, revision string) (string, []LocalManifestFile) {
@@ -1400,7 +1470,7 @@ func (u *UploadDao) writeMeta(repoType, orgRepo, revision, commit string, manife
 		"content-length": fmt.Sprintf("%d", len(body)),
 		"x-repo-commit":  commit,
 	}
-	apiDir := filepath.Join(config.SysConfig.Repos(), "api", repoType, orgRepo, "revision", revision)
+	apiDir := RepositoryKey(repoType, orgRepo).Revision(config.SysConfig.Repos(), revision)
 	metaGetPath := filepath.Join(apiDir, "meta_get.json")
 	if err = ensureLocalUploadPathSafe(config.SysConfig.Repos(), metaGetPath); err != nil {
 		return err
@@ -1479,5 +1549,26 @@ func ensureLocalUploadPathSafe(root, target string) error {
 			return localUploadError{status: http.StatusBadRequest, code: "UPLOAD_PATH_SYMLINK", msg: "target path contains a symlink parent"}
 		}
 		parent = filepath.Dir(parent)
+	}
+}
+
+// VerifyPublishedFiles validates the manifest digest and actual local contents.
+func VerifyPublishedFiles(repoType, id, commit string, files []LocalManifestFile) error {
+	computed, err := manifestCommit(files)
+	if err != nil {
+		return err
+	}
+	if computed != commit {
+		return fmt.Errorf("manifest digest mismatch")
+	}
+	return verifyManifestContent(repoType, id, files)
+}
+
+var PublishedChanges = make(chan struct{}, 1)
+
+func NotifyPublished() {
+	select {
+	case PublishedChanges <- struct{}{}:
+	default:
 	}
 }

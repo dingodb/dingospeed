@@ -22,13 +22,21 @@ func NewUploadHandler(uploadService *service.UploadService) *UploadHandler {
 	return &UploadHandler{uploadService: uploadService}
 }
 
+func (h *UploadHandler) DeleteRepository(c echo.Context) error {
+	result, err := h.uploadService.DeleteRepository(requestRepoKey(c))
+	if err != nil {
+		return writeUploadError(c, "repository deletion failed", err)
+	}
+	return c.JSON(http.StatusOK, result)
+}
+
 func (h *UploadHandler) UploadWholeFile(c echo.Context) error {
 	param := dao.LocalUploadParam{
 		RepoType:  c.Param("repoType"),
-		Org:       c.Param("org"),
-		Repo:      c.Param("repo"),
-		Revision:  c.Param("revision"),
-		FilePath:  c.Param("*"),
+		Namespace: c.Param("namespace"),
+		Repo:      c.QueryParam("repo"),
+		Revision:  c.QueryParam("revision"),
+		FilePath:  c.QueryParam("path"),
 		Sha256:    c.QueryParam("sha256"),
 		Overwrite: strings.EqualFold(c.QueryParam("overwrite"), "true"),
 		Deferred:  strings.EqualFold(c.QueryParam("defer"), "true"),
@@ -47,12 +55,12 @@ func (h *UploadHandler) UploadWholeFile(c echo.Context) error {
 // 分块上传因此永远是暂缓生效的，清单才是可见性闸门。
 func (h *UploadHandler) UploadChunk(c echo.Context) error {
 	param := dao.LocalChunkUploadParam{
-		RepoType: c.Param("repoType"),
-		Org:      c.Param("org"),
-		Repo:     c.Param("repo"),
-		Revision: c.Param("revision"),
-		FilePath: c.Param("*"),
-		Sha256:   c.QueryParam("sha256"),
+		RepoType:  c.Param("repoType"),
+		Namespace: c.Param("namespace"),
+		Repo:      c.QueryParam("repo"),
+		Revision:  c.QueryParam("revision"),
+		FilePath:  c.QueryParam("path"),
+		Sha256:    c.QueryParam("sha256"),
 	}
 	result, err := h.uploadService.UploadChunk(
 		param,
@@ -102,12 +110,13 @@ func (h *UploadHandler) PublishFiles(c echo.Context) error {
 		})
 	}
 	param := dao.LocalPublishParam{
-		RepoType:  c.Param("repoType"),
-		Org:       c.Param("org"),
-		Repo:      c.Param("repo"),
-		Revision:  c.Param("revision"),
-		Overwrite: strings.EqualFold(c.QueryParam("overwrite"), "true"),
-		Files:     make([]dao.LocalManifestFile, 0, len(req.Files)),
+		CreateOnly: strings.EqualFold(c.QueryParam("createOnly"), "true"),
+		RepoType:   c.Param("repoType"),
+		Namespace:  c.Param("namespace"),
+		Repo:       c.QueryParam("repo"),
+		Revision:   c.QueryParam("revision"),
+		Overwrite:  strings.EqualFold(c.QueryParam("overwrite"), "true"),
+		Files:      make([]dao.LocalManifestFile, 0, len(req.Files)),
 	}
 	for _, item := range req.Files {
 		param.Files = append(param.Files, dao.LocalManifestFile{
@@ -149,9 +158,9 @@ func (h *UploadHandler) PublishTree(c echo.Context) error {
 	}
 	param := dao.LocalPublishTreeParam{
 		RepoType:   c.Param("repoType"),
-		Org:        c.Param("org"),
-		Repo:       c.Param("repo"),
-		Revision:   c.Param("revision"),
+		Namespace:  c.Param("namespace"),
+		Repo:       c.QueryParam("repo"),
+		Revision:   c.QueryParam("revision"),
 		BaseCommit: req.BaseCommit,
 		Files:      make([]dao.LocalManifestFile, 0, len(req.Files)),
 	}
@@ -171,12 +180,12 @@ func (h *UploadHandler) PublishTree(c echo.Context) error {
 
 func (h *UploadHandler) QueryProgress(c echo.Context) error {
 	param := dao.LocalUploadParam{
-		RepoType: c.Param("repoType"),
-		Org:      c.Param("org"),
-		Repo:     c.Param("repo"),
-		Revision: c.Param("revision"),
-		FilePath: c.Param("*"),
-		Sha256:   c.QueryParam("sha256"),
+		RepoType:  c.Param("repoType"),
+		Namespace: c.Param("namespace"),
+		Repo:      c.QueryParam("repo"),
+		Revision:  c.QueryParam("revision"),
+		FilePath:  c.QueryParam("path"),
+		Sha256:    c.QueryParam("sha256"),
 	}
 	result, err := h.uploadService.QueryProgress(param)
 	if err != nil {

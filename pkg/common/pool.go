@@ -16,6 +16,7 @@ package common
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -75,7 +76,7 @@ func (p *Pool) worker() {
 			}
 			task.DoTask()
 			if p.persist {
-				p.taskMap.Delete(task.GetTaskNo())
+				p.release(task)
 			}
 		}
 	}
@@ -89,41 +90,57 @@ func (p *Pool) GetTask(taskNo int) (Task, bool) {
 	return p.taskMap.Get(taskNo)
 }
 
-// Submit 提交任务
-func (p *Pool) Submit(ctx context.Context, task Task) error {
+func (p *Pool) ActiveCount() int {
+	if p.taskMap == nil {
+		return 0
+	}
+	return p.taskMap.Len()
+}
+
+var ErrTaskActive = errors.New("task already active")
+
+func (p *Pool) release(task Task) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.persist && p.exist(task.GetTaskNo()) {
-		return nil
-	}
-	select {
-	case p.taskChan <- task:
-		if p.persist {
-			p.taskMap.Set(task.GetTaskNo(), task)
-		}
-		return nil
-	case <-ctx.Done():
-		return nil
+	if current, ok := p.taskMap.Get(task.GetTaskNo()); ok && current == task {
+		p.taskMap.Delete(task.GetTaskNo())
 	}
 }
 
-func (p *Pool) SubmitForTimeout(ctx context.Context, task Task) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.persist && p.exist(task.GetTaskNo()) {
-		return nil
+func (p *Pool) submit(ctx context.Context, task Task, timeout <-chan time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if p.persist {
+		p.mu.Lock()
+		if p.exist(task.GetTaskNo()) {
+			p.mu.Unlock()
+			return ErrTaskActive
+		}
+		p.taskMap.Set(task.GetTaskNo(), task)
+		p.mu.Unlock()
 	}
 	select {
 	case p.taskChan <- task:
-		if p.persist {
-			p.taskMap.Set(task.GetTaskNo(), task)
-		}
 		return nil
-	case <-time.After(3 * time.Second):
+	case <-timeout:
+		if p.persist {
+			p.release(task)
+		}
 		return myerr.New(consts.TaskMoreErrMsg)
 	case <-ctx.Done():
-		return nil
+		if p.persist {
+			p.release(task)
+		}
+		return ctx.Err()
 	}
+}
+
+func (p *Pool) Submit(ctx context.Context, task Task) error { return p.submit(ctx, task, nil) }
+func (p *Pool) SubmitForTimeout(ctx context.Context, task Task) error {
+	timer := time.NewTimer(3 * time.Second)
+	defer timer.Stop()
+	return p.submit(ctx, task, timer.C)
 }
 
 // Close 关闭协程池（安全关闭）

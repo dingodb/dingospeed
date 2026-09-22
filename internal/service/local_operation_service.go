@@ -28,6 +28,7 @@ import (
 	"dingospeed/pkg/config"
 	"dingospeed/pkg/consts"
 	"dingospeed/pkg/proto/manager"
+	"dingospeed/pkg/repository"
 	"dingospeed/pkg/util"
 
 	"github.com/bytedance/sonic"
@@ -45,7 +46,7 @@ func NewLocalOperationService(schedulerDao *dao.SchedulerDao) *LocalOperationSer
 }
 
 func (l *LocalOperationService) Initialize() {
-	if config.SysConfig.GetOriginSchedulerModel() == consts.SchedulerModeCluster {
+	{
 		// 将失败的信息存储到本地
 		go l.storeLocalOperation()
 		if config.SysConfig.Online() {
@@ -158,6 +159,13 @@ func (l *LocalOperationService) readAndSyncFileProcess(filePath string) error {
 				zap.S().Errorf("解析 JSON 失败: %v, 内容: %s", err, jsonStr)
 				return err
 			}
+			if localOperation.IdentityVersion != 2 && (cacheJobReq.Org != "" || cacheJobReq.Repo != "") {
+				k, e := repository.FromStorage("models", cacheJobReq.Org, cacheJobReq.Repo)
+				if e != nil {
+					return e
+				}
+				cacheJobReq.Org, cacheJobReq.Repo = k.Namespace, k.Repo
+			}
 			if err = l.schedulerDao.UpdateCacheJobStatus(&cacheJobReq); err != nil {
 				return err
 			}
@@ -176,6 +184,13 @@ func (l *LocalOperationService) readAndSyncFileProcess(filePath string) error {
 				zap.S().Errorf("解析 JSON 失败: %v, 内容: %s", err, jsonStr)
 				return err
 			}
+			if localOperation.IdentityVersion != 2 {
+				k, e := repository.FromStorage(process.Datatype, process.Org, process.Repo)
+				if e != nil {
+					return e
+				}
+				process.Org, process.Repo = k.Namespace, k.Repo
+			}
 			processParams = append(processParams, &process)
 			count++
 			if count == batchSize {
@@ -184,6 +199,7 @@ func (l *LocalOperationService) readAndSyncFileProcess(filePath string) error {
 					return err
 				}
 				count = 0
+				processParams = nil
 			}
 		}
 	}
@@ -208,7 +224,7 @@ func (l *LocalOperationService) SyncFileProcess(processParams []*data.FileProces
 			Repo:       param.Repo,
 			Name:       param.Name,
 			Etag:       param.Etag,
-			InstanceId: config.SysConfig.Scheduler.Discovery.InstanceId,
+			InstanceId: config.SysConfig.Registration().NodeID,
 			StartPos:   param.StartPos,
 			EndPos:     param.EndPos,
 			FileSize:   param.FileSize,

@@ -15,8 +15,8 @@
 package handler
 
 import (
+	"dingospeed/pkg/repository"
 	"fmt"
-	"net/url"
 	"strconv"
 
 	"dingospeed/internal/service"
@@ -48,6 +48,9 @@ func (handler *FileHandler) HeadFileHandler1(c echo.Context) error {
 	repoType, orgRepo, commit, filePath, err := paramProcess(c, 1)
 	if err != nil {
 		zap.S().Error("解码出错:%v", err)
+		if he, ok := err.(*echo.HTTPError); ok {
+			return he
+		}
 		return util.ErrorRequestParam(c)
 	}
 	return handler.fileService.FileHeadCommon(c, repoType, orgRepo, commit, filePath)
@@ -57,6 +60,9 @@ func (handler *FileHandler) HeadFileHandler2(c echo.Context) error {
 	repoType, orgRepo, commit, filePath, err := paramProcess(c, 2)
 	if err != nil {
 		zap.S().Error("解码出错:%v", err)
+		if he, ok := err.(*echo.HTTPError); ok {
+			return he
+		}
 		return util.ErrorRequestParam(c)
 	}
 	return handler.fileService.FileHeadCommon(c, repoType, orgRepo, commit, filePath)
@@ -66,6 +72,9 @@ func (handler *FileHandler) HeadFileHandler3(c echo.Context) error {
 	repoType, orgRepo, commit, filePath, err := paramProcess(c, 3)
 	if err != nil {
 		zap.S().Error("解码出错:%v", err)
+		if he, ok := err.(*echo.HTTPError); ok {
+			return he
+		}
 		return util.ErrorRequestParam(c)
 	}
 	return handler.fileService.FileHeadCommon(c, repoType, orgRepo, commit, filePath)
@@ -75,6 +84,9 @@ func (handler *FileHandler) GetFileHandler1(c echo.Context) error {
 	repoType, orgRepo, commit, filePath, err := paramProcess(c, 1)
 	if err != nil {
 		zap.S().Error("解码出错:%v", err)
+		if he, ok := err.(*echo.HTTPError); ok {
+			return he
+		}
 		return util.ErrorRequestParam(c)
 	}
 	return handler.fileGetCommon(c, repoType, orgRepo, commit, filePath)
@@ -84,6 +96,9 @@ func (handler *FileHandler) GetFileHandler2(c echo.Context) error {
 	repoType, orgRepo, commit, filePath, err := paramProcess(c, 2)
 	if err != nil {
 		zap.S().Error("解码出错:%v", err)
+		if he, ok := err.(*echo.HTTPError); ok {
+			return he
+		}
 		return util.ErrorRequestParam(c)
 	}
 	return handler.fileGetCommon(c, repoType, orgRepo, commit, filePath)
@@ -93,6 +108,9 @@ func (handler *FileHandler) GetFileHandler3(c echo.Context) error {
 	repoType, orgRepo, commit, filePath, err := paramProcess(c, 3)
 	if err != nil {
 		zap.S().Error("解码出错:%v", err)
+		if he, ok := err.(*echo.HTTPError); ok {
+			return he
+		}
 		return util.ErrorRequestParam(c)
 	}
 	return handler.fileGetCommon(c, repoType, orgRepo, commit, filePath)
@@ -111,12 +129,18 @@ func paramProcess(c echo.Context, processMode int) (string, string, string, stri
 		org = c.Param("org")
 		repo = c.Param("repo")
 		commit = c.Param("commit")
-		filePath = c.Param("filePath")
+		filePath = c.Param("*")
+		if filePath == "" {
+			filePath = c.Param("filePath")
+		}
 	} else if processMode == 2 {
 		orgOrRepoType := c.Param("orgOrRepoType")
 		repo = c.Param("repo")
 		commit = c.Param("commit")
-		filePath = c.Param("filePath")
+		filePath = c.Param("*")
+		if filePath == "" {
+			filePath = c.Param("filePath")
+		}
 		if _, ok := consts.RepoTypesMapping[orgOrRepoType]; ok {
 			repoType = orgOrRepoType
 			org = ""
@@ -127,12 +151,19 @@ func paramProcess(c echo.Context, processMode int) (string, string, string, stri
 	} else if processMode == 3 {
 		repo = c.Param("repo")
 		commit = c.Param("commit")
-		filePath = c.Param("filePath")
+		filePath = c.Param("*")
+		if filePath == "" {
+			filePath = c.Param("filePath")
+		}
 		repoType = "models"
 	} else {
 		panic("param process error.")
 	}
-	orgRepo := util.GetOrgRepo(org, repo)
+	key, err := HFProtocolKey(c, repoType, org, repo)
+	if err != nil {
+		return repoType, "", commit, filePath, err
+	}
+	orgRepo := key.ID()
 	c.Set(consts.PromOrgRepo, orgRepo)
 
 	if _, ok := consts.RepoTypesMapping[repoType]; !ok {
@@ -143,8 +174,10 @@ func paramProcess(c echo.Context, processMode int) (string, string, string, stri
 		zap.S().Errorf("FileGetCommon or and repo is null")
 		return repoType, orgRepo, commit, filePath, fmt.Errorf("FileGetCommon or and repo is null")
 	}
-	filePath, err := url.QueryUnescape(filePath)
-	return repoType, orgRepo, commit, filePath, err
+	if err := repository.Segment(commit); err != nil {
+		return repoType, orgRepo, commit, filePath, err
+	}
+	return repoType, orgRepo, commit, filePath, repository.Relative(filePath)
 }
 
 func (handler *FileHandler) fileGetCommon(c echo.Context, repoType, orgRepo, commit, filePath string) error {

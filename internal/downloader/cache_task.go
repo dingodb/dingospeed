@@ -16,29 +16,46 @@ package downloader
 
 import (
 	"context"
+	"dingospeed/pkg/repository"
+	"net/http"
 
 	"go.uber.org/zap"
 )
 
+// RemoteSource supplies provider-specific transport; the cache/task machinery is shared.
+type RemoteSource struct {
+	Domain  string
+	Headers map[string]string
+	Fetch   func(context.Context, string, string, map[string]string, func(*http.Response) error) error
+}
+
 type TaskParam struct {
-	Context       context.Context
-	DingFile      *DingCache
-	TaskNo        int
-	TaskSize      int
-	BlobsFile     string
-	FileName      string
-	FileSize      int64
-	ResponseChan  chan []byte
-	OrgRepo       string
-	Authorization string
-	Domain        string
-	Uri           string
-	DataType      string
-	Etag          string
-	Cancel        context.CancelFunc
+	Source          *RemoteSource
+	LocalOnly       bool       // Skip scheduler and reporting until this provider's cluster integration is enabled.
+	CacheResult     chan error // Optional buffered terminal result, sent after cache writes finish.
+	OnCacheComplete func()
+	Peer            bool
+	Revision        string
+	RepoKey         repository.RepoKey
+	Context         context.Context
+	DingFile        *DingCache
+	TaskNo          int
+	TaskSize        int
+	BlobsFile       string
+	FileName        string
+	FileSize        int64
+	ResponseChan    chan []byte
+	OrgRepo         string
+	Authorization   string
+	Domain          string
+	Uri             string
+	DataType        string
+	Etag            string
+	Cancel          context.CancelFunc
 }
 
 type DownloadTask struct {
+	RepoKey       repository.RepoKey
 	TaskNo        int
 	RangeStartPos int64
 	RangeEndPos   int64
@@ -65,6 +82,7 @@ func (d *DownloadTask) GetCancelFun() context.CancelFunc {
 
 type CacheFileTask struct {
 	*DownloadTask
+	OnComplete func()
 }
 
 func NewCacheFileTask(taskNo int, rangeStartPos int64, rangeEndPos int64) *CacheFileTask {
@@ -128,6 +146,12 @@ func (c *CacheFileTask) OutResult() {
 	}
 	if curPos != c.RangeEndPos {
 		zap.S().Errorf("file:%s, cache range from %d to %d is incomplete.", c.FileName, c.RangeStartPos, c.RangeEndPos)
+		return
+	}
+	// Reconcile only after reading the whole cached file successfully. A cached
+	// subrange is not evidence that the file's missing prefix or suffix exists.
+	if c.RangeStartPos == 0 && c.RangeEndPos == c.DingFile.GetFileSize() && c.OnComplete != nil {
+		c.OnComplete()
 	}
 	zap.S().Infof("cache out:%s/%s, taskNo:%d, size:%d, startPos:%d, endPos:%d", c.OrgRepo, c.FileName, c.TaskNo, c.TaskSize, c.RangeStartPos, c.RangeEndPos)
 }
