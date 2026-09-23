@@ -173,11 +173,20 @@ func (p *PreheatCacheTask) preheatViaRepositoryAPI(k repository.RepoKey) error {
 		// entire download even though data was arriving normally.
 		_, err = io.Copy(io.Discard, &cacheProgressReader{reader: resp.Body, add: p.stockLen.Add})
 		resp.Body.Close()
-		if err != nil {
-			return err
+		if ctxErr := p.Ctx.Err(); ctxErr != nil {
+			return ctxErr
 		}
 		if k.Namespace == repository.ModelScope && resp.Trailer.Get("X-Dingo-Cache-Complete") != "true" {
+			if reason := resp.Trailer.Get("X-Dingo-Cache-Error"); reason != "" {
+				return fmt.Errorf("ModelScope file cache incomplete: %s: %s", file.Rfilename, reason)
+			}
+			if err != nil {
+				return fmt.Errorf("ModelScope file transfer failed: %s: %w", file.Rfilename, err)
+			}
 			return fmt.Errorf("ModelScope file transfer did not complete its cache: %s", file.Rfilename)
+		}
+		if err != nil {
+			return err
 		}
 	}
 	return nil

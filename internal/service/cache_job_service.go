@@ -258,7 +258,7 @@ func (p *CacheJobService) ResumeCacheJob(c echo.Context, req *query.ResumeCacheJ
 		}
 		return nil
 	}
-	if previous.State != "paused" && previous.State != "interrupted" {
+	if previous.State != "paused" && previous.State != "interrupted" && previous.State != "failed" {
 		return &CacheJobConflict{Code: "invalid_task_state"}
 	}
 	if previous.Commit == "" {

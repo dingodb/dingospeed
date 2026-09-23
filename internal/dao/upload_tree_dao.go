@@ -98,6 +98,9 @@ func (u *UploadDao) PublishTree(param LocalPublishTreeParam) (*LocalPublishTreeR
 	repoLockKey := uploadRepoLockKey(param.RepoType, orgRepo)
 	uploadRepoLocks.Lock(repoLockKey)
 	defer uploadRepoLocks.Unlock(repoLockKey)
+	if err := u.recoverInventoryLocked(RepositoryKey(param.RepoType, orgRepo)); err != nil {
+		return nil, err
+	}
 
 	revisionLockKey := fmt.Sprintf("upload-revision:%s:%s:%s", param.RepoType, orgRepo, param.Revision)
 	uploadRevisionLocks.Lock(revisionLockKey)

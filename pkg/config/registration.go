@@ -18,6 +18,7 @@ type Registration struct {
 	Enabled       bool   `json:"enabled"`
 	NodeID        string `json:"nodeId"`
 	Address       string `json:"address"`
+	HTTPURL       string `json:"httpUrl,omitempty"`
 	Host          string `json:"host"`
 	Port          int    `json:"port"`
 	ManagementURL string `json:"managementUrl,omitempty"`
@@ -30,7 +31,7 @@ type RegistrationStatus struct {
 }
 
 func ValidateRegistration(r Registration) error {
-	for _, raw := range []string{r.ManagementURL, r.DownloadURL} {
+	for _, raw := range []string{r.ManagementURL, r.DownloadURL, r.HTTPURL} {
 		if raw == "" {
 			continue
 		}
@@ -60,7 +61,7 @@ func (c *Config) registrationPath() string {
 }
 func (c *Config) Registration() Registration {
 	c.registrationOnce.Do(func() {
-		r := Registration{Enabled: c.Scheduler.OriginMode == "cluster" || c.Scheduler.Mode == "cluster", NodeID: c.Scheduler.Discovery.InstanceId, Address: c.Scheduler.Addr, Host: c.Scheduler.Discovery.Host, Port: c.Scheduler.Discovery.Port, ManagementURL: c.Upload.AdvertiseURL}
+		r := Registration{Enabled: c.Scheduler.OriginMode == "cluster" || c.Scheduler.Mode == "cluster", NodeID: c.Scheduler.Discovery.InstanceId, Address: c.Scheduler.Addr, HTTPURL: c.Scheduler.HTTPURL, Host: c.Scheduler.Discovery.Host, Port: c.Scheduler.Discovery.Port, ManagementURL: c.Upload.AdvertiseURL}
 		b, err := os.ReadFile(c.registrationPath())
 		if err == nil {
 			err = json.Unmarshal(b, &r)

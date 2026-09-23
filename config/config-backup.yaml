@@ -63,7 +63,7 @@ diskClean:
     enabled: true
     cacheSizeLimit: 41781441855488  #38T
     cacheCleanStrategy: "LRU"  #LRU,FIFO,LARGE_FIRST
-    collectTimePeriod: 1  #定期检测磁盘使用量时间周期，单位小时（H）
+    collectTimePeriod: 24  #定期检测磁盘使用量时间周期，单位小时（H）
     instanceID: mas  # 唯一标识符
 
 dynamicProxy:

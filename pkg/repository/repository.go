@@ -185,13 +185,107 @@ func Read(root string, k RepoKey) (Descriptor, error) {
 }
 
 func List(root string) ([]Descriptor, error) {
+	return listIn(filepath.Join(root, "api"), root)
+}
+
+// ListHosted enumerates only hosted repositories, which live exclusively below
+// api/<repoType>/dingo-local. Remote upstream caches share the same api/ tree and
+// outnumber uploads by orders of magnitude, so scanning all of api/ to then drop
+// every non-hosted descriptor costs a full-tree walk per call on cheap triggers
+// such as the inventory ticker. Walking the hosted roots instead keeps the scan
+// proportional to the uploads we actually report.
+//
+// This is an enumeration-scope change only: a descriptor the caller could not
+// reach before is unreachable now, because hosted keys always resolve below the
+// roots walked here.
+func ListHosted(root string) ([]Descriptor, error) {
 	result := []Descriptor{}
-	err := filepath.WalkDir(filepath.Join(root, "api"), func(p string, e fs.DirEntry, err error) error {
+	for _, repoType := range []string{"models", "datasets", "spaces"} {
+		found, err := listIn(filepath.Join(root, "api", repoType, Local), root)
+		if err != nil {
+			return result, err
+		}
+		result = append(result, found...)
+	}
+	return result, nil
+}
+
+func isDataSubtree(name string) bool {
+	switch name {
+	case "paths-info", "revision", "recycle", "blobs", "resolve":
+		return true
+	}
+	return false
+}
+
+// isRepositoryDataSubtree reports whether a directory walk must stop descending
+// here because the directory is platform-owned repository data rather than a
+// candidate repository root.
+//
+// A data subtree is identified by the marker above it, never by its own name:
+// repository names are user input, so "team/resolve/model" and even
+// "paths-info/repo" are legitimate repositories whose own paths contain a
+// data-subtree word. Inside a recognised repository, though, these names are
+// reserved platform layout, so nothing below one can be a repository root.
+func isRepositoryDataSubtree(scanRoot, p, name string) bool {
+	if p == scanRoot {
+		return false
+	}
+	if !isDataSubtree(name) {
+		return false
+	}
+	// Either this directory itself is data (a marker above it), or it is nested
+	// inside a data subtree that the walk already declined to enter.
+	return hasRepositoryAncestor(scanRoot, p) || hasDataSubtreeAncestor(scanRoot, p)
+}
+
+// hasDataSubtreeAncestor reports whether any strict ancestor of p below the scan
+// root is a data subtree.
+func hasDataSubtreeAncestor(scanRoot, p string) bool {
+	scanRoot = filepath.Clean(scanRoot)
+	for dir := filepath.Dir(filepath.Clean(p)); dir != scanRoot; dir = filepath.Dir(dir) {
+		if len(dir) <= len(scanRoot) {
+			return false
+		}
+		if isDataSubtree(filepath.Base(dir)) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasRepositoryAncestor reports whether any strict ancestor of p below the scan
+// root carries a repository marker. Walking a handful of parents through Lstat
+// is far cheaper than descending a data subtree that can hold one directory per
+// stored file.
+func hasRepositoryAncestor(scanRoot, p string) bool {
+	scanRoot = filepath.Clean(scanRoot)
+	for dir := filepath.Dir(p); ; dir = filepath.Dir(dir) {
+		if len(dir) < len(scanRoot) || (dir != scanRoot && !strings.HasPrefix(dir, scanRoot+string(filepath.Separator))) {
+			return false
+		}
+		if _, err := os.Lstat(filepath.Join(dir, Marker)); err == nil {
+			return true
+		}
+		if dir == scanRoot {
+			return false
+		}
+	}
+}
+
+func listIn(scanRoot, root string) ([]Descriptor, error) {
+	result := []Descriptor{}
+	err := filepath.WalkDir(scanRoot, func(p string, e fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if !e.IsDir() {
 			return nil
+		}
+		// Data subtrees under a repository are not repositories themselves, and
+		// descending them turns discovery into a walk of every stored file.
+		if isRepositoryDataSubtree(scanRoot, p, e.Name()) {
+			return filepath.SkipDir
 		}
 		marker := filepath.Join(p, Marker)
 		info, statErr := os.Lstat(marker)
@@ -235,6 +329,167 @@ func List(root string) ([]Descriptor, error) {
 
 var registrationMu sync.Mutex
 
+// listConflicts returns exactly the registered repositories that the conflict
+// checks in Register can act on, without scanning the whole registry.
+//
+// Every check in registrationConflicts compares against the candidate's namespace
+// or one of its own path prefixes, so a repository can only conflict when its
+// storage path can overlap the candidate's. Hosted namespaces occupy disjoint
+// directories below dingo-local, so repositories under other namespaces can never
+// overlap - with one exception: a bare local-namespace repository is stored at
+// dingo-local/<repo>, so its path can be a prefix of any other namespace's
+// directory and must be considered for every hosted candidate.
+func listConflicts(root string, d Descriptor) ([]Descriptor, error) {
+	result := []Descriptor{}
+	seen := map[RepoKey]struct{}{}
+	scan := func(scanRoot string) error {
+		found, err := listIn(scanRoot, root)
+		if err != nil {
+			return err
+		}
+		for _, old := range found {
+			if _, ok := seen[old.RepoKey]; ok {
+				continue
+			}
+			seen[old.RepoKey] = struct{}{}
+			result = append(result, old)
+		}
+		return nil
+	}
+	for _, repoType := range []string{"models", "datasets", "spaces"} {
+		// Namespace case conflicts cross repository types, so the candidate's
+		// namespace directory is visited under every type as well.
+		for _, scanRoot := range conflictScanRoots(root, repoType, d.Namespace) {
+			if err := scan(scanRoot); err != nil {
+				return result, err
+			}
+		}
+		if d.Namespace != Local && d.Namespace != HuggingFace && d.Namespace != ModelScope {
+			bare, err := listBareLocalRepositories(root, repoType, d.Namespace)
+			if err != nil {
+				return result, err
+			}
+			for _, old := range bare {
+				if _, ok := seen[old.RepoKey]; ok {
+					continue
+				}
+				seen[old.RepoKey] = struct{}{}
+				result = append(result, old)
+			}
+		}
+	}
+	return result, nil
+}
+
+// conflictScanRoots lists the directories that can hold a repository whose stored
+// path can overlap a candidate of the given repository type and namespace. The
+// paths mirror APIRoot/storagePath; a path that does not exist yields nothing.
+func conflictScanRoots(root, repoType, namespace string) []string {
+	switch namespace {
+	case ModelScope:
+		// modelscope/<repo>: disjoint from everything else.
+		return []string{filepath.Join(root, "api", repoType, ModelScope)}
+	case HuggingFace:
+		// <repo> directly below the type directory: disjoint from namespaces.
+		return []string{filepath.Join(root, "api", repoType)}
+	case Local:
+		// dingo-local/<repo>: only the shared upload root can hold overlaps.
+		return []string{filepath.Join(root, "api", repoType, Local)}
+	default:
+		// dingo-local/<namespace>/<repo>. Siblings in the same namespace can
+		// overlap the candidate. A bare local repository is stored at
+		// dingo-local/<repo>, so it can also be a prefix of dingo-local/<namespace>;
+		// only namespaces without a marker of their own are those bare repositories,
+		// which is why the second root is read shallowly rather than walked.
+		return []string{filepath.Join(root, "api", repoType, Local, namespace)}
+	}
+}
+
+// listBareLocalRepositories returns repositories stored directly below the local
+// upload root, i.e. those using the local namespace. They are the only hosted
+// repositories outside the candidate's namespace whose path can overlap it.
+func listBareLocalRepositories(root, repoType, namespace string) ([]Descriptor, error) {
+	result := []Descriptor{}
+	dir := filepath.Join(root, "api", repoType, Local)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return result, nil
+		}
+		return result, err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		// Case-folded namespace aliases are physically separate on Linux but
+		// still forbidden by the registry contract. Inspect that matching tree
+		// only, not every unrelated namespace.
+		if entry.Name() != namespace && strings.EqualFold(entry.Name(), namespace) {
+			aliases, err := listIn(filepath.Join(dir, entry.Name()), root)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, aliases...)
+		}
+		marker := filepath.Join(dir, entry.Name(), Marker)
+		b, err := os.ReadFile(marker)
+		if err != nil {
+			continue // a namespace directory, or a bare tree without a marker
+		}
+		var d Descriptor
+		if err = json.Unmarshal(b, &d); err != nil || d.Validate() != nil {
+			continue
+		}
+		if d.Namespace == Local {
+			result = append(result, d)
+		}
+	}
+	return result, nil
+}
+
+// registrationConflicts applies the same conflict rules Register enforces, given
+// a candidate and the repositories visible to it. It is shared with the
+// whole-registry reference used in tests so both paths cannot drift.
+func registrationConflicts(root string, d Descriptor, all []Descriptor) error {
+	for _, old := range all {
+		if old.RepoKey != d.RepoKey {
+			for _, pair := range [][2]string{{old.FilesRoot(root), d.FilesRoot(root)}, {old.APIRoot(root), d.APIRoot(root)}} {
+				a, b := strings.ToLower(filepath.Clean(pair[0])), strings.ToLower(filepath.Clean(pair[1]))
+				if a == b || strings.HasPrefix(a, b+string(filepath.Separator)) || strings.HasPrefix(b, a+string(filepath.Separator)) {
+					return fmt.Errorf("repository physical path conflict")
+				}
+			}
+		}
+		if strings.EqualFold(old.Namespace, d.Namespace) && old.Namespace != d.Namespace {
+			return fmt.Errorf("namespace case conflict")
+		}
+		if old.RepoType != d.RepoType || old.Namespace != d.Namespace {
+			continue
+		}
+		oldParts, newParts := strings.Split(old.Repo, "/"), strings.Split(d.Repo, "/")
+		for i := 0; i < len(oldParts) && i < len(newParts); i++ {
+			if !strings.EqualFold(oldParts[i], newParts[i]) {
+				break
+			}
+			if oldParts[i] != newParts[i] {
+				return fmt.Errorf("repository parent directory case conflict")
+			}
+		}
+		a, b := strings.ToLower(old.Repo), strings.ToLower(d.Repo)
+		if a == b {
+			if old.RepoKey == d.RepoKey && old == d {
+				continue
+			}
+			return fmt.Errorf("repository identity or source conflict")
+		}
+		if strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/") {
+			return fmt.Errorf("repository ancestor/descendant conflict")
+		}
+	}
+	return nil
+}
+
 // Register serializes case and ancestor checks with marker creation. The lock
 // file also rejects concurrent registration by another process sharing root.
 func Register(root string, d Descriptor) error {
@@ -264,44 +519,31 @@ func Register(root string, d Descriptor) error {
 		return fmt.Errorf("repository registration busy")
 	}
 	defer fileLock.Unlock()
-	all, err := List(root)
+	// An existing descriptor is immutable through Register. Validate it directly
+	// under both registration locks instead of enumerating unrelated repositories.
+	if old, readErr := Read(root, d.RepoKey); readErr == nil {
+		if old == d {
+			return nil
+		}
+		return fmt.Errorf("repository identity or source conflict")
+	} else if !errors.Is(readErr, os.ErrNotExist) {
+		return readErr
+	}
+	// Conflict detection only ever compares against repositories that share this
+	// repository type and namespace, plus this descriptor's own ancestors. Those
+	// are reachable directly from the storage root, so registration cost stays
+	// independent of how many unrelated repositories a node accumulates.
+	all, err := listConflicts(root, d)
 	if err != nil {
 		return err
 	}
 	for _, old := range all {
-		if old.RepoKey != d.RepoKey {
-			for _, pair := range [][2]string{{old.FilesRoot(root), d.FilesRoot(root)}, {old.APIRoot(root), d.APIRoot(root)}} {
-				a, b := strings.ToLower(filepath.Clean(pair[0])), strings.ToLower(filepath.Clean(pair[1]))
-				if a == b || strings.HasPrefix(a, b+string(filepath.Separator)) || strings.HasPrefix(b, a+string(filepath.Separator)) {
-					return fmt.Errorf("repository physical path conflict")
-				}
-			}
+		if old.RepoKey == d.RepoKey && old == d {
+			return nil // already registered; nothing to do
 		}
-		if strings.EqualFold(old.Namespace, d.Namespace) && old.Namespace != d.Namespace {
-			return fmt.Errorf("namespace case conflict")
-		}
-		if old.RepoType != d.RepoType || old.Namespace != d.Namespace {
-			continue
-		}
-		oldParts, newParts := strings.Split(old.Repo, "/"), strings.Split(d.Repo, "/")
-		for i := 0; i < len(oldParts) && i < len(newParts); i++ {
-			if !strings.EqualFold(oldParts[i], newParts[i]) {
-				break
-			}
-			if oldParts[i] != newParts[i] {
-				return fmt.Errorf("repository parent directory case conflict")
-			}
-		}
-		a, b := strings.ToLower(old.Repo), strings.ToLower(d.Repo)
-		if a == b {
-			if old.RepoKey == d.RepoKey && old == d {
-				return nil
-			}
-			return fmt.Errorf("repository identity or source conflict")
-		}
-		if strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/") {
-			return fmt.Errorf("repository ancestor/descendant conflict")
-		}
+	}
+	if err = registrationConflicts(root, d, all); err != nil {
+		return err
 	}
 	dest := filepath.Join(d.APIRoot(root), Marker)
 	if err = os.MkdirAll(filepath.Dir(dest), 0755); err != nil {

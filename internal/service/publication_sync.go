@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,10 +12,8 @@ import (
 
 	"dingospeed/internal/dao"
 	"dingospeed/pkg/config"
-	pb "dingospeed/pkg/proto/manager"
 	"dingospeed/pkg/repository"
 	"github.com/google/uuid"
-	"go.uber.org/zap"
 )
 
 type UploadInventoryItem struct {
@@ -61,41 +58,6 @@ func LoadUploadInventorySnapshot() (*UploadInventorySnapshot, error) {
 	return &snap, nil
 }
 
-// ReconcilePublications is now a node-wide uploaded inventory reconciler. Each
-// local mutation is only a wake-up; the durable full scan is the source of
-// truth, so a crash between the mutation and notification is repaired on start.
-func (s *SchedulerService) ReconcilePublications() {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	for {
-		if config.SysConfig.IsCluster() {
-			if err := s.SyncPublications(s.Ctx); err != nil {
-				zap.S().Warnf("upload inventory sync pending: %v", err)
-			}
-		}
-		select {
-		case <-s.Ctx.Done():
-			return
-		case <-ticker.C:
-		case <-dao.PublishedChanges:
-		}
-	}
-}
-
-func (s *SchedulerService) SyncPublications(ctx context.Context) error {
-	snap, err := s.buildUploadInventory()
-	if err != nil {
-		return err
-	}
-	if err = persistUploadInventory(snap); err != nil {
-		return err
-	}
-	callCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
-	defer cancel()
-	_, err = s.Client.IngestRepository(callCtx, &pb.IngestRepositoryRequest{InstanceId: snap.InstanceID, Revision: "inventory", Commit: snap.ReportToken, Online: config.SysConfig.Online()})
-	return err
-}
-
 func (s *SchedulerService) buildUploadInventory() (*UploadInventorySnapshot, error) {
 	previous, loadErr := LoadUploadInventorySnapshot()
 	now := time.Now().UTC()
@@ -109,12 +71,18 @@ func (s *SchedulerService) buildUploadInventory() (*UploadInventorySnapshot, err
 	if snap.InstanceID == "" {
 		return nil, fmt.Errorf("scheduler discovery instanceId is empty")
 	}
-	descriptors, err := repository.List(config.SysConfig.Repos())
+	// Only hosted descriptors become inventory items; ListHosted walks just the
+	// hosted roots instead of the whole api/ tree, which is mostly remote caches.
+	descriptors, err := repository.ListHosted(config.SysConfig.Repos())
 	if err != nil {
 		snap.Complete = false
 		snap.Error = err.Error()
 		return snap, nil
 	}
+	return s.scanUploadDescriptors(snap, descriptors)
+}
+
+func (s *SchedulerService) scanUploadDescriptors(snap *UploadInventorySnapshot, descriptors []repository.Descriptor) (*UploadInventorySnapshot, error) {
 	seen := make(map[string]struct{})
 	errorsFound := make([]string, 0)
 	for _, d := range descriptors {
@@ -133,23 +101,23 @@ func (s *SchedulerService) buildUploadInventory() (*UploadInventorySnapshot, err
 			if !entry.IsDir() {
 				continue
 			}
-			local, readErr := s.metaService.GetLocalSnapshot(d.RepoType, d.ID(), entry.Name())
+			commit, files, readErr := dao.ReadInventorySnapshot(d.RepoKey, entry.Name())
 			if readErr != nil {
 				errorsFound = append(errorsFound, d.ID()+"/"+entry.Name()+": "+readErr.Error())
 				continue
 			}
-			if entry.Name() == local.Commit {
+			if entry.Name() == commit {
 				continue
 			} // immutable snapshot directory, not a live local revision
-			manifest := make([]dao.LocalManifestFile, len(local.Files))
-			for i, file := range local.Files {
+			manifest := make([]dao.LocalManifestFile, len(files))
+			for i, file := range files {
 				manifest[i] = dao.LocalManifestFile{Path: file.Path, Sha256: file.Sha256, Size: file.Size}
 			}
-			if verifyErr := dao.VerifyPublishedFiles(d.RepoType, d.ID(), local.Commit, manifest); verifyErr != nil {
+			if verifyErr := dao.VerifyPublishedFiles(d.RepoType, d.ID(), commit, manifest); verifyErr != nil {
 				errorsFound = append(errorsFound, d.ID()+"/"+entry.Name()+": "+verifyErr.Error())
 				continue
 			}
-			for _, file := range local.Files {
+			for _, file := range files {
 				key := strings.Join([]string{d.Namespace, d.RepoType, d.Repo, file.Path, file.Sha256}, "\x00")
 				if _, ok := seen[key]; ok {
 					continue

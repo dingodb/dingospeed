@@ -718,7 +718,7 @@ func (f *FileDao) FileChunkGet(c echo.Context, taskParam *downloader.TaskParam, 
 	ensureCache := taskParam.Source != nil && c.Request().Header.Get("X-Dingo-Ensure-Cache") == "1"
 	if ensureCache {
 		delete(respHeaders, "Content-Length")
-		respHeaders["Trailer"] = "X-Dingo-Cache-Complete"
+		respHeaders["Trailer"] = "X-Dingo-Cache-Complete, X-Dingo-Cache-Error"
 	}
 	taskParam.Context = ctx
 	taskParam.ResponseChan = responseChan
@@ -741,6 +741,10 @@ func (f *FileDao) FileChunkGet(c echo.Context, taskParam *downloader.TaskParam, 
 		result := <-taskParam.CacheResult
 		if ensureCache {
 			c.Response().Header().Set("X-Dingo-Cache-Complete", fmt.Sprint(result == nil))
+			if result != nil {
+				c.Response().Header().Set("X-Dingo-Cache-Error", util.CacheFailureReason(result))
+				zap.S().Errorw("Could not complete file cache", "file", fileName, "error", result)
+			}
 		}
 		if result != nil && ensureCache {
 			return result

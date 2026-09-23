@@ -81,7 +81,7 @@ func commitAt(root, p string) (string, error) {
 	return meta.SHA, repository.Segment(meta.SHA)
 }
 
-// Discover uses registered identities, legacy upload manifests and HF cached
+// Discover uses registered identities, legacy upload manifests and HF/ModelScope cached
 // metadata. It never registers repositories or downloads content.
 func Discover(root string) ([]Selection, error) {
 	root, err := filepath.Abs(root)
@@ -169,16 +169,18 @@ func Discover(root string) ([]Selection, error) {
 			out = append(out, Selection{root, k.Namespace, k.Repo, rev})
 		}
 	}
-	catalog, err := (hfprojection.Reader{Root: root}).Catalog("models")
-	if err != nil {
-		return nil, err
-	}
-	for _, repo := range catalog.Repos {
-		if repo.Error != "" {
-			return nil, fmt.Errorf("%s: %s", repo.Repo, repo.Error)
+	for _, namespace := range []string{repository.HuggingFace, repository.ModelScope} {
+		catalog, err := (hfprojection.Reader{Root: root, Namespace: namespace}).Catalog("models")
+		if err != nil {
+			return nil, err
 		}
-		for _, rev := range repo.Revisions {
-			out = append(out, Selection{root, repository.HuggingFace, repo.Repo, rev.Name})
+		for _, repo := range catalog.Repos {
+			if repo.Error != "" {
+				return nil, fmt.Errorf("%s/%s: %s", namespace, repo.Repo, repo.Error)
+			}
+			for _, rev := range repo.Revisions {
+				out = append(out, Selection{root, namespace, repo.Repo, rev.Name})
+			}
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -199,8 +201,8 @@ func resolve(s Selection) (Version, error) {
 	if !filepath.IsAbs(s.CacheRoot) {
 		return v, fmt.Errorf("cache_root must be absolute")
 	}
-	if s.Namespace == repository.HuggingFace {
-		m, paths, err := (hfprojection.Reader{Root: s.CacheRoot}).MountSources("models", s.Repo, s.Revision)
+	if s.Namespace == repository.HuggingFace || s.Namespace == repository.ModelScope {
+		m, paths, err := (hfprojection.Reader{Root: s.CacheRoot, Namespace: s.Namespace}).MountSources("models", s.Repo, s.Revision)
 		if err != nil {
 			return v, err
 		}
@@ -209,9 +211,6 @@ func resolve(s Selection) (Version, error) {
 			v.Files = append(v.Files, TreeFile{f.Path, f.Size, f.OID, paths[f.Path]})
 		}
 	} else {
-		if s.Namespace == repository.ModelScope {
-			return v, fmt.Errorf("modelscope adapter is not implemented")
-		}
 		if s.Namespace != repository.Local {
 			d, err := repository.Read(s.CacheRoot, k)
 			if err != nil {
