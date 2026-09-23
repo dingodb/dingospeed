@@ -364,6 +364,21 @@ func listConflicts(root string, d Descriptor) ([]Descriptor, error) {
 				return result, err
 			}
 		}
+		if d.Namespace == HuggingFace {
+			// Only repositories lying along the candidate's own path can overlap
+			// it, so read those directory levels instead of the whole type tree.
+			found, err := listAlongRepoPath(root, repoType, d.Repo)
+			if err != nil {
+				return result, err
+			}
+			for _, old := range found {
+				if _, ok := seen[old.RepoKey]; ok {
+					continue
+				}
+				seen[old.RepoKey] = struct{}{}
+				result = append(result, old)
+			}
+		}
 		if d.Namespace != Local && d.Namespace != HuggingFace && d.Namespace != ModelScope {
 			bare, err := listBareLocalRepositories(root, repoType, d.Namespace)
 			if err != nil {
@@ -384,14 +399,122 @@ func listConflicts(root string, d Descriptor) ([]Descriptor, error) {
 // conflictScanRoots lists the directories that can hold a repository whose stored
 // path can overlap a candidate of the given repository type and namespace. The
 // paths mirror APIRoot/storagePath; a path that does not exist yields nothing.
+// listAlongRepoPath finds the repositories that can physically overlap a
+// HuggingFace candidate stored at api/<repoType>/<repo>.
+//
+// registrationConflicts only rejects a pair when one storage path is a
+// case-insensitive prefix of the other, when one repo path is an ancestor or
+// descendant of the other, or when a shared path component differs only by
+// case. Every one of those requires the existing repository to sit *along the
+// candidate's own path*, so the levels of that path are the only ones worth
+// reading. Sibling subtrees cannot overlap and are never opened, which keeps
+// registration cost proportional to the path depth and the fan-out of the
+// directories on it rather than to the number of cached repositories.
+//
+// Case variants are followed because a case-folded twin is a separate
+// directory on Linux but still a conflict under the registry contract; this
+// mirrors how listBareLocalRepositories handles namespace aliases.
+func listAlongRepoPath(root, repoType, repo string) ([]Descriptor, error) {
+	result := []Descriptor{}
+	parts := strings.Split(repo, "/")
+	// Directories to inspect at the current level, starting at the type root.
+	current := []string{filepath.Join(root, "api", repoType)}
+	for i, part := range parts {
+		next := []string{}
+		for _, dir := range current {
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					continue
+				}
+				return result, err
+			}
+			for _, entry := range entries {
+				if !entry.IsDir() || !strings.EqualFold(entry.Name(), part) {
+					continue
+				}
+				child := filepath.Join(dir, entry.Name())
+				if entry.Name() != part {
+					// A component that matches only when case is folded is a
+					// separate directory on Linux, but every repository below it
+					// clashes with the candidate on "parent directory case".
+					// Collect that subtree whole, the way
+					// listBareLocalRepositories treats namespace aliases. Such
+					// directories are the rare exception, so this does not
+					// reintroduce a cache-wide walk.
+					variants, err := listIn(child, root)
+					if err != nil {
+						return result, err
+					}
+					result = append(result, variants...)
+					if d, ok := readDescriptorAt(root, child); ok {
+						result = append(result, d)
+					}
+					continue
+				}
+				// A marker on an ancestor of the candidate is an
+				// ancestor/descendant conflict; on the final component it is the
+				// candidate itself.
+				if d, ok := readDescriptorAt(root, child); ok {
+					result = append(result, d)
+				}
+				if i == len(parts)-1 {
+					// Repositories nested below the candidate also conflict.
+					// listIn prunes data subtrees, so this stays bounded by the
+					// candidate's own directory.
+					nested, err := listIn(child, root)
+					if err != nil {
+						return result, err
+					}
+					result = append(result, nested...)
+					continue
+				}
+				next = append(next, child)
+			}
+		}
+		current = next
+		if len(current) == 0 {
+			break
+		}
+	}
+	return result, nil
+}
+
+// readDescriptorAt reads the repository marker in dir, if there is a valid one.
+func readDescriptorAt(root, dir string) (Descriptor, bool) {
+	marker := filepath.Join(dir, Marker)
+	b, err := os.ReadFile(marker)
+	if err != nil {
+		return Descriptor{}, false
+	}
+	if err = SafePath(root, marker); err != nil {
+		return Descriptor{}, false
+	}
+	var d Descriptor
+	if err = json.Unmarshal(b, &d); err != nil {
+		return Descriptor{}, false
+	}
+	if err = d.Validate(); err != nil {
+		return Descriptor{}, false
+	}
+	if filepath.Clean(filepath.Join(d.APIRoot(root), Marker)) != filepath.Clean(marker) {
+		return Descriptor{}, false
+	}
+	return d, true
+}
+
 func conflictScanRoots(root, repoType, namespace string) []string {
 	switch namespace {
 	case ModelScope:
 		// modelscope/<repo>: disjoint from everything else.
 		return []string{filepath.Join(root, "api", repoType, ModelScope)}
 	case HuggingFace:
-		// <repo> directly below the type directory: disjoint from namespaces.
-		return []string{filepath.Join(root, "api", repoType)}
+		// <repo> sits directly below the type directory, so the only tree that
+		// could hold an overlap is the type directory itself - which on a mirror
+		// node holds every cached upstream repository. Walking it would make
+		// registration cost grow with the cache, so HuggingFace candidates are
+		// resolved by listAlongRepoPath instead and contribute no scan root here.
+		return nil
 	case Local:
 		// dingo-local/<repo>: only the shared upload root can hold overlaps.
 		return []string{filepath.Join(root, "api", repoType, Local)}
