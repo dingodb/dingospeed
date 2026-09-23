@@ -79,7 +79,7 @@ diskClean:
     enabled: false             #是否启用磁盘清理
     cacheSizeLimit: 41781441855488  #38T 41781441855488
     cacheCleanStrategy: "LRU"  #LRU,FIFO,LARGE_FIRST
-    collectTimePeriod: 1  #定期检测磁盘使用量时间周期，单位小时（H）
+    collectTimePeriod: 24  #定期检测磁盘使用量时间周期，单位小时（H）
 
 dynamicProxy:
     enabled: false    #是否启用动态代理，当hfNetLoc配置的地址访问异常时，会自动切换到bpHfNetLoc。

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"dingospeed/pkg/config"
+	"dingospeed/pkg/inventory"
 	"dingospeed/pkg/repository"
 	"go.uber.org/zap"
 )
@@ -41,6 +42,9 @@ func (u *UploadDao) DeleteHostedRepository(k repository.RepoKey) (*RepositoryDel
 	uploadRepoLocks.Lock(lock)
 	defer uploadRepoLocks.Unlock(lock)
 	root := config.SysConfig.Repos()
+	if err := u.recoverInventoryLocked(k); err != nil {
+		return nil, err
+	}
 	d, err := repository.Read(root, k)
 	if os.IsNotExist(err) {
 		return &RepositoryDeleteResult{}, nil
@@ -74,27 +78,7 @@ func (u *UploadDao) DeleteHostedRepository(k repository.RepoKey) (*RepositoryDel
 			return nil, err
 		}
 	}
-	if err = os.RemoveAll(k.FilesRoot(root)); err != nil {
-		return nil, err
-	}
-	// Keep the descriptor until cleanup finishes, so a partial failure remains
-	// discoverable and can be retried through the same deletion flow.
-	entries, err := os.ReadDir(k.APIRoot(root))
-	if err != nil {
-		return nil, err
-	}
-	for _, entry := range entries {
-		if entry.Name() == repository.Marker {
-			continue
-		}
-		if err = os.RemoveAll(filepath.Join(k.APIRoot(root), entry.Name())); err != nil {
-			return nil, err
-		}
-	}
-	if err = os.Remove(filepath.Join(k.APIRoot(root), repository.Marker)); err != nil {
-		return nil, err
-	}
-	if err = os.Remove(k.APIRoot(root)); err != nil {
+	if err = inventory.Run(root, inventoryKey(k), "delete-repository", k, func() error { return u.removeEmptyRepository(k) }); err != nil {
 		return nil, err
 	}
 	if u.fileDao.baseData != nil {

@@ -245,6 +245,226 @@ func TestMarkerWordIsAllowedAsRepositoryOrNamespaceDirectory(t *testing.T) {
 	}
 }
 
+// ListHosted must return exactly the hosted subset List returns, so callers that
+// only consume hosted descriptors can stop paying for a whole api/ walk.
+func TestListHostedMatchesHostedSubsetOfList(t *testing.T) {
+	root := t.TempDir()
+	hosted := []RepoKey{
+		{Namespace: "alice", RepoType: "models", Repo: "team/model-a"},
+		{Namespace: "alice", RepoType: "datasets", Repo: "corpus"},
+		{Namespace: "bob", RepoType: "spaces", Repo: "demo"},
+	}
+	for _, k := range hosted {
+		if err := Register(root, Hosted(k)); err != nil {
+			t.Fatalf("register hosted %s: %v", k.ID(), err)
+		}
+	}
+	for _, k := range []RepoKey{
+		{Namespace: HuggingFace, RepoType: "models", Repo: "Qwen/Qwen3-32B"},
+		{Namespace: ModelScope, RepoType: "models", Repo: "Qwen/Qwen3"},
+	} {
+		if err := Register(root, Remote(k)); err != nil {
+			t.Fatalf("register remote %s: %v", k.ID(), err)
+		}
+	}
+
+	all, err := List(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]Descriptor{}
+	for _, d := range all {
+		if d.Source == "hosted" {
+			want[d.ID()] = d
+		}
+	}
+	if len(want) != len(hosted) {
+		t.Fatalf("fixture mismatch: List returned %d hosted of %d total", len(want), len(all))
+	}
+
+	got, err := ListHosted(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ListHosted returned %d descriptors, want %d: %+v", len(got), len(want), got)
+	}
+	for _, d := range got {
+		expected, ok := want[d.ID()]
+		if !ok {
+			t.Fatalf("ListHosted returned non-hosted or unknown descriptor: %+v", d)
+		}
+		if d != expected {
+			t.Fatalf("descriptor mismatch for %s: %+v want %+v", d.ID(), d, expected)
+		}
+	}
+}
+
+// Remote cache trees dominate api/ on a heavily used node. A hosted-scoped scan
+// must not descend into them at all.
+func TestListHostedDoesNotDescendIntoRemoteNamespace(t *testing.T) {
+	root := t.TempDir()
+	hostedKey := RepoKey{Namespace: "alice", RepoType: "models", Repo: "team/model-a"}
+	if err := Register(root, Hosted(hostedKey)); err != nil {
+		t.Fatal(err)
+	}
+	remote := RepoKey{Namespace: HuggingFace, RepoType: "models", Repo: "Qwen/Qwen3-32B"}
+	if err := Register(root, Remote(remote)); err != nil {
+		t.Fatal(err)
+	}
+	// A marker planted deep inside the remote cache must never be enumerated by
+	// the hosted scan, even though it is a structurally valid repository root.
+	decoy := filepath.Join(remote.APIRoot(root), "paths-info", "commit", "nested", Marker)
+	if err := os.MkdirAll(filepath.Dir(decoy), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(decoy, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ListHosted(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID() != hostedKey.ID() {
+		t.Fatalf("hosted scan leaked remote cache entries: %+v", got)
+	}
+}
+
+// Data subtrees are not repositories. Descending them is what turns discovery
+// into a walk of every stored file.
+func TestListStopsAtRepositoryDataSubtrees(t *testing.T) {
+	root := t.TempDir()
+	k := RepoKey{Namespace: "alice", RepoType: "models", Repo: "team/model-a"}
+	if err := Register(root, Hosted(k)); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"paths-info", "revision", "recycle"} {
+		decoy := filepath.Join(k.APIRoot(root), name, "commit", "nested", Marker)
+		if err := os.MkdirAll(filepath.Dir(decoy), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(decoy, []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, list := range []struct {
+		name string
+		fn   func(string) ([]Descriptor, error)
+	}{{"List", List}, {"ListHosted", ListHosted}} {
+		all, err := list.fn(root)
+		if err != nil {
+			t.Fatalf("%s: %v", list.name, err)
+		}
+		if len(all) != 1 || all[0].ID() != k.ID() {
+			t.Fatalf("%s descended into repository data subtrees: %+v", list.name, all)
+		}
+	}
+}
+
+// Empty or absent hosted roots are normal, not an error.
+func TestListHostedToleratesMissingRoots(t *testing.T) {
+	root := t.TempDir()
+	got, err := ListHosted(root)
+	if err != nil {
+		t.Fatalf("missing api/ must not fail: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected no repositories, got %+v", got)
+	}
+	k := RepoKey{Namespace: "alice", RepoType: "models", Repo: "only-models"}
+	if err := Register(root, Hosted(k)); err != nil {
+		t.Fatal(err)
+	}
+	got, err = ListHosted(root)
+	if err != nil {
+		t.Fatalf("absent datasets/spaces roots must not fail: %v", err)
+	}
+	if len(got) != 1 || got[0].ID() != k.ID() {
+		t.Fatalf("unexpected hosted enumeration: %+v", got)
+	}
+}
+
+// Orphan residue is a deleted repository whose marker is gone but whose
+// paths-info tree was left behind. It contributes nothing to enumeration.
+//
+// It also cannot be pruned by directory name alone: a repository may legitimately
+// be named "paths-info/repo", and that tree is byte-for-byte indistinguishable
+// from orphan residue under a markerless parent. What matters here is that the
+// residue is not enumerated as a repository and does not fail the scan.
+func TestListDoesNotEnumerateOrphanResidue(t *testing.T) {
+	root := t.TempDir()
+	keep := RepoKey{Namespace: "alice", RepoType: "models", Repo: "team/keeper"}
+	if err := Register(root, Hosted(keep)); err != nil {
+		t.Fatal(err)
+	}
+	// A removed repository: api/models/alice/ghost/ with paths-info but no marker.
+	orphanRoot := filepath.Join(root, "api", "models", "alice", "ghost")
+	deep := filepath.Join(orphanRoot, "paths-info", "commit", "weights", "file.bin")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A marker planted at the bottom of the orphan tree is not a valid
+	// descriptor, so enumeration must either skip it or report the malformed
+	// marker; it must never materialise a bogus repository. A valid marker there
+	// would describe a repository whose path does not match, which is rejected
+	// separately. Here the residue is simply never enumerated as a repository.
+	for _, list := range []struct {
+		name string
+		fn   func(string) ([]Descriptor, error)
+	}{{"List", List}, {"ListHosted", ListHosted}} {
+		all, _ := list.fn(root)
+		for _, d := range all {
+			if d.ID() == "alice/ghost" || d.Repo == "ghost" {
+				t.Fatalf("%s enumerated orphan residue as a repository: %+v", list.name, d)
+			}
+		}
+	}
+}
+
+// Even with no marker anywhere, a bare data subtree must not yield descriptors.
+func TestListDoesNotDescendBareDataSubtree(t *testing.T) {
+	root := t.TempDir()
+	orphan := filepath.Join(root, "api", "models", "alice", "ghost")
+	deep := filepath.Join(orphan, "paths-info", "commit", "weights", "file.bin")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	all, err := List(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 0 {
+		t.Fatalf("bare data subtree produced descriptors: %+v", all)
+	}
+}
+
+// A repository whose own name contains a data-subtree word stays discoverable.
+// This is why pruning can never be decided by directory name alone.
+func TestListKeepsRepositoryNamedLikeDataSubtree(t *testing.T) {
+	root := t.TempDir()
+	for _, repo := range []string{"team/resolve/model", "team/revision/model", "team/recycle/model", "paths-info/repo"} {
+		k := RepoKey{Namespace: "alice", RepoType: "models", Repo: repo}
+		if err := Register(root, Hosted(k)); err != nil {
+			t.Fatalf("register %s: %v", repo, err)
+		}
+	}
+	all, err := List(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 4 {
+		t.Fatalf("data-subtree-worded repositories were pruned: %+v", all)
+	}
+	hosted, err := ListHosted(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hosted) != 4 {
+		t.Fatalf("ListHosted pruned data-subtree-worded repositories: %+v", hosted)
+	}
+}
+
 func TestCommonDirectoryCasingCannotAliasAcrossRepositoryRoots(t *testing.T) {
 	root := t.TempDir()
 	base := RepoKey{Namespace: "alice", RepoType: "models", Repo: "team/model-a"}

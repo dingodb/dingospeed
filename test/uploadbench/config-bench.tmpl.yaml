@@ -70,4 +70,4 @@ diskClean:
     enabled: false
     cacheSizeLimit: 41781441855488
     cacheCleanStrategy: "LRU"
-    collectTimePeriod: 1
+    collectTimePeriod: 24

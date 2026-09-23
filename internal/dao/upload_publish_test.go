@@ -675,7 +675,8 @@ func TestPublishMetadataFootprintIsConstant(t *testing.T) {
 		t.Fatalf("manifest has %d files, want %d", result.FileCount, fileCount)
 	}
 	// N 个 blob + 1 份清单 + 2 份 commit 元数据 + 2 份版本标签元数据。
-	if want := fileCount + 7; countFiles(t, repos) != want {
+	// The durable inventory journal adds one constant file per node.
+	if want := fileCount + 8; countFiles(t, repos) != want {
 		t.Fatalf("metadata footprint is %d files, want %d", countFiles(t, repos), want)
 	}
 	if got := commitDirs(t, repos, "models", orgRepo); len(got) != 1 {

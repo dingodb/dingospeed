@@ -116,6 +116,7 @@ type ReadBlock struct {
 }
 
 type Scheduler struct {
+	HTTPURL      string    `json:"httpUrl" yaml:"httpUrl"`
 	OriginMode   string    `json:"-" yaml:"-"` // 记录原始状态
 	Mode         string    `json:"mode" yaml:"mode"`
 	Addr         string    `json:"addr" yaml:"addr"`
@@ -158,7 +159,7 @@ type DiskClean struct {
 	Enabled            bool   `json:"enabled" yaml:"enabled"`
 	CacheSizeLimit     int64  `json:"cacheSizeLimit" yaml:"cacheSizeLimit"`
 	CacheCleanStrategy string `json:"cacheCleanStrategy" yaml:"cacheCleanStrategy"`
-	CollectTimePeriod  int    `json:"collectTimePeriod" yaml:"collectTimePeriod" validate:"min=1,max=600"` // 周期采集内存使用量，单位秒
+	CollectTimePeriod  int    `json:"collectTimePeriod" yaml:"collectTimePeriod" validate:"min=1,max=600"` // 周期检测磁盘使用量，单位小时
 	InstanceID         string `json:"instanceID" yaml:"instanceID"`
 }
 
@@ -547,7 +548,7 @@ func (c *Config) SetDefaults() {
 		c.Download.RespChanSize = 30
 	}
 	if c.DiskClean.CollectTimePeriod == 0 {
-		c.DiskClean.CollectTimePeriod = 1
+		c.DiskClean.CollectTimePeriod = 24
 	}
 	c.Scheduler.OriginMode = c.Scheduler.Mode
 	if c.Scheduler.LinkDomain == "" {

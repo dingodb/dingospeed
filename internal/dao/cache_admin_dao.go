@@ -787,10 +787,18 @@ func (d *CacheAdminDao) softDeleteRepo(key repoKey, items []DeleteItem) []*Delet
 	uploadRepoLocks.Lock(lockKey)
 	defer uploadRepoLocks.Unlock(lockKey)
 
+	if IsLocalOrgRepo(key.OrgRepo) {
+		if err := NewUploadDao(d.fileDao, nil).recoverInventoryLocked(RepositoryKey(key.RepoType, key.OrgRepo)); err != nil {
+			return failAll(items, err.Error())
+		}
+	}
 	if err := validateRepositoryReferences(key.RepoType, key.OrgRepo); err != nil {
 		return failAll(items, err.Error())
 	}
 	idx := buildRepoIndex(key.RepoType, key.OrgRepo)
+	if idx.Source == CacheSourceUpload {
+		return d.journalSoftDelete(idx, items)
+	}
 	results := make([]*DeleteResult, 0, len(items))
 	for _, item := range items {
 		results = append(results, d.softDeleteOne(idx, item))

@@ -289,10 +289,10 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 		headers["range"] = fmt.Sprintf("bytes=%d-%d", startPos, endPos-1)
 	}
 	for i := 0; i < attempts; {
-		if _, err = util.RetryRequestContext(r.Context, func() (*common.Response, error) {
+		if err = util.RetryDownloadContext(r.Context, func() error {
 			trace := common.CacheTrace(r.Context)
 			if !trace.Begin() {
-				return nil, context.Canceled
+				return context.Canceled
 			}
 			defer func() { trace.End(r.Context.Err() != nil) }()
 
@@ -322,7 +322,7 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 					} else {
 						zap.S().Errorf("Failed resource request.(%d) %s", code, r.OrgRepo)
 					}
-					return nil
+					return myerr.NewAppendCode(code, fmt.Sprintf("upstream returned HTTP %d", code))
 				}
 				for {
 					select {
@@ -352,7 +352,7 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 									// 数据不完整，将EOF视为读取错误以触发重试/断点续传
 									zap.S().Errorf("file:%s/%s, taskNo:%d, premature EOF: expected %d bytes, got %d", r.OrgRepo, r.FileName, r.TaskNo, endPos-startPos, chunkByteLen)
 									headers["range"] = fmt.Sprintf("bytes=%d-%d", startPos+int64(chunkByteLen), endPos-1)
-									return fmt.Errorf("premature EOF: expected %d bytes, got %d", endPos-startPos, chunkByteLen)
+									return fmt.Errorf("premature EOF: expected %d bytes, got %d: %w", endPos-startPos, chunkByteLen, io.ErrUnexpectedEOF)
 								}
 								return nil
 							}
@@ -365,7 +365,7 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 					}
 				}
 			})
-			return nil, err
+			return err
 		}); err != nil {
 			if r.Context.Err() != nil {
 				return r.Context.Err()

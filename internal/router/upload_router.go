@@ -32,6 +32,7 @@ func NewUploadRouter(uploadEcho UploadEcho, uploadHandler *handler.UploadHandler
 // 「缓存管理」页），经 ingest agent 转发到这里。dingospeed 自己不再提供页面，
 // 否则同一套界面会有两份实现，各改各的。
 func (r *UploadRouter) initCacheAdminRouter() {
+	r.echo.POST("/api/upload-inventory/reconcile", handler.UploadReconcile)
 	r.echo.GET("/api/scheduler-registration", handler.SchedulerRegistration)
 	r.echo.PUT("/api/scheduler-registration", handler.SchedulerRegistration)
 	r.echo.GET("/api/transfer-settings", handler.TransferSettings)

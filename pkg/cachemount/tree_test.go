@@ -63,7 +63,7 @@ func TestTreeDiscoveryAndPinnedVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer snapshot.Close()
-	if versions[0].Status != "ready" || versions[0].SourceFilePath != "/mnt/dingo-models/datacanvas/team/model/main" {
+	if versions[0].Status != "ready" || versions[0].SourceFilePath != filepath.Join("/mnt/dingo-models", "datacanvas", "team", "model", "main") {
 		t.Fatal(versions)
 	}
 	// Moving the branch metadata must not change the already mounted snapshot.
@@ -122,5 +122,72 @@ func TestPlainHFCannotHideCorruptContainer(t *testing.T) {
 	if p, err := openTreePayload(name, 4, true); err == nil {
 		p.File.Close()
 		t.Fatal("corrupt OLAH accepted as raw")
+	}
+}
+
+// Both remote providers use normalized cached metadata, but distinct payload roots.
+func TestRemoteProviderTree(t *testing.T) {
+	for _, namespace := range []string{repository.HuggingFace, repository.ModelScope} {
+		t.Run(namespace, func(t *testing.T) {
+			root := t.TempDir()
+			k := repository.RepoKey{Namespace: namespace, RepoType: "models", Repo: "team/model"}
+			treeJSON(t, filepath.Join(k.APIRoot(root), repository.Marker), repository.Remote(k))
+			body, _ := json.Marshal(map[string]any{"sha": "commit1", "siblings": []any{map[string]any{"rfilename": "nested/config.json", "size": 8, "blobId": "blob1"}}})
+			for _, rev := range []string{"master", "commit1"} {
+				treeJSON(t, filepath.Join(k.Revision(root, rev), "meta_get.json"), map[string]any{"status_code": 200, "content": hex.EncodeToString(body)})
+			}
+			backing := k.Blob(root, "blob1")
+			data, err := os.ReadFile(fixture(t, []byte("abcdefgh")))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = os.MkdirAll(filepath.Dir(backing), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err = os.WriteFile(backing, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			selections, err := Discover(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(selections) != 1 || selections[0].Namespace != namespace || selections[0].Revision != "master" {
+				t.Fatalf("unexpected discovery: %+v", selections)
+			}
+			snapshot, versions, err := PrepareTree(selections, filepath.Join(root, "view"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			prefix := namespace + "/team/model/master"
+			if len(versions) != 1 || versions[0].Status != "ready" || versions[0].Commit != "commit1" {
+				snapshot.Close()
+				t.Fatalf("not ready: %+v", versions)
+			}
+			if versions[0].Files[0].Backing != backing {
+				t.Fatalf("wrong backing: %+v", versions)
+			}
+			payload := snapshot.Files[prefix+"/nested/config.json"]
+			if payload == nil {
+				snapshot.Close()
+				t.Fatal("missing virtual file")
+			}
+			b := make([]byte, 8)
+			_, err = payload.ReadAt(b, 0)
+			snapshot.Close()
+			if err != nil || string(b) != "abcdefgh" {
+				t.Fatalf("payload: %q %v", b, err)
+			}
+			if err = os.Remove(backing); err != nil {
+				t.Fatal(err)
+			}
+			snapshot, versions, err = PrepareTree(selections, filepath.Join(root, "view"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer snapshot.Close()
+			if versions[0].Status != "unavailable" || len(snapshot.Files) != 0 {
+				t.Fatalf("exposed incomplete version: %+v", versions)
+			}
+		})
 	}
 }

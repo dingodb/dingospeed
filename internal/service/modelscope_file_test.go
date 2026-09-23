@@ -421,6 +421,79 @@ func TestModelScopeFailureDoesNotCompleteCache(t *testing.T) {
 	}
 }
 
+func TestModelScopeAutomaticRetryBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name                    string
+		status, failures, calls int
+		complete                bool
+	}{
+		{"temporary-status", 503, 2, 3, true},
+		{"short-body", 200, 2, 3, true},
+		{"exhausted", 503, 10, 3, false},
+		{"unauthorized", 401, 10, 1, false},
+		{"forbidden", 403, 10, 1, false},
+		{"not-found", 404, 10, 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			content := bytes.Repeat([]byte("auto-retry-12345!"), 1024)
+			oid := fmt.Sprintf("%x", sha256.Sum256(content))
+			var calls atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "/repo/files") {
+					fmt.Fprintf(w, `{"Code":200,"Data":{"Files":[{"Type":"blob","Path":"file.bin","Revision":"fixed","Sha256":%q,"Size":%d}]}}`, oid, len(content))
+					return
+				}
+				n := calls.Add(1)
+				if int(n) <= tc.failures && tc.status != 200 {
+					w.WriteHeader(tc.status)
+					return
+				}
+				start, end, _ := util.FileRange(r.Header.Get("Range"), int64(len(content)))
+				if tc.name == "short-body" && start != int64(n-1)*1024 {
+					t.Errorf("retry offset=%d on attempt=%d", start, n)
+				}
+				w.Header().Set("Content-Length", fmt.Sprint(end-start))
+				if start > 0 {
+					w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end-1, len(content)))
+					w.WriteHeader(206)
+				}
+				if int(n) <= tc.failures {
+					end = min(end, start+1024)
+				}
+				w.Write(content[start:end])
+			}))
+			defer upstream.Close()
+			msConfig(t, upstream.URL)
+			config.SysConfig.Retry.Attempts = 3
+			config.SysConfig.Download.RemoteFileRangeSize = 0
+			speed := httptest.NewServer(msEngine())
+			defer speed.Close()
+			req, _ := http.NewRequest("GET", speed.URL+"/file?repo=Qwen%2Fdemo&revision=fixed&path=file.bin", nil)
+			req.Header.Set("X-Dingo-Ensure-Cache", "1")
+			resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, readErr := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if calls.Load() != int32(tc.calls) || (resp.Trailer.Get("X-Dingo-Cache-Complete") == "true") != tc.complete {
+				t.Fatalf("calls=%d trailers=%v error=%v", calls.Load(), resp.Trailer, readErr)
+			}
+			if tc.complete {
+				if readErr != nil || !bytes.Equal(body, content) {
+					t.Fatalf("retried response corrupted: bytes=%d error=%v", len(body), readErr)
+				}
+				actual, _ := msPayload(t, repository.RepoKey{Namespace: repository.ModelScope, RepoType: "models", Repo: "Qwen/demo"}, oid)
+				if !bytes.Equal(actual, content) {
+					t.Fatal("retried cache differs from source")
+				}
+			} else if !strings.Contains(resp.Trailer.Get("X-Dingo-Cache-Error"), fmt.Sprint(tc.status)) {
+				t.Fatalf("failure lost HTTP reason: %v", resp.Trailer)
+			}
+		})
+	}
+}
+
 func TestModelScopeConcurrentReaders(t *testing.T) {
 	core, logs := observer.New(zap.WarnLevel)
 	restore := zap.ReplaceGlobals(zap.New(core))

@@ -17,6 +17,7 @@ import (
 
 	"dingospeed/internal/downloader"
 	"dingospeed/pkg/config"
+	"dingospeed/pkg/inventory"
 	"dingospeed/pkg/repository"
 	"dingospeed/pkg/util"
 
@@ -348,6 +349,9 @@ func (u *UploadDao) UploadWholeFile(param LocalUploadParam, body io.Reader) (*Lo
 	repoLockKey := uploadRepoLockKey(param.RepoType, orgRepo)
 	uploadRepoLocks.Lock(repoLockKey)
 	defer uploadRepoLocks.Unlock(repoLockKey)
+	if err := u.recoverInventoryLocked(RepositoryKey(param.RepoType, orgRepo)); err != nil {
+		return nil, err
+	}
 	uploadRevisionLocks.Lock(revisionLockKey)
 	defer uploadRevisionLocks.Unlock(revisionLockKey)
 
@@ -411,6 +415,9 @@ func (u *UploadDao) PublishFiles(param LocalPublishParam) (*LocalPublishResult, 
 	repoLockKey := uploadRepoLockKey(param.RepoType, orgRepo)
 	uploadRepoLocks.Lock(repoLockKey)
 	defer uploadRepoLocks.Unlock(repoLockKey)
+	if err := u.recoverInventoryLocked(RepositoryKey(param.RepoType, orgRepo)); err != nil {
+		return nil, err
+	}
 
 	// 版本锁与即时生效上传共用同一把：两者都要“读清单 → 合并 → 写回”，
 	if param.CreateOnly {
@@ -1003,11 +1010,10 @@ func (u *UploadDao) CleanupExpiredStagedUploads(retention time.Duration) (int, e
 	}
 	cutoff := time.Now().Add(-retention)
 	removed := 0
-	all, listErr := repository.List(config.SysConfig.Repos())
+	all, listErr := repository.ListHosted(config.SysConfig.Repos())
 	if listErr != nil {
 		return 0, listErr
 	}
-	filesRoot := filepath.Join(config.SysConfig.Repos(), "files")
 	for _, descriptor := range all {
 		if descriptor.Source != "hosted" || !descriptor.Persistent {
 			continue
@@ -1024,7 +1030,7 @@ func (u *UploadDao) CleanupExpiredStagedUploads(retention time.Duration) (int, e
 			if entry.IsDir() || !strings.HasSuffix(entry.Name(), localUploadStageSuffix) {
 				return nil
 			}
-			parsedRepoType, orgRepo, sha, ok := stagedBlobIdentity(filesRoot, path)
+			parsedRepoType, orgRepo, sha, ok := stagedBlobIdentity(config.SysConfig.Repos(), path, descriptor)
 			if !ok || parsedRepoType != repoType || !IsLocalOrgRepo(orgRepo) {
 				return nil
 			}
@@ -1109,7 +1115,7 @@ type localRepoKey struct {
 func collectLocalBlobs(root string) (map[localRepoKey][]string, error) {
 	result := make(map[localRepoKey][]string)
 	repos := filepath.Dir(root)
-	all, err := repository.List(repos)
+	all, err := repository.ListHosted(repos)
 	if err != nil {
 		return nil, err
 	}
@@ -1328,8 +1334,10 @@ func (u *UploadDao) RunStagedUploadCleanup(ctx context.Context) {
 	}
 }
 
-func stagedBlobIdentity(root, stagePath string) (repoType, orgRepo, sha string, ok bool) {
-	d, rel, err := repository.Locate(filepath.Dir(root), stagePath)
+func stagedBlobIdentity(root, stagePath string, descriptor repository.Descriptor) (repoType, orgRepo, sha string, ok bool) {
+	// The cleanup already enumerated this repository; reuse its identity instead
+	// of scanning the registry again for every staged file.
+	d, rel, err := repository.LocateRegistered(root, stagePath, []repository.Descriptor{descriptor})
 	if err != nil || d.Source != "hosted" || !d.Persistent {
 		return "", "", "", false
 	}
@@ -1432,7 +1440,7 @@ func (u *UploadDao) readManifest(repoType, orgRepo, commit string) []LocalManife
 // 每次上传只写固定的 3 个文件，与该版本已有多少文件无关。
 // 逐条落 paths-info、逐条建 resolve 链接会让逐个上传 N 个文件的代价变成 O(N²)
 // 个文件系统对象（N=1000 时约一百万个），且其中绝大多数永远不会被读到。
-func (u *UploadDao) writeEffectiveMetadata(repoType, orgRepo, revision, commit string, manifest []LocalManifestFile) error {
+func (u *UploadDao) writeEffectiveMetadataRaw(repoType, orgRepo, revision, commit string, manifest []LocalManifestFile) error {
 	manifestPath := LocalManifestPath(repoType, orgRepo, commit)
 	if err := ensureLocalUploadPathSafe(config.SysConfig.Repos(), manifestPath); err != nil {
 		return err
@@ -1446,7 +1454,15 @@ func (u *UploadDao) writeEffectiveMetadata(repoType, orgRepo, revision, commit s
 	if err := u.writeMeta(repoType, orgRepo, commit, commit, manifest); err != nil {
 		return err
 	}
-	return u.writeMeta(repoType, orgRepo, revision, commit, manifest)
+	if err := u.writeMeta(repoType, orgRepo, revision, commit, manifest); err != nil {
+		return err
+	}
+	for _, dir := range []string{filepath.Dir(manifestPath), RepositoryKey(repoType, orgRepo).Revision(config.SysConfig.Repos(), revision)} {
+		if err := inventory.SyncParents(config.SysConfig.Repos(), filepath.Join(dir, "meta_get.json")); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (u *UploadDao) writeMeta(repoType, orgRepo, revision, commit string, manifest []LocalManifestFile) error {

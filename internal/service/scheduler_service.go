@@ -56,6 +56,7 @@ func (s *SchedulerService) Register() {
 				if err == nil {
 					config.SysConfig.SetSchedulerID(response.Id)
 					registered = true
+					wakeInventoryConnection()
 				}
 			} else {
 				err = s.schedulerDao.Heartbeat()

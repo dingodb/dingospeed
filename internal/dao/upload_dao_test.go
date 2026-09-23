@@ -825,7 +825,8 @@ func TestUploadMetadataFootprintStaysLinear(t *testing.T) {
 	// 每次上传固定写 1 个 blob + 1 份清单 + 2 份 commit 元数据，
 	// 外加全程复用的 2 份版本标签元数据。逐条落 paths-info / 建 resolve 链接的
 	// 老写法在这个规模下会产生一万多个文件。
-	if want := 4*fileCount + 4; objects != want {
+	// One durable inventory journal outside the repository is constant overhead.
+	if want := 4*fileCount + 5; objects != want {
 		t.Fatalf("metadata footprint is %d files, want %d (quadratic growth regression?)", objects, want)
 	}
 }
