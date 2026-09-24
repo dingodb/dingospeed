@@ -35,23 +35,27 @@ type TaskParam struct {
 	CacheResult     chan error // Optional buffered terminal result, sent after cache writes finish.
 	OnCacheComplete func()
 	Peer            bool
-	Revision        string
-	RepoKey         repository.RepoKey
-	Context         context.Context
-	DingFile        *DingCache
-	TaskNo          int
-	TaskSize        int
-	BlobsFile       string
-	FileName        string
-	FileSize        int64
-	ResponseChan    chan []byte
-	OrgRepo         string
-	Authorization   string
-	Domain          string
-	Uri             string
-	DataType        string
-	Etag            string
-	Cancel          context.CancelFunc
+	// Unordered lets range outputs reach ResponseChan as they arrive. Only for
+	// consumers that ignore byte order, such as a cache-only preheat that just
+	// counts bytes; client downloads must keep file order.
+	Unordered     bool
+	Revision      string
+	RepoKey       repository.RepoKey
+	Context       context.Context
+	DingFile      *DingCache
+	TaskNo        int
+	TaskSize      int
+	BlobsFile     string
+	FileName      string
+	FileSize      int64
+	ResponseChan  chan []byte
+	OrgRepo       string
+	Authorization string
+	Domain        string
+	Uri           string
+	DataType      string
+	Etag          string
+	Cancel        context.CancelFunc
 }
 
 type DownloadTask struct {
