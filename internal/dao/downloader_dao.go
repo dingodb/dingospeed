@@ -79,20 +79,7 @@ func (d *DownloaderDao) FileDownload(startPos, endPos int64, isInnerRequest bool
 			defer func() {
 				wg.Done()
 			}()
-			for i := 0; i < len(tasks); i++ {
-				if taskParam.Context.Err() != nil {
-					break
-				}
-				task := tasks[i]
-				if i == 0 {
-					select {
-					case task.GetResponseChan() <- []byte{}:
-					case <-taskParam.Context.Done():
-						return
-					}
-				}
-				task.OutResult()
-			}
+			drainOutputs(taskParam.Context, tasks, taskParam.Unordered)
 		}()
 		if len(tasks) > 0 {
 			wg.Add(1)
@@ -437,4 +424,41 @@ func peerFileURI(p *downloader.TaskParam) string {
 
 	q := url.Values{"repo": {p.RepoKey.Repo}, "revision": {p.Revision}, "path": {p.FileName}}
 	return "/api/repositories/" + url.PathEscape(p.RepoKey.RepoType) + "/" + url.PathEscape(p.RepoKey.Namespace) + "/file?" + q.Encode()
+}
+
+// drainOutputs moves every range task's output into the shared response channel.
+//
+// A client needs the file in byte order, so ranges are drained one after
+// another. The cost is that a later range can buffer only
+// download.remoteFileBufferSize before it blocks behind the ranges ahead of it,
+// which serialises a split download back into roughly one stream per file.
+// Consumers that ignore order (Unordered) drain every range concurrently so
+// each range keeps its connection busy.
+func drainOutputs(ctx context.Context, tasks []common.DownloadTask, unordered bool) {
+	if len(tasks) == 0 || ctx.Err() != nil {
+		return
+	}
+	select {
+	case tasks[0].GetResponseChan() <- []byte{}:
+	case <-ctx.Done():
+		return
+	}
+	if !unordered {
+		for _, task := range tasks {
+			if ctx.Err() != nil {
+				return
+			}
+			task.OutResult()
+		}
+		return
+	}
+	var wg sync.WaitGroup
+	for _, task := range tasks {
+		wg.Add(1)
+		go func(task common.DownloadTask) {
+			defer wg.Done()
+			task.OutResult()
+		}(task)
+	}
+	wg.Wait()
 }

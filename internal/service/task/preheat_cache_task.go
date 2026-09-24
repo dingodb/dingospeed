@@ -16,6 +16,7 @@ import (
 	"dingospeed/pkg/consts"
 	"dingospeed/pkg/hfprojection"
 	"dingospeed/pkg/repository"
+	"dingospeed/pkg/transfersettings"
 
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -217,7 +218,9 @@ func (p *PreheatCacheTask) preheatProcess(orgRepo string) error {
 }
 
 func (p *PreheatCacheTask) startPreheat(hfUri, orgRepo, fileName, commit, etag, authorization string, fileSize, offset int64) error {
-	bgCtx := context.WithValue(p.Ctx, consts.PromSource, "localhost")
+	// Preheat is background work: it must leave transfer slots to interactive
+	// downloads, and it only counts bytes, so its ranges may complete out of order.
+	bgCtx := transfersettings.WithBackground(context.WithValue(p.Ctx, consts.PromSource, "localhost"))
 	responseChan := make(chan []byte, config.SysConfig.Download.RespChanSize)
 	blobsFile := dao.BlobPath(p.Job.Datatype, orgRepo, etag)
 	filesPath := dao.ResolvePath(p.Job.Datatype, orgRepo, commit, fileName)
@@ -239,6 +242,7 @@ func (p *PreheatCacheTask) startPreheat(hfUri, orgRepo, fileName, commit, etag, 
 		DataType:      p.Job.Datatype,
 		Etag:          etag,
 		CacheResult:   make(chan error, 1),
+		Unordered:     true,
 	}
 	taskParam.Context = bgCtx
 	taskParam.ResponseChan = responseChan

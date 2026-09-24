@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -39,6 +40,29 @@ var gates [5]transferlimit.Gate
 // with the same configured limit keeps the operator's number meaningful while
 // making it impossible for transfers to starve metadata.
 var metaGates [5]transferlimit.Gate
+
+// bgGates cap how many transfer slots background work may hold, so that raising
+// its concurrency can never leave interactive downloads without a slot. A
+// background transfer takes a bgGates slot first and then a regular one.
+var bgGates [5]transferlimit.Gate
+
+type backgroundKey struct{}
+
+// WithBackground marks transfers started under ctx as background work, such as
+// a preheat job, which must leave part of each transfer gate to foreground
+// requests.
+func WithBackground(ctx context.Context) context.Context {
+	return context.WithValue(ctx, backgroundKey{}, true)
+}
+
+func isBackground(ctx context.Context) bool {
+	v, _ := ctx.Value(backgroundKey{}).(bool)
+	return v
+}
+
+// foregroundReserve is how many transfer slots background work leaves free: a
+// quarter of the limit, at least one and at most eight (one fully split file).
+func foregroundReserve(limit int) int { return min(8, max(1, limit/4)) }
 
 func AcquireDownload(ctx context.Context) (func(), error) {
 	return gates[4].Acquire(ctx, func() int { return Current().Download })
@@ -113,6 +137,7 @@ func Save(s Settings) error {
 	for i := range gates {
 		gates[i].Wake()
 		metaGates[i].Wake()
+		bgGates[i].Wake()
 	}
 	return nil
 }
@@ -137,10 +162,46 @@ func limitFor(index int) func() int {
 	}
 }
 
-// Do runs a bulk content transfer under the kind's transfer gate.
+func backgroundLimitFor(index int) func() int {
+	return func() int {
+		limit := limitFor(index)()
+		return max(1, limit-foregroundReserve(limit))
+	}
+}
+
+// Do runs a bulk content transfer under the kind's transfer gate. Background
+// transfers additionally hold a bgGates slot for as long as the body is open.
 func Do(kind string, client *http.Client, req *http.Request) (*http.Response, error) {
 	index := kindIndex(kind)
-	return gates[index].Do(client, req, limitFor(index))
+	if !isBackground(req.Context()) {
+		return gates[index].Do(client, req, limitFor(index))
+	}
+	release, err := bgGates[index].Acquire(req.Context(), backgroundLimitFor(index))
+	if err != nil {
+		return nil, err
+	}
+	resp, err := gates[index].Do(client, req, limitFor(index))
+	if err != nil {
+		release()
+		return resp, err
+	}
+	resp.Body = &releasingBody{ReadCloser: resp.Body, release: release}
+	return resp, nil
+}
+
+// releasingBody returns a background slot once the body is drained or closed.
+type releasingBody struct {
+	io.ReadCloser
+	release func()
+}
+
+func (b *releasingBody) Close() error { defer b.release(); return b.ReadCloser.Close() }
+func (b *releasingBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err == io.EOF {
+		b.release()
+	}
+	return n, err
 }
 
 // DoMeta runs a small metadata request under the kind's metadata gate, which is
