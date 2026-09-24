@@ -264,14 +264,14 @@ func (h *MetaHandler) RepositoryDirectories(c echo.Context) error {
 	if err := (repository.RepoKey{Namespace: namespace, RepoType: typ, Repo: "placeholder"}).Validate(); err != nil {
 		return echo.NewHTTPError(400, err.Error())
 	}
-	all, err := repository.List(config.SysConfig.Repos())
+	all, err := repository.Discover(c.Request().Context(), config.SysConfig.Repos(), typ, namespace)
 	if err != nil {
 		return repositoryHTTPError(err)
 	}
 	result := []repository.RepoKey{}
 	for _, d := range all {
 		if d.Namespace == namespace && d.RepoType == typ {
-			result = append(result, d.RepoKey)
+			result = append(result, d)
 		}
 	}
 	return c.JSON(200, result)

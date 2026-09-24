@@ -1,26 +1,30 @@
 package hfprojection
 
 import (
+	"context"
 	"os"
 	"sync"
 )
 
 // Index is the read-only projection used by repository catalogue queries. A
-// refresh scans the existing HF cache once and atomically replaces one repo
-// type; manifest reads then reuse that snapshot without walking the cache.
+// refresh reads repository metadata only. File manifests are loaded lazily for
+// the requested repository and revision, then reused until refresh/invalidation.
 type Index struct {
-	mu        sync.RWMutex
-	refreshMu sync.Mutex
-	scopes    map[string]indexedScope
+	mu          sync.RWMutex
+	refreshGate chan struct{}
+	scopes      map[string]indexedScope
 }
 
 type indexedScope struct {
-	catalog   Catalog
-	manifests map[string]Manifest
-	errors    map[string]error
+	generation *int
+	catalog    Catalog
+	manifests  map[string]Manifest
+	errors     map[string]error
 }
 
-func NewIndex() *Index { return &Index{scopes: make(map[string]indexedScope)} }
+func NewIndex() *Index {
+	return &Index{scopes: make(map[string]indexedScope), refreshGate: make(chan struct{}, 1)}
+}
 
 var DefaultIndex = NewIndex()
 
@@ -30,39 +34,30 @@ func manifestKey(repo, revision string) string { return repo + "\x00" + revision
 // Refresh rebuilds only from local cache files. It never calls HF and never
 // writes the provider cache or its database.
 func (i *Index) Refresh(root, repoType string) (Catalog, error) {
-	i.refreshMu.Lock()
-	defer i.refreshMu.Unlock()
-	return i.refresh(root, repoType)
+	return i.RefreshContext(context.Background(), root, repoType)
 }
 
-func (i *Index) refresh(root, repoType string) (Catalog, error) {
-	reader := Reader{Root: root}
+func (i *Index) RefreshContext(ctx context.Context, root, repoType string) (Catalog, error) {
+	select {
+	case i.refreshGate <- struct{}{}:
+		defer func() { <-i.refreshGate }()
+	case <-ctx.Done():
+		return Catalog{}, ctx.Err()
+	}
+	return i.refreshContext(ctx, root, repoType)
+}
+
+func (i *Index) refreshContext(ctx context.Context, root, repoType string) (Catalog, error) {
+	reader := Reader{Root: root, Context: ctx}
 	catalog, err := reader.Catalog(repoType)
 	if err != nil {
 		return Catalog{}, err
 	}
-	scope := indexedScope{catalog: catalog, manifests: make(map[string]Manifest), errors: make(map[string]error)}
-	for _, repo := range catalog.Repos {
-		if repo.Error != "" {
-			continue
-		}
-		for _, revision := range repo.Revisions {
-			manifest, readErr := reader.Manifest(repoType, repo.Repo, revision.Name)
-			key := manifestKey(repo.Repo, revision.Name)
-			if readErr != nil {
-				scope.errors[key] = readErr
-				continue
-			}
-			scope.manifests[key] = manifest
-			commitKey := manifestKey(repo.Repo, revision.Commit)
-			if _, seen := scope.manifests[commitKey]; seen {
-				continue
-			}
-			commitManifest := manifest
-			commitManifest.Revision = revision.Commit
-			scope.manifests[commitKey] = commitManifest
-		}
+	if err := ctx.Err(); err != nil {
+		return Catalog{}, err
 	}
+	scope := indexedScope{generation: new(int), catalog: catalog, manifests: make(map[string]Manifest), errors: make(map[string]error)}
+
 	i.mu.Lock()
 	i.scopes[scopeKey(root, repoType)] = scope
 	i.mu.Unlock()
@@ -70,24 +65,22 @@ func (i *Index) refresh(root, repoType string) (Catalog, error) {
 }
 
 func (i *Index) Manifest(root, repoType, repo, revision string) (Manifest, error) {
+	return i.ManifestContext(context.Background(), root, repoType, repo, revision)
+}
+func (i *Index) ManifestContext(ctx context.Context, root, repoType, repo, revision string) (Manifest, error) {
+	if err := ctx.Err(); err != nil {
+		return Manifest{}, err
+	}
 	key := scopeKey(root, repoType)
 	i.mu.RLock()
 	_, exists := i.scopes[key]
 	i.mu.RUnlock()
 	if !exists {
-		i.refreshMu.Lock()
-		i.mu.RLock()
-		_, exists = i.scopes[key]
-		i.mu.RUnlock()
-		if !exists {
-			_, err := i.refresh(root, repoType)
-			if err != nil {
-				i.refreshMu.Unlock()
-				return Manifest{}, err
-			}
+		if _, err := i.RefreshContext(ctx, root, repoType); err != nil {
+			return Manifest{}, err
 		}
-		i.refreshMu.Unlock()
 	}
+
 	i.mu.RLock()
 	scope := i.scopes[key]
 	manifest, ok := scope.manifests[manifestKey(repo, revision)]
@@ -97,7 +90,29 @@ func (i *Index) Manifest(root, repoType, repo, revision string) (Manifest, error
 		return Manifest{}, readErr
 	}
 	if !ok {
-		return Manifest{}, os.ErrNotExist
+		known := false
+		for _, candidate := range scope.catalog.Repos {
+			if candidate.Repo == repo {
+				for _, rev := range candidate.Revisions {
+					if rev.Name == revision || rev.Commit == revision {
+						known = true
+					}
+				}
+			}
+		}
+		if !known {
+			return Manifest{}, os.ErrNotExist
+		}
+		manifest, readErr = (Reader{Root: root, Context: ctx}).Manifest(repoType, repo, revision)
+		if readErr != nil {
+			return Manifest{}, readErr
+		}
+		i.mu.Lock()
+		current, exists := i.scopes[key]
+		if exists && current.manifests != nil && current.generation == scope.generation {
+			current.manifests[manifestKey(repo, revision)] = manifest
+		}
+		i.mu.Unlock()
 	}
 	return manifest, nil
 }
@@ -108,8 +123,8 @@ func (i *Index) Invalidate(root, repoType string) {
 	if i == nil {
 		return
 	}
-	i.refreshMu.Lock()
-	defer i.refreshMu.Unlock()
+	i.refreshGate <- struct{}{}
+	defer func() { <-i.refreshGate }()
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if repoType == "" {

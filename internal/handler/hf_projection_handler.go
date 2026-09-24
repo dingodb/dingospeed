@@ -27,9 +27,9 @@ func HFLocalCatalog(c echo.Context) error {
 	var out hfprojection.Catalog
 	var err error
 	if k.Namespace == repository.ModelScope {
-		out, err = (hfprojection.Reader{Root: config.SysConfig.Repos(), Namespace: k.Namespace}).Catalog(k.RepoType)
+		out, err = (hfprojection.Reader{Root: config.SysConfig.Repos(), Namespace: k.Namespace, Context: c.Request().Context()}).Catalog(k.RepoType)
 	} else {
-		out, err = hfprojection.DefaultIndex.Refresh(config.SysConfig.Repos(), k.RepoType)
+		out, err = hfprojection.DefaultIndex.RefreshContext(c.Request().Context(), config.SysConfig.Repos(), k.RepoType)
 	}
 	if err != nil {
 		return hfProjectionError(err)
@@ -45,9 +45,9 @@ func HFLocalManifest(c echo.Context) error {
 	var out hfprojection.Manifest
 	var err error
 	if k.Namespace == repository.ModelScope {
-		out, err = (hfprojection.Reader{Root: config.SysConfig.Repos(), Namespace: k.Namespace}).Manifest(k.RepoType, k.Repo, c.QueryParam("revision"))
+		out, err = (hfprojection.Reader{Root: config.SysConfig.Repos(), Namespace: k.Namespace, Context: c.Request().Context()}).Manifest(k.RepoType, k.Repo, c.QueryParam("revision"))
 	} else {
-		out, err = hfprojection.DefaultIndex.Manifest(config.SysConfig.Repos(), k.RepoType, k.Repo, c.QueryParam("revision"))
+		out, err = hfprojection.DefaultIndex.ManifestContext(c.Request().Context(), config.SysConfig.Repos(), k.RepoType, k.Repo, c.QueryParam("revision"))
 	}
 	if err != nil {
 		return hfProjectionError(err)

@@ -3,6 +3,7 @@
 package hfprojection
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -54,8 +55,10 @@ type Manifest struct {
 
 // Reader has only a filesystem root. No downloader or database can be injected.
 type Reader struct {
-	Root      string
-	Namespace string
+	metadataCache map[string]metadata
+	Context       context.Context
+	Root          string
+	Namespace     string
 }
 
 func (r Reader) namespace() string {
@@ -76,7 +79,14 @@ func (r Reader) key(typ, repo string) (repository.RepoKey, error) {
 	}
 	return k, nil
 }
-func (r Reader) safe(p string) error { return repository.SafePath(r.Root, p) }
+func (r Reader) safe(p string) error {
+	if r.Context != nil {
+		if err := r.Context.Err(); err != nil {
+			return err
+		}
+	}
+	return repository.SafePath(r.Root, p)
+}
 func (r Reader) dirs(p string) ([]os.DirEntry, error) {
 	if err := r.safe(p); err != nil {
 		return nil, err
@@ -103,58 +113,67 @@ func (r Reader) Catalog(typ string) (Catalog, error) {
 	}
 	names := map[string]bool{}
 	if r.namespace() == repository.ModelScope {
-		descriptors, err := repository.List(r.Root)
+		ctx := r.Context
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		keys, err := repository.Discover(ctx, r.Root, typ, repository.ModelScope)
 		if err != nil {
 			return out, err
 		}
-		for _, d := range descriptors {
-			if d.Namespace == r.namespace() && d.RepoType == typ {
-				names[d.Repo] = true
+		for _, key := range keys {
+			names[key.Repo] = true
+		}
+	}
+	for _, area := range []string{"api", "files"} {
+		base := filepath.Join(r.Root, area, typ)
+		if r.namespace() == repository.ModelScope {
+			if area == "api" {
+				base = filepath.Join(base, repository.ModelScope)
+			} else {
+				base = filepath.Join(r.Root, repository.ModelScope, typ)
 			}
 		}
-	} else {
-		for _, area := range []string{"api", "files"} {
-			base := filepath.Join(r.Root, area, typ)
-			owners, err := r.dirs(base)
+		owners, err := r.dirs(base)
+		if err != nil {
+			return out, err
+		}
+		for _, owner := range owners {
+			if !owner.IsDir() || (r.namespace() == repository.HuggingFace && (strings.EqualFold(owner.Name(), repository.Local) || strings.EqualFold(owner.Name(), repository.ModelScope))) {
+				continue
+			}
+			children, err := r.dirs(filepath.Join(base, owner.Name()))
 			if err != nil {
 				return out, err
 			}
-			for _, owner := range owners {
-				if !owner.IsDir() || strings.EqualFold(owner.Name(), repository.Local) || strings.EqualFold(owner.Name(), repository.ModelScope) {
+			nested := map[string]bool{}
+			for _, child := range children {
+				if !child.IsDir() {
 					continue
 				}
-				children, err := r.dirs(filepath.Join(base, owner.Name()))
+				entries, err := r.dirs(filepath.Join(base, owner.Name(), child.Name()))
 				if err != nil {
 					return out, err
 				}
-				nested := map[string]bool{}
-				for _, child := range children {
-					if !child.IsDir() {
-						continue
-					}
-					entries, err := r.dirs(filepath.Join(base, owner.Name(), child.Name()))
-					if err != nil {
-						return out, err
-					}
-					for _, e := range entries {
-						if e.IsDir() && cacheArea(e.Name(), area) {
-							names[owner.Name()+"/"+child.Name()] = true
-							nested[child.Name()] = true
-						}
+				for _, e := range entries {
+					if e.IsDir() && cacheArea(e.Name(), area) {
+						names[owner.Name()+"/"+child.Name()] = true
+						nested[child.Name()] = true
 					}
 				}
-				// A real two-segment repository can itself be named revision,
-				// paths-info or resolve. Prefer its own layout over treating its
-				// name as the enclosing single-segment repository's cache area.
-				for _, child := range children {
-					if child.IsDir() && cacheArea(child.Name(), area) && !nested[child.Name()] {
-						names[owner.Name()] = true
-					}
+			}
+			// A real two-segment repository can itself be named revision,
+			// paths-info or resolve. Prefer its own layout over treating its
+			// name as the enclosing single-segment repository's cache area.
+			for _, child := range children {
+				if child.IsDir() && cacheArea(child.Name(), area) && !nested[child.Name()] {
+					names[owner.Name()] = true
 				}
 			}
 		}
 	}
 	for name := range names {
+		r.metadataCache = make(map[string]metadata)
 		k, err := r.key(typ, name)
 		if err != nil {
 			return out, err
@@ -163,6 +182,9 @@ func (r Reader) Catalog(typ string) (Catalog, error) {
 		repo.Revisions, err = r.revisions(k)
 		if err == nil {
 			repo.Access, err = r.access(k, repo.Revisions)
+		}
+		if r.Context != nil && r.Context.Err() != nil {
+			return out, r.Context.Err()
 		}
 		if err != nil {
 			repo.Error = "cached repository metadata is unreadable or invalid"
@@ -250,6 +272,17 @@ func (r Reader) access(k repository.RepoKey, revisions []Revision) (string, erro
 }
 
 func (r Reader) decode(p string, out any) error {
+	if r.Context != nil {
+		if err := r.Context.Err(); err != nil {
+			return err
+		}
+	}
+	if target, ok := out.(*metadata); ok && r.metadataCache != nil {
+		if cached, found := r.metadataCache[p]; found {
+			*target = cached
+			return nil
+		}
+	}
 	if err := r.safe(p); err != nil {
 		return err
 	}
@@ -282,6 +315,9 @@ func (r Reader) decode(p string, out any) error {
 	}
 	if err = json.Unmarshal(b, out); err != nil {
 		return fmt.Errorf("invalid cached response body: %w", err)
+	}
+	if target, ok := out.(*metadata); ok && r.metadataCache != nil {
+		r.metadataCache[p] = *target
 	}
 	return nil
 }
@@ -488,6 +524,11 @@ func (r Reader) walk(root string, visit func(string, fs.DirEntry) error) error {
 		return err
 	}
 	err := filepath.WalkDir(root, func(p string, e fs.DirEntry, err error) error {
+		if r.Context != nil {
+			if err := r.Context.Err(); err != nil {
+				return err
+			}
+		}
 		if err != nil {
 			return err
 		}
