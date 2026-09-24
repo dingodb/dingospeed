@@ -18,6 +18,7 @@ import (
 	"dingospeed/pkg/repository"
 
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 type CacheTask struct {
@@ -61,6 +62,17 @@ type PreheatCacheTask struct {
 	OnFinish      func(error)
 	OnStart       func()
 	InitialState  string
+	// transfer moves one file's bytes. It defaults to startPreheat; tests set it
+	// to observe how transfers are scheduled without touching the network.
+	transfer func(hfUri, orgRepo, fileName, commit, etag, authorization string, fileSize, offset int64) error
+}
+
+// transferFn returns the configured transfer, falling back to the real one.
+func (p *PreheatCacheTask) transferFn() func(string, string, string, string, string, string, int64, int64) error {
+	if p.transfer != nil {
+		return p.transfer
+	}
+	return p.startPreheat
 }
 
 func (p *PreheatCacheTask) RealtimeProgress() (string, float32) {
@@ -112,6 +124,11 @@ func (p *PreheatCacheTask) DoTask() {
 	p.SchedulerDao.ExecUpdateCacheJobStatus(p.TaskNo, consts.RunningStatusJobComplete, p.Job.InstanceId, p.Job.Namespace, p.Job.Repo, "", p.StockProcess)
 }
 
+// preheatFileConcurrency bounds how many files a preheat job transfers at once.
+// Eight pairs with the default download.goroutineMaxNumPerFile of 8 for 64
+// connections in flight, which is where measured upstream throughput plateaus.
+const preheatFileConcurrency = 8
+
 func (p *PreheatCacheTask) preheatProcess(orgRepo string) error {
 	key, err := repository.ParseID(p.Job.Datatype, orgRepo)
 	if err != nil {
@@ -120,10 +137,23 @@ func (p *PreheatCacheTask) preheatProcess(orgRepo string) error {
 	if key.Namespace != repository.HuggingFace {
 		return p.preheatViaRepositoryAPI(key)
 	}
-	limit := make(chan struct{}, 8)
+	// Files are transferred concurrently. hf-mirror throttles each connection to
+	// a few MB/s, so throughput comes from the number of connections in flight:
+	// this bound multiplied by download.goroutineMaxNumPerFile (the per-file
+	// range workers) is what the upstream actually sees.
+	//
+	// The metadata lookup and blob/reference construction below stay sequential.
+	// They are cheap next to the transfer, and keeping them ordered avoids two
+	// files that dedup onto the same blob racing to create it.
+	group, groupCtx := errgroup.WithContext(p.Ctx)
+	group.SetLimit(preheatFileConcurrency)
 	for _, rFile := range p.Sha.Siblings {
 		if p.Ctx.Err() != nil {
 			return p.Ctx.Err()
+		}
+		// A failure in any transfer cancels groupCtx; stop queueing more work.
+		if groupCtx.Err() != nil {
+			break
 		}
 		fileName := rFile.Rfilename
 		var hfUri string
@@ -166,15 +196,24 @@ func (p *PreheatCacheTask) preheatProcess(orgRepo string) error {
 			p.stockLen.Add(uint64(offset))
 		}
 		if offset < pathInfo.Size {
-			limit <- struct{}{}
-			if err = p.startPreheat(hfUri, orgRepo, fileName, p.Sha.Sha, etag, p.Authorization, pathInfo.Size, offset); err != nil {
-				zap.S().Errorf("startPreheat err, %s/%s %v", orgRepo, fileName, err)
-				return err
-			}
-			<-limit
+			// Captured per iteration: the closure runs after the loop moves on.
+			uri, name, tag, size, start := hfUri, fileName, etag, pathInfo.Size, offset
+			run := p.transferFn()
+			group.Go(func() error {
+				if err := run(uri, orgRepo, name, p.Sha.Sha, tag, p.Authorization, size, start); err != nil {
+					zap.S().Errorf("startPreheat err, %s/%s %v", orgRepo, name, err)
+					return err
+				}
+				return nil
+			})
 		}
 	}
-	return nil
+	// Wait for every queued transfer even when the loop broke early, so no
+	// download outlives the task and keeps writing after it reports a result.
+	if waitErr := group.Wait(); waitErr != nil {
+		return waitErr
+	}
+	return p.Ctx.Err()
 }
 
 func (p *PreheatCacheTask) startPreheat(hfUri, orgRepo, fileName, commit, etag, authorization string, fileSize, offset int64) error {
