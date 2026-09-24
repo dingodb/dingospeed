@@ -222,7 +222,7 @@ func doHeadContext(ctx context.Context, client *http.Client, targetURL string, h
 		}
 		req.Header.Set(key, value)
 	}
-	resp, err := transfersettings.Do("huggingface", client, req)
+	resp, err := transfersettings.DoMeta("huggingface", client, req)
 	if err != nil {
 		zap.S().Warnf("URL请求失败: %s, 错误: %v", targetURL, err)
 		return nil, fmt.Errorf("执行HEAD请求失败: %v", err)
@@ -273,7 +273,7 @@ func doGetContext(ctx context.Context, client *http.Client, targetURL string, he
 		}
 		req.Header.Set(key, value)
 	}
-	resp, err := transfersettings.Do("huggingface", client, req)
+	resp, err := transfersettings.DoMeta("huggingface", client, req)
 	if err != nil {
 		zap.S().Warnf("URL请求失败: %s, 错误: %v", targetURL, err)
 		return nil, fmt.Errorf("执行GET请求失败: %v", err)
@@ -402,7 +402,7 @@ func doPostContext(ctx context.Context, client *http.Client, targetURL string, c
 		req.Header.Set(key, value)
 	}
 
-	resp, err := transfersettings.Do("huggingface", client, req)
+	resp, err := transfersettings.DoMeta("huggingface", client, req)
 	if err != nil {
 		zap.S().Warnf("URL请求失败: %s, 错误: %v", targetURL, err)
 		return nil, fmt.Errorf("执行POST请求失败: %v", err)
@@ -507,7 +507,7 @@ func ForwardRequest(originalReq echo.Context) (*http.Response, error) {
 			proxyReq.Header.Add(key, value)
 		}
 	}
-	resp, err := transfersettings.Do("huggingface", client, proxyReq)
+	resp, err := transfersettings.DoMeta("huggingface", client, proxyReq)
 	if err != nil {
 		r.report(0, err)
 		zap.S().Warnf("转发请求失败: %s, 错误: %v", targetURL, err)
