@@ -28,6 +28,18 @@ var writeMu sync.Mutex
 var loadErr error
 var gates [5]transferlimit.Gate
 
+// metaGates bound small, latency-sensitive upstream requests (HEAD, buffered
+// GET/POST, API forwarding) separately from bulk content streams.
+//
+// Both kinds used to share gates[i]. The gate wakes every waiter and lets them
+// race for a freed slot, and a content stream holds its slot until the whole
+// range body is read - tens of seconds for a 64MB range. Once a preheat job
+// kept every slot busy, the metadata lookup behind an ordinary cached read
+// queued behind dozens of streams and the request timed out. A second gate
+// with the same configured limit keeps the operator's number meaningful while
+// making it impossible for transfers to starve metadata.
+var metaGates [5]transferlimit.Gate
+
 func AcquireDownload(ctx context.Context) (func(), error) {
 	return gates[4].Acquire(ctx, func() int { return Current().Download })
 }
@@ -100,23 +112,40 @@ func Save(s Settings) error {
 	value.Store(&s)
 	for i := range gates {
 		gates[i].Wake()
+		metaGates[i].Wake()
 	}
 	return nil
 }
-func Do(kind string, client *http.Client, req *http.Request) (*http.Response, error) {
-	index := 0
+func kindIndex(kind string) int {
 	switch kind {
 	case "huggingface":
-		index = 1
+		return 1
 	case "modelscope":
-		index = 2
+		return 2
 	case "peer":
-		index = 3
+		return 3
 	case "download":
-		index = 4
+		return 4
 	}
-	return gates[index].Do(client, req, func() int {
+	return 0
+}
+
+func limitFor(index int) func() int {
+	return func() int {
 		s := Current()
 		return []int{s.Upload, s.HuggingFace, s.ModelScope, s.Peer, s.Download}[index]
-	})
+	}
+}
+
+// Do runs a bulk content transfer under the kind's transfer gate.
+func Do(kind string, client *http.Client, req *http.Request) (*http.Response, error) {
+	index := kindIndex(kind)
+	return gates[index].Do(client, req, limitFor(index))
+}
+
+// DoMeta runs a small metadata request under the kind's metadata gate, which is
+// independent of the transfer gate so bulk streams can never starve it.
+func DoMeta(kind string, client *http.Client, req *http.Request) (*http.Response, error) {
+	index := kindIndex(kind)
+	return metaGates[index].Do(client, req, limitFor(index))
 }
