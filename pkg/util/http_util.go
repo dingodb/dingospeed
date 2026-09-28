@@ -147,13 +147,17 @@ func constructClient(method string) (string, *http.Client, error) {
 
 // route 一次出站请求的选路结果。member 为 nil 表示这条请求没走池子（直连或旧逻辑）。
 type route struct {
-	domain string
-	client *http.Client
-	member *proxypool.Member
+	managed bool
+	domain  string
+	client  *http.Client
+	member  *proxypool.Member
 }
 
 // report 把本次请求结果回灌给代理池，驱动熔断与恢复。
 func (r route) report(statusCode int, err error) {
+	if r.managed {
+		return
+	}
 	if r.member != nil {
 		ProxyPool().Report(r.member, statusCode, err)
 	}
@@ -171,22 +175,41 @@ func (r route) reportResp(resp *common.Response, err error) {
 // 关键语义：每调用一次就从池子里换一个出口，因此 RetryRequest 的三次重试
 // 会落在三个不同出口上，而不是把同一条死路撞三遍。
 func constructRoute(method string) (route, error) {
+	return constructSourceRoute("huggingface", method, nil)
+}
+
+// Only HF changes the fallback origin. ModelScope always retains its full URL.
+func constructSourceRoute(source, method string, tried map[*proxypool.Member]bool) (route, error) {
 	if pool := ProxyPool(); pool != nil {
-		if m := pool.Pick(); m != nil {
+		if m := pool.PickExcluding(tried); m != nil {
+			client := *m.Client(method)
+			client.Transport = &sourceFailoverTransport{source: source, pool: pool, first: m}
 			return route{
-				domain: config.SysConfig.GetHFURLBase(),
-				client: m.Client(method),
-				member: m,
+				managed: true,
+				domain:  config.SysConfig.GetHFURLBase(),
+				client:  &client,
+				member:  m,
 			}, nil
 		}
 		// 全池熔断：所有出口都不可用，回退直连备用域名，至少保证有降级路径。
 		if config.SysConfig.GetProxyPoolFallbackDirect() {
 			proxypool.FallbackDirectTotal.Inc()
 			// 故障时 QPS 不会下降，逐请求打日志会在最需要看日志的时候把日志刷爆。
-			logFallbackThrottled()
+			logFallbackThrottled(source)
+			if source == "modelscope" {
+				return route{client: CreateHTTPClient()}, nil
+			}
 			client, err := NewHTTPClient(method)
 			return route{domain: config.SysConfig.GetBpHFURLBase(), client: client}, err
 		}
+		return route{}, fmt.Errorf("%s: no untried healthy proxy; direct fallback disabled", source)
+	}
+	if source == "modelscope" {
+		if config.SysConfig.GetHttpProxy() != "" {
+			client, err := NewHTTPClientWithProxy(method)
+			return route{client: client}, err
+		}
+		return route{client: CreateHTTPClient()}, nil
 	}
 	domain, client, err := constructClient(method)
 	return route{domain: domain, client: client}, err
@@ -366,7 +389,11 @@ func doGetStreamContext(ctx context.Context, client *http.Client, targetURL stri
 	for key, value := range resp.Header {
 		respHeaders[strings.ToLower(key)] = value
 	}
-	return resp.StatusCode, f(resp)
+	err = f(resp)
+	if transport, ok := client.Transport.(*sourceFailoverTransport); ok {
+		transport.reportBody(err)
+	}
+	return resp.StatusCode, err
 }
 
 func Post(requestUri string, contentType string, data []byte, headers map[string]string) (*common.Response, error) {

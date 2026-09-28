@@ -1,12 +1,14 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
-	"strings"
+	"time"
 
 	"dingospeed/pkg/common"
 	"dingospeed/pkg/config"
@@ -44,25 +46,41 @@ func (m *ModelscopeService) repositoryJSON(c echo.Context, k repository.RepoKey,
 	if k.Namespace != repository.ModelScope {
 		return nil, fmt.Errorf("not a ModelScope repository")
 	}
+	base, upstream, err := modelscopeOrigin(k.Repo)
+	if err != nil {
+		return nil, err
+	}
 	if err := repository.Register(config.SysConfig.Repos(), repository.Remote(k)); err != nil {
 		return nil, err
 	}
-	uri := strings.TrimRight(config.SysConfig.Modelscope.OfficialBaseURL, "/") + "/api/v1/" + k.RepoType + "/" + escapeRepoPath(k.Repo) + operation
+	uri := base + "/api/v1/" + k.RepoType + "/" + escapeRepoPath(upstream) + operation
 	if len(q) > 0 {
 		uri += "?" + q.Encode()
 	}
-	req, err := http.NewRequestWithContext(c.Request().Context(), http.MethodGet, uri, nil)
+	ctx, cancel := context.WithTimeout(c.Request().Context(), 45*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, uri, nil)
 	if err != nil {
 		return nil, err
 	}
 	for _, name := range []string{"Authorization", "Cookie", "User-Agent"} {
+		if upstream != k.Repo && name != "User-Agent" {
+			continue
+		}
 		if v := c.Request().Header.Get(name); v != "" {
 			req.Header.Set(name, v)
 		}
 	}
+	if upstream != k.Repo && config.SysConfig.Modelscope.InternationalToken != "" {
+		req.Header.Set("Authorization", "Bearer "+config.SysConfig.Modelscope.InternationalToken)
+	}
 	resp, err := util.DoRequestWithRetry(req)
 	if err != nil {
-		return nil, err
+		status := http.StatusBadGateway
+		if errors.Is(err, context.DeadlineExceeded) {
+			status = http.StatusGatewayTimeout
+		}
+		return nil, echo.NewHTTPError(status, fmt.Sprintf("ModelScope metadata request to %s failed: %v", req.URL.Host, err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {

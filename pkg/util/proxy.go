@@ -66,15 +66,14 @@ var (
 
 // logFallbackThrottled 全池熔断的告警日志每分钟最多一条，
 // 精确次数由 proxypool_fallback_direct_total 指标承载。
-func logFallbackThrottled() {
+func logFallbackThrottled(source string) {
 	fallbackLogMu.Lock()
 	defer fallbackLogMu.Unlock()
 	if time.Since(fallbackLogLast) < time.Minute {
 		return
 	}
 	fallbackLogLast = time.Now()
-	zap.S().Warnf("代理池全部熔断，请求回退直连 %s（本条日志每分钟最多一次）",
-		config.SysConfig.GetBpHFURLBase())
+	zap.S().Warnf("%s 代理出口耗尽，按配置回退直连（本条日志每分钟最多一次）", source)
 }
 
 func buildPoolConfig() (proxypool.Config, bool) {

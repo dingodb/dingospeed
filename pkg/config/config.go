@@ -207,10 +207,11 @@ type ProxyPoolMember struct {
 }
 
 type Modelscope struct {
-	OfficialBaseURL string `yaml:"officialBaseURL"`
-	ChunkSize       int64  `yaml:"chunkSize"`
-	MaxRetry        int    `yaml:"maxRetry"`
-	RetryDelay      int    `yaml:"retryDelay"`
+	InternationalToken string `yaml:"internationalToken"`
+	OfficialBaseURL    string `yaml:"officialBaseURL"`
+	ChunkSize          int64  `yaml:"chunkSize"`
+	MaxRetry           int    `yaml:"maxRetry"`
+	RetryDelay         int    `yaml:"retryDelay"`
 }
 
 // ModelScope is available without a provider-specific YAML section. Explicit

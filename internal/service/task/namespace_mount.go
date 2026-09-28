@@ -15,6 +15,7 @@ import (
 	"dingospeed/internal/dao"
 	"dingospeed/pkg/common"
 	"dingospeed/pkg/config"
+	myerr "dingospeed/pkg/error"
 	"dingospeed/pkg/repository"
 )
 
@@ -59,7 +60,7 @@ func repositoryRequest(ctx context.Context, k repository.RepoKey, authorization,
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		return nil, fmt.Errorf("repository %s returned %d", operation, resp.StatusCode)
+		return nil, myerr.NewAppendCode(resp.StatusCode, fmt.Sprintf("repository %s returned %d", operation, resp.StatusCode))
 	}
 	return resp, nil
 }
