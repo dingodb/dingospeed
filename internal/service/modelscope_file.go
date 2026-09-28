@@ -98,14 +98,24 @@ func (m *ModelscopeService) serveFile(c echo.Context, k repository.RepoKey, revi
 	if err = m.fileDao.CacheProviderFileInfo(k, commit, revision, info); err != nil {
 		return err
 	}
-	uri := "/api/v1/" + k.RepoType + "/" + repository.EscapeURLPath(k.Repo) + "/repo?" + url.Values{"Revision": {commit}, "FilePath": {path}}.Encode()
+	base, upstream, err := modelscopeOrigin(k.Repo)
+	if err != nil {
+		return err
+	}
+	uri := "/api/v1/" + k.RepoType + "/" + repository.EscapeURLPath(upstream) + "/repo?" + url.Values{"Revision": {commit}, "FilePath": {path}}.Encode()
 	headers := map[string]string{}
 	for _, name := range []string{"Authorization", "Cookie", "User-Agent"} {
+		if upstream != k.Repo && name != "User-Agent" {
+			continue
+		}
 		if v := c.Request().Header.Get(name); v != "" {
 			headers[strings.ToLower(name)] = v
 		}
 	}
-	source := &downloader.RemoteSource{Domain: strings.TrimRight(config.SysConfig.Modelscope.OfficialBaseURL, "/"), Headers: headers, Fetch: modelscopeFetch(info.Size)}
+	if upstream != k.Repo && config.SysConfig.Modelscope.InternationalToken != "" {
+		headers["authorization"] = "Bearer " + config.SysConfig.Modelscope.InternationalToken
+	}
+	source := &downloader.RemoteSource{Domain: base, Headers: headers, Fetch: modelscopeFetch(info.Size)}
 	return m.fileDao.ServePreparedFile(c, k, commit, path, strings.ToLower(c.Request().Method), info, uri, source)
 }
 

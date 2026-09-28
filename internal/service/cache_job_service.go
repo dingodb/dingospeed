@@ -17,6 +17,7 @@ import (
 	"dingospeed/pkg/common"
 	"dingospeed/pkg/config"
 	"dingospeed/pkg/consts"
+	myerr "dingospeed/pkg/error"
 	"dingospeed/pkg/proto/manager"
 	"dingospeed/pkg/repository"
 
@@ -52,6 +53,9 @@ func (p *CacheJobService) CreateCacheJob(c echo.Context, jobReq *query.CreateCac
 func (p *CacheJobService) CreateCacheJobResult(c echo.Context, jobReq *query.CreateCacheJobReq) (CacheJobCreateResult, error) {
 	registrationAdmission.Lock()
 	defer registrationAdmission.Unlock()
+	if err := c.Request().Context().Err(); err != nil {
+		return CacheJobCreateResult{}, err
+	}
 	localJob, instanceID, err := p.cacheJobIdentity(jobReq.InstanceId)
 	if err != nil {
 		return CacheJobCreateResult{}, err
@@ -104,9 +108,16 @@ func (p *CacheJobService) CreateCacheJobResult(c echo.Context, jobReq *query.Cre
 		if key.Namespace == repository.ModelScope {
 			revision = "master"
 		}
-		sha, err := p.preheatMetadata(ctx, key, revision, authorization)
+		// Bound preparation across all retries, while the accepted download keeps
+		// its application lifetime independently of the browser request.
+		prepareCtx, prepareCancel := context.WithTimeout(c.Request().Context(), 45*time.Second)
+		sha, err := p.preheatMetadata(prepareCtx, key, revision, authorization)
+		prepareCancel()
 		if err != nil {
 			cancelFunc()
+			if errors.Is(err, context.DeadlineExceeded) {
+				return CacheJobCreateResult{}, myerr.WrapCode(504, "upstream metadata preparation timed out; no cache task created", err)
+			}
 			return CacheJobCreateResult{}, err
 		}
 		// Metadata resolves the requested branch before comparing immutable commits.

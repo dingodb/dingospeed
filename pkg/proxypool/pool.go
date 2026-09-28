@@ -247,6 +247,11 @@ func newTransport(proxyURL *url.URL, cfg Config) *http.Transport {
 // 会自动落到不同出口——这正是修复 "#1 EOF #2 EOF #3 EOF" 的关键。
 // 全部成员都在熔断中时返回 nil，调用方应回退直连。
 func (p *Pool) Pick() *Member {
+	return p.PickExcluding(nil)
+}
+
+// PickExcluding avoids retrying an already attempted outlet within one request.
+func (p *Pool) PickExcluding(tried map[*Member]bool) *Member {
 	if p == nil {
 		return nil
 	}
@@ -258,6 +263,9 @@ func (p *Pool) Pick() *Member {
 	start := p.cursor.Add(1) - 1
 	for i := 0; i < n; i++ {
 		m := p.ring[(start+uint64(i))%uint64(n)]
+		if tried[m] {
+			continue
+		}
 		if m.tryAcquire(now, p.cfg.Cooldown) {
 			return m
 		}
