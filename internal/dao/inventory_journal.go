@@ -12,9 +12,10 @@ import (
 )
 
 type metadataIntent struct {
-	Revision string
-	Commit   string
-	Files    []LocalManifestFile
+	Revision    string
+	Commit      string
+	Files       []LocalManifestFile
+	Publication *TreePublicationReceipt `json:",omitempty"`
 }
 type snapshotEdit struct {
 	OldCommit string
@@ -50,6 +51,10 @@ func ReadInventorySnapshot(k repository.RepoKey, revision string) (string, []Loc
 }
 
 func (u *UploadDao) writeEffectiveMetadata(repoType, id, revision, commit string, files []LocalManifestFile) error {
+	return u.writeEffectiveMetadataWithPublication(repoType, id, revision, commit, files, nil)
+}
+
+func (u *UploadDao) writeEffectiveMetadataWithPublication(repoType, id, revision, commit string, files []LocalManifestFile, publication *TreePublicationReceipt) error {
 	k := RepositoryKey(repoType, id)
 	if err := u.recoverInventoryLocked(k); err != nil {
 		return err
@@ -57,8 +62,8 @@ func (u *UploadDao) writeEffectiveMetadata(repoType, id, revision, commit string
 	if err := RegisterHosted(k.RepoType, k.Namespace, k.Repo); err != nil {
 		return err
 	}
-	p := metadataIntent{revision, commit, files}
-	return inventory.Run(config.SysConfig.Repos(), inventoryKey(k), "metadata", p, func() error { return u.writeEffectiveMetadataRaw(repoType, id, revision, commit, files) })
+	p := metadataIntent{Revision: revision, Commit: commit, Files: files, Publication: publication}
+	return inventory.Run(config.SysConfig.Repos(), inventoryKey(k), "metadata", p, func() error { return u.applyMetadataIntent(k, p, false) })
 }
 
 // Recovery replays only journaled repositories, under the same locks as normal writes.
@@ -91,10 +96,7 @@ func (u *UploadDao) recoverInventoryLocked(k repository.RepoKey) error {
 		if err = json.Unmarshal(e.Operation.Data, &p); err != nil {
 			return err
 		}
-		if err = verifyManifestContent(k.RepoType, k.ID(), p.Files); err != nil {
-			return err
-		}
-		err = u.writeEffectiveMetadataRaw(k.RepoType, k.ID(), p.Revision, p.Commit, p.Files)
+		err = u.applyMetadataIntent(k, p, true)
 	case "delete-files":
 		var p deletionIntent
 		if err = json.Unmarshal(e.Operation.Data, &p); err != nil {

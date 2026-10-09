@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"time"
 
 	"dingospeed/internal/downloader"
 	"dingospeed/pkg/config"
@@ -151,6 +153,10 @@ func (u *UploadDao) UploadChunk(param LocalChunkUploadParam, body io.Reader) (*L
 		return nil, err
 	}
 	if allPresent {
+		now := time.Now()
+		if err := os.Chtimes(blobPath, now, now); err != nil {
+			return nil, err
+		}
 		return result, nil
 	}
 

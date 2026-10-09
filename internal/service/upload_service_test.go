@@ -24,6 +24,26 @@ func withUploadConfig(t *testing.T) {
 	t.Cleanup(func() { config.SysConfig = oldConfig })
 }
 
+func TestValidatePublishTreeConditionalCreation(t *testing.T) {
+	withUploadConfig(t)
+	p := dao.LocalPublishTreeParam{RepoType: "models", Namespace: "dingo-local", Repo: "demo", Revision: "release", ExpectedAbsent: true}
+	if err := validatePublishTreeParam(p); err != nil {
+		t.Fatal(err)
+	}
+	p.BaseCommit = strings.Repeat("a", 64)
+	if err := validatePublishTreeParam(p); err == nil {
+		t.Fatal("creation must reject baseCommit")
+	}
+	p.ExpectedAbsent = false
+	if err := validatePublishTreeParam(p); err != nil {
+		t.Fatal(err)
+	}
+	p.BaseCommit = ""
+	if err := validatePublishTreeParam(p); err == nil {
+		t.Fatal("existing edit API must still require baseCommit")
+	}
+}
+
 func validParam() dao.LocalUploadParam {
 	return dao.LocalUploadParam{
 		RepoType:  "models",

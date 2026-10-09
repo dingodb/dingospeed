@@ -19,7 +19,6 @@ import (
 	"dingospeed/pkg/transfersettings"
 
 	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 )
 
 type CacheTask struct {
@@ -63,17 +62,9 @@ type PreheatCacheTask struct {
 	OnFinish      func(error)
 	OnStart       func()
 	InitialState  string
-	// transfer moves one file's bytes. It defaults to startPreheat; tests set it
+	// transfer moves one file's bytes. It defaults to startPreheatContext; tests set it
 	// to observe how transfers are scheduled without touching the network.
 	transfer func(hfUri, orgRepo, fileName, commit, etag, authorization string, fileSize, offset int64) error
-}
-
-// transferFn returns the configured transfer, falling back to the real one.
-func (p *PreheatCacheTask) transferFn() func(string, string, string, string, string, string, int64, int64) error {
-	if p.transfer != nil {
-		return p.transfer
-	}
-	return p.startPreheat
 }
 
 func (p *PreheatCacheTask) RealtimeProgress() (string, float32) {
@@ -103,14 +94,14 @@ func (p *PreheatCacheTask) DoTask() {
 	<-progressDone
 	if p.OnFinish != nil {
 		if err == nil && p.Job.Namespace == repository.HuggingFace {
-			hfprojection.DefaultIndex.Invalidate(config.SysConfig.Repos(), p.Job.Datatype)
+			hfprojection.DefaultIndex.InvalidateRepository(config.SysConfig.Repos(), p.Job.Datatype, p.Job.Repo)
 		}
 		p.OnFinish(err)
 		return
 	}
 	if p.LocalJob {
 		if err == nil && p.Job.Namespace == repository.HuggingFace {
-			hfprojection.DefaultIndex.Invalidate(config.SysConfig.Repos(), p.Job.Datatype)
+			hfprojection.DefaultIndex.InvalidateRepository(config.SysConfig.Repos(), p.Job.Datatype, p.Job.Repo)
 		}
 		return
 	}
@@ -120,7 +111,7 @@ func (p *PreheatCacheTask) DoTask() {
 	}
 	p.StockProcess = 100
 	if p.Job.Namespace == repository.HuggingFace {
-		hfprojection.DefaultIndex.Invalidate(config.SysConfig.Repos(), p.Job.Datatype)
+		hfprojection.DefaultIndex.InvalidateRepository(config.SysConfig.Repos(), p.Job.Datatype, p.Job.Repo)
 	}
 	p.SchedulerDao.ExecUpdateCacheJobStatus(p.TaskNo, consts.RunningStatusJobComplete, p.Job.InstanceId, p.Job.Namespace, p.Job.Repo, "", p.StockProcess)
 }
@@ -146,35 +137,27 @@ func (p *PreheatCacheTask) preheatProcess(orgRepo string) error {
 	// The metadata lookup and blob/reference construction below stay sequential.
 	// They are cheap next to the transfer, and keeping them ordered avoids two
 	// files that dedup onto the same blob racing to create it.
-	group, groupCtx := errgroup.WithContext(p.Ctx)
-	group.SetLimit(preheatFileConcurrency)
-	for _, rFile := range p.Sha.Siblings {
-		if p.Ctx.Err() != nil {
-			return p.Ctx.Err()
-		}
-		// A failure in any transfer cancels groupCtx; stop queueing more work.
-		if groupCtx.Err() != nil {
-			break
-		}
+	return ExecuteManifest(p.Ctx, preheatFileConcurrency, len(p.Sha.Siblings), func(ctx context.Context, i int) (func(context.Context) error, error) {
+		rFile := p.Sha.Siblings[i]
 		fileName := rFile.Rfilename
 		var hfUri string
 		upstream, upErr := dao.UpstreamRepo(p.Job.Datatype, orgRepo)
 		if upErr != nil {
-			return upErr
+			return nil, upErr
 		}
 		if p.Job.Datatype == "models" {
 			hfUri = fmt.Sprintf("/%s/resolve/%s/%s", repository.EscapeURLPath(upstream), repository.EscapeURLPath(p.Sha.Sha), repository.EscapeURLPath(fileName))
 		} else {
 			hfUri = fmt.Sprintf("/%s/%s/resolve/%s/%s", p.Job.Datatype, repository.EscapeURLPath(upstream), repository.EscapeURLPath(p.Sha.Sha), repository.EscapeURLPath(fileName))
 		}
-		pathInfo, err := p.FileDao.GetPathsInfoContext(p.Ctx, hfUri, p.Job.Datatype, orgRepo, p.Sha.Sha,
+		pathInfo, err := p.FileDao.GetPathsInfoContext(ctx, hfUri, p.Job.Datatype, orgRepo, p.Sha.Sha,
 			p.Authorization, fileName) // 获取模型元数据
 		if err != nil {
 			zap.S().Errorf("RemoteRequestPathsInfo err,%v", err)
-			return err
+			return nil, err
 		}
 		if pathInfo == nil {
-			return fmt.Errorf("RemoteRequestPathsInfo err, pathInfo is null, %s/%s", orgRepo, fileName)
+			return nil, fmt.Errorf("RemoteRequestPathsInfo err, pathInfo is null, %s/%s", orgRepo, fileName)
 		}
 		var etag string
 		if pathInfo.Lfs.Oid != "" {
@@ -183,44 +166,35 @@ func (p *PreheatCacheTask) preheatProcess(orgRepo string) error {
 			etag = pathInfo.Oid
 		}
 		if err := repository.Segment(etag); err != nil {
-			return err
+			return nil, err
 		}
 		// A reused blob still needs a file reference under this new commit.
 		if err := p.FileDao.ConstructBlobsAndFileFile(dao.BlobPath(p.Job.Datatype, orgRepo, etag), dao.ResolvePath(p.Job.Datatype, orgRepo, p.Sha.Sha, fileName)); err != nil {
-			return err
+			return nil, err
 		}
 		if pathInfo.Size == 0 {
-			continue
+			return nil, nil
 		}
 		offset := p.FileDao.GetFileOffset(p.Job.Datatype, p.Job.Namespace, p.Job.Repo, etag, pathInfo.Size)
 		if offset > 0 {
 			p.stockLen.Add(uint64(offset))
 		}
-		if offset < pathInfo.Size {
-			// Captured per iteration: the closure runs after the loop moves on.
-			uri, name, tag, size, start := hfUri, fileName, etag, pathInfo.Size, offset
-			run := p.transferFn()
-			group.Go(func() error {
-				if err := run(uri, orgRepo, name, p.Sha.Sha, tag, p.Authorization, size, start); err != nil {
-					zap.S().Errorf("startPreheat err, %s/%s %v", orgRepo, name, err)
-					return err
-				}
-				return nil
-			})
+		if offset >= pathInfo.Size {
+			return nil, nil
 		}
-	}
-	// Wait for every queued transfer even when the loop broke early, so no
-	// download outlives the task and keeps writing after it reports a result.
-	if waitErr := group.Wait(); waitErr != nil {
-		return waitErr
-	}
-	return p.Ctx.Err()
+		return func(ctx context.Context) error {
+			if p.transfer != nil {
+				return p.transfer(hfUri, orgRepo, fileName, p.Sha.Sha, etag, p.Authorization, pathInfo.Size, offset)
+			}
+			return p.startPreheatContext(ctx, hfUri, orgRepo, fileName, p.Sha.Sha, etag, p.Authorization, pathInfo.Size, offset)
+		}, nil
+	})
 }
 
-func (p *PreheatCacheTask) startPreheat(hfUri, orgRepo, fileName, commit, etag, authorization string, fileSize, offset int64) error {
+func (p *PreheatCacheTask) startPreheatContext(ctx context.Context, hfUri, orgRepo, fileName, commit, etag, authorization string, fileSize, offset int64) error {
 	// Preheat is background work: it must leave transfer slots to interactive
 	// downloads, and it only counts bytes, so its ranges may complete out of order.
-	bgCtx := transfersettings.WithBackground(context.WithValue(p.Ctx, consts.PromSource, "localhost"))
+	bgCtx := transfersettings.WithBackground(context.WithValue(ctx, consts.PromSource, "localhost"))
 	responseChan := make(chan []byte, config.SysConfig.Download.RespChanSize)
 	blobsFile := dao.BlobPath(p.Job.Datatype, orgRepo, etag)
 	filesPath := dao.ResolvePath(p.Job.Datatype, orgRepo, commit, fileName)

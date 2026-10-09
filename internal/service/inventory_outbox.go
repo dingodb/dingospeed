@@ -250,6 +250,29 @@ func (s *SchedulerService) sendRepository(ctx context.Context, k inventory.Key) 
 		return err
 	}
 	root := config.SysConfig.Repos()
+	p, err := buildRepositoryReport(root, k, func() ([]inventory.File, error) {
+		d, err := repository.Read(root, repoKey(k))
+		if err != nil {
+			return nil, err
+		}
+		return s.scanInventory([]repository.Descriptor{d})
+	})
+	if err != nil || p == nil {
+		return err
+	}
+	var a inventory.Ack
+	if err = inventoryPOST(ctx, "/api/v1/upload-inventory/reports", p, &a); err != nil {
+		return err
+	}
+	return inventory.Confirm(root, p, a)
+}
+
+// buildRepositoryReport scans only the selected repository without holding the
+// global publication barrier. A scan is usable only if the repository sequence
+// and inventory generation remain unchanged. Otherwise leave it dirty for the
+// next pass; never persist an inconsistent snapshot or block unrelated writes.
+func buildRepositoryReport(root string, k inventory.Key, scan func() ([]inventory.File, error)) (*inventory.Report, error) {
+	var fixed bool
 	p, err := func() (*inventory.Report, error) {
 		inventory.Barrier.Lock()
 		defer inventory.Barrier.Unlock()
@@ -268,31 +291,42 @@ func (s *SchedulerService) sendRepository(ctx context.Context, k inventory.Key) 
 			return nil, fmt.Errorf("repository operation incomplete")
 		}
 		if e.Report != nil {
+			fixed = true
 			return e.Report, nil
 		}
-		p := &inventory.Report{Version: 2, InstanceID: q.NodeID, Epoch: q.Epoch, Sequence: e.Sequence, Key: k, Deleted: e.Deleted, Files: []inventory.File{}}
-		if !e.Deleted {
-			d, err := repository.Read(root, repoKey(k))
-			if err != nil {
-				return nil, err
-			}
-			files, err := s.scanInventory([]repository.Descriptor{d})
-			if err != nil {
-				return nil, err
-			}
-			p.Files = files
-		}
-		err = inventory.Update(root, func(q *inventory.State) error { q.Entries[k.ID()].Report = p; return nil })
-		return p, err
+		return &inventory.Report{Version: 2, InstanceID: q.NodeID, Epoch: q.Epoch, Sequence: e.Sequence, Key: k, Deleted: e.Deleted, Files: []inventory.File{}}, nil
 	}()
-	if err != nil || p == nil {
-		return err
+	if err != nil || p == nil || fixed {
+		return p, err
 	}
-	var a inventory.Ack
-	if err = inventoryPOST(ctx, "/api/v1/upload-inventory/reports", p, &a); err != nil {
-		return err
+	var scanErr error
+	if !p.Deleted {
+		p.Files, scanErr = scan()
 	}
-	return inventory.Confirm(root, p, a)
+	inventory.Barrier.Lock()
+	defer inventory.Barrier.Unlock()
+	var result *inventory.Report
+	err = inventory.Update(root, func(q *inventory.State) error {
+		e := q.Entries[k.ID()]
+		if q.NodeID != p.InstanceID || q.Epoch != p.Epoch || q.ReconcileEpoch != "" || e == nil {
+			return nil
+		}
+		if e.Report != nil {
+			// A concurrent builder fixed a report. Preserve its retry bytes.
+			result = e.Report
+			return nil
+		}
+		if e.Sequence != p.Sequence || e.Operation != nil || e.Deleted != p.Deleted {
+			return nil
+		}
+		if scanErr != nil {
+			return scanErr
+		}
+		e.Report = p
+		result = p
+		return nil
+	})
+	return result, err
 }
 func (s *SchedulerService) scanInventory(descriptors []repository.Descriptor) ([]inventory.File, error) {
 	snap, err := s.scanUploadDescriptors(&UploadInventorySnapshot{Complete: true, Items: []UploadInventoryItem{}}, descriptors)

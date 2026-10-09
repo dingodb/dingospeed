@@ -610,12 +610,26 @@ func (u *UploadDao) materializeBlob(param LocalUploadParam, orgRepo string, body
 	defer uploadBlobLocks.Unlock(blobKey)
 
 	if blobIsComplete(blobPath, param.Size) {
+		now := time.Now()
+		if err := os.Chtimes(blobPath, now, now); err != nil {
+			return false, err
+		}
 		return true, nil
+	}
+	stagePath := blobPath + localUploadStageSuffix
+	// A zero-body end-offset request can renew an existing complete blob. If
+	// GC already removed it, do not create a misleading sequential stage that
+	// would hide the chunk bitmap when the caller falls back to retransmission.
+	if param.Size > 0 && param.Start != nil && *param.Start == param.Size {
+		if _, err := os.Stat(stagePath); os.IsNotExist(err) {
+			return false, resumeOffsetError(*param.Start, 0)
+		} else if err != nil {
+			return false, err
+		}
 	}
 	if err := util.MakeDirs(blobPath); err != nil {
 		return false, err
 	}
-	stagePath := blobPath + localUploadStageSuffix
 	if param.Start == nil {
 		// A request without start means a full-file upload. It must overwrite any
 		// stale staged content for this sha instead of trying to append to it.
@@ -1192,9 +1206,17 @@ func (u *UploadDao) cleanupRepoBlobs(repos, repoType, orgRepo string, blobs []st
 		// 这正是分块上传需要的行为：中途放弃的分块上传就是以不完整的
 		// blobs/<sha> 形式留在盘上的，只按“未被任何清单引用 + 超过保留期”回收。
 		// 续传间隔小于保留期（默认 168h）就不会被误删。
-		if rmErr := reclaimBlobFile(repoType, orgRepo, sha); rmErr != nil {
+		reclaimed, rmErr := reclaimBlobFileIf(repoType, orgRepo, sha, func(latest os.FileInfo) bool {
+			// Recheck under the blob lock: an upload may have completed since
+			// the earlier stat, and must receive a fresh retention window.
+			return latest.ModTime().Equal(info.ModTime()) && !latest.ModTime().After(cutoff) && expiredForReclaim(latest, tombstones[sha], cutoff)
+		})
+		if rmErr != nil {
 			// 传输占用是暂时的，下一个周期再来即可；为它中断整趟清理不划算。
 			zap.S().Warnf("[UPLOAD-CLEANUP] reclaim skipped: %s/%s sha=%s err=%v", repoType, orgRepo, sha, rmErr)
+			continue
+		}
+		if !reclaimed {
 			continue
 		}
 		removeRecycleEntry(repoType, orgRepo, sha)
@@ -1317,6 +1339,7 @@ func (u *UploadDao) RunStagedUploadCleanup(ctx context.Context) {
 	if interval <= 0 {
 		return
 	}
+	after := ""
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -1324,6 +1347,14 @@ func (u *UploadDao) RunStagedUploadCleanup(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			var batchErr error
+			after, batchErr = u.cleanupHostedBatch(ctx, config.SysConfig.GetUploadStagingRetention(), after)
+			if batchErr != nil {
+				zap.S().Warnf("cleanup hosted content batch failed: %v", batchErr)
+			}
+			if _, partialErr := u.CleanupSyncPartials(ctx, config.SysConfig.GetUploadStagingRetention(), 256); partialErr != nil {
+				zap.S().Warnf("cleanup sync partials failed: %v", partialErr)
+			}
 			removed, err := u.CleanupExpiredStagedUploads(config.SysConfig.GetUploadStagingRetention())
 			if err != nil {
 				zap.S().Warnf("cleanup expired staged uploads failed: %v", err)

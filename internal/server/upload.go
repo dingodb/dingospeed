@@ -54,6 +54,10 @@ func (s *UploadServer) Start(ctx context.Context) error {
 		return err
 	}
 	s.lis = lis
+	recoveryCtx, stopRecovery := context.WithCancel(ctx)
+	recoveryDone := make(chan struct{})
+	go func() { defer close(recoveryDone); s.router.RunSyncRecovery(recoveryCtx) }()
+	defer func() { stopRecovery(); <-recoveryDone }()
 	s.BaseContext = func(net.Listener) context.Context {
 		return ctx
 	}

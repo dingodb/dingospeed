@@ -327,7 +327,7 @@ func (c *Config) GetMinimumFileSize() int64 {
 
 func (c *Config) GetSyncProcessInterval() int64 {
 	if c.Scheduler.Strategy.SyncProcessInterval < 1 {
-		c.Scheduler.Strategy.SyncProcessInterval = 1
+		return 1
 	}
 	return c.Scheduler.Strategy.SyncProcessInterval
 }

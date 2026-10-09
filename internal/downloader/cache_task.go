@@ -30,6 +30,11 @@ type RemoteSource struct {
 }
 
 type TaskParam struct {
+	NativeSync     bool
+	OnNetworkBytes func(int64)
+	// NodeSourceOnly opts uploaded sync into the existing range/cache executor
+	// without provider fallback, upstream policy checks or remote inventory.
+	NodeSourceOnly  bool
 	Source          *RemoteSource
 	LocalOnly       bool       // Skip scheduler and reporting until this provider's cluster integration is enabled.
 	CacheResult     chan error // Optional buffered terminal result, sent after cache writes finish.

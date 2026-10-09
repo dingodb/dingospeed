@@ -1,6 +1,7 @@
 package router
 
 import (
+	"context"
 	"dingospeed/internal/handler"
 	"dingospeed/pkg/middleware"
 
@@ -11,6 +12,7 @@ type UploadRouter struct {
 	echo              *echo.Echo
 	uploadHandler     *handler.UploadHandler
 	cacheAdminHandler *handler.CacheAdminHandler
+	syncHandler       *handler.RepositorySyncHandler
 }
 
 type UploadEcho struct {
@@ -46,6 +48,20 @@ func (r *UploadRouter) initCacheAdminRouter() {
 }
 
 func (r *UploadRouter) initRouter() {
+	syncHandler := r.uploadHandler.NewSyncHandler()
+	r.syncHandler = syncHandler
+	guard := handler.RepositorySyncGuard
+	r.echo.POST("/api/repository-sync/:repoType/:namespace/prepare", syncHandler.Start, guard)
+	r.echo.POST("/api/repository-sync/:repoType/:namespace/remote-prepare", syncHandler.RemotePrepare, guard)
+	r.echo.POST("/api/repository-sync/:repoType/:namespace/remote-source-report", syncHandler.RemoteSourceReport, guard)
+	r.echo.GET("/api/repository-sync/:repoType/:namespace/remote-manifest", syncHandler.RemoteManifest)
+	r.echo.POST("/api/repository-sync/:repoType/:namespace/tasks", syncHandler.Start, guard)
+	r.echo.GET("/api/repository-sync/:repoType/:namespace/content", syncHandler.Content, guard)
+	r.echo.GET("/api/repository-sync/tasks", syncHandler.List)
+	r.echo.POST("/api/repository-sync/tasks/:taskId/:action", syncHandler.Action)
+	r.echo.GET("/api/repository-sync/tasks/:taskId", syncHandler.Status)
+	r.echo.DELETE("/api/repository-sync/tasks/:taskId", syncHandler.Cancel)
+	r.echo.POST("/api/repository-sync/tasks/:taskId/reconcile", syncHandler.Reconcile)
 	r.echo.DELETE("/api/repositories/:repoType/:namespace", r.uploadHandler.DeleteRepository, handler.RepositoryLocator(false, false))
 	r.echo.GET("/api/upload-progress/:repoType/:namespace", r.uploadHandler.QueryProgress, handler.RepositoryLocator(true, true))
 	r.echo.POST("/api/uploads/:repoType/:namespace", r.uploadHandler.UploadWholeFile, handler.RepositoryLocator(true, true), handler.LimitUpload)
@@ -57,3 +73,5 @@ func (r *UploadRouter) initRouter() {
 func (r *UploadRouter) Echo() *echo.Echo {
 	return r.echo
 }
+
+func (r *UploadRouter) RunSyncRecovery(ctx context.Context) { r.syncHandler.RunRecovery(ctx) }

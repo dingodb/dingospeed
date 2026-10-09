@@ -3,6 +3,7 @@ package dao
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,6 +12,85 @@ import (
 
 	"github.com/bytedance/sonic"
 )
+
+func TestPublishTreeExpectedAbsentCreatesCompleteRevision(t *testing.T) {
+	u, _ := newTestUploadDao(t)
+	base, keep, _ := seedRevision(t, u, "main")
+	p := treeParam("release", "", keep)
+	p.ExpectedAbsent = true
+	r := mustPublishTree(t, u, p)
+	if r.PreviousCommit != "" || r.FileCount != 1 || !r.Changed {
+		t.Fatalf("unexpected creation result: %+v", r)
+	}
+	if got := revisionCommit(t, u, "models", "dingo-local/demo", "main"); got != base {
+		t.Fatal("creation changed another revision")
+	}
+	// A selection made while absent must not overwrite a subsequently created tag.
+	if _, err := u.PublishTree(p); err == nil {
+		t.Fatal("expected conflict for a newly created revision")
+	} else if coded, ok := err.(interface{ ErrorCode() string }); !ok || coded.ErrorCode() != "REVISION_CHANGED" {
+		t.Fatalf("unexpected conflict: %v", err)
+	}
+	if got := revisionCommit(t, u, "models", "dingo-local/demo", "release"); got != r.Commit {
+		t.Fatal("conflicting request modified revision")
+	}
+}
+
+func TestPublishTreeExpectedAbsentEmptyAndConcurrentCreation(t *testing.T) {
+	u, _ := newTestUploadDao(t)
+	p := treeParam("release", "")
+	p.ExpectedAbsent = true
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := u.PublishTree(p)
+			results <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	successes := 0
+	for err := range results {
+		if err == nil {
+			successes++
+		} else if coded, ok := err.(interface{ StatusCode() int }); !ok || coded.StatusCode() != 409 {
+			t.Fatalf("unexpected concurrent error: %v", err)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("got %d creations, want exactly one", successes)
+	}
+	commit := revisionCommit(t, u, "models", "dingo-local/demo", "release")
+	if commit == "" || len(u.readManifest("models", "dingo-local/demo", commit)) != 0 {
+		t.Fatal("empty revision must be published, not absent")
+	}
+}
+
+func TestPublishTreeExpectedAbsentDoesNotOverwriteDamagedRevision(t *testing.T) {
+	u, root := newTestUploadDao(t)
+	metaPath := filepath.Join(root, "api", "models", "dingo-local", "demo", "revision", "release", "meta_get.json")
+	if err := os.MkdirAll(filepath.Dir(metaPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(metaPath, []byte("damaged"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	p := treeParam("release", "")
+	p.ExpectedAbsent = true
+	if _, err := u.PublishTree(p); err == nil {
+		t.Fatal("damaged existing revision treated as absent")
+	}
+	b, err := os.ReadFile(metaPath)
+	if err != nil || string(b) != "damaged" {
+		t.Fatalf("metadata overwritten: %q %v", b, err)
+	}
+}
 
 func treeParam(revision, baseCommit string, files ...LocalManifestFile) LocalPublishTreeParam {
 	return LocalPublishTreeParam{
