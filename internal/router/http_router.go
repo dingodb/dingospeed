@@ -64,6 +64,7 @@ func (r *HttpRouter) initRouter() {
 }
 
 func (r *HttpRouter) routerForSpeed() { // alayanew
+	r.echo.GET("/api/repository-sync/:repoType/:namespace/remote-content", handler.RepositoryRemoteContent, handler.RepositorySyncGuard)
 	p := "/api/repositories/:repoType/:namespace"
 	r.echo.GET(p+"/local-catalog", handler.HFLocalCatalog)
 	r.echo.GET(p+"/local-manifest", handler.HFLocalManifest, handler.RepositoryLocator(false, true))

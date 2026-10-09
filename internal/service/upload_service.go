@@ -161,7 +161,11 @@ func validatePublishTreeParam(param dao.LocalPublishTreeParam) error {
 	if err := validateRepoLocator(param.RepoType, param.Namespace, param.Repo, param.Revision); err != nil {
 		return err
 	}
-	if !sha256Pattern.MatchString(param.BaseCommit) {
+	if param.ExpectedAbsent {
+		if param.BaseCommit != "" {
+			return fmt.Errorf("expectedAbsent and baseCommit are mutually exclusive")
+		}
+	} else if !sha256Pattern.MatchString(param.BaseCommit) {
 		return fmt.Errorf("baseCommit must be a 64-character lowercase hex string")
 	}
 	// 目标清单为空意味着“把这个 revision 清空”。标签仍然保留，指向一份空清单，

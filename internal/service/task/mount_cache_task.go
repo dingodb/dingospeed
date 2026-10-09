@@ -106,7 +106,7 @@ func (m *MountCacheTask) DoTask() {
 		m.SchedulerDao.ExecUpdateRepositoryMountStatus(m.TaskNo, m.StopStatus(), errMsg)
 	} else {
 		zap.S().Infof("command success.%d", m.TaskNo)
-		hfprojection.DefaultIndex.Invalidate(config.SysConfig.Repos(), m.Job.Datatype)
+		hfprojection.DefaultIndex.InvalidateRepository(config.SysConfig.Repos(), m.Job.Datatype, key.Repo)
 		m.SchedulerDao.ExecUpdateRepositoryMountStatus(m.TaskNo, consts.RunningStatusJobComplete, "")
 	}
 }

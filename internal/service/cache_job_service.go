@@ -76,7 +76,7 @@ func (p *CacheJobService) CreateCacheJobResult(c echo.Context, jobReq *query.Cre
 		return CacheJobCreateResult{}, err
 	}
 	if key.Namespace == repository.HuggingFace || key.Namespace == repository.ModelScope {
-		if err := repository.Register(config.SysConfig.Repos(), repository.Remote(key)); err != nil {
+		if err := repository.CheckRegistration(config.SysConfig.Repos(), repository.Remote(key)); err != nil {
 			return CacheJobCreateResult{}, err
 		}
 	} else if _, err := repository.Read(config.SysConfig.Repos(), key); err != nil {
@@ -119,6 +119,12 @@ func (p *CacheJobService) CreateCacheJobResult(c echo.Context, jobReq *query.Cre
 				return CacheJobCreateResult{}, myerr.WrapCode(504, "upstream metadata preparation timed out; no cache task created", err)
 			}
 			return CacheJobCreateResult{}, err
+		}
+		if key.Namespace == repository.HuggingFace || key.Namespace == repository.ModelScope {
+			if err := repository.Register(config.SysConfig.Repos(), repository.Remote(key)); err != nil {
+				cancelFunc()
+				return CacheJobCreateResult{}, err
+			}
 		}
 		// Metadata resolves the requested branch before comparing immutable commits.
 		// Hold admission until the new job is registered AND submitted to the pool.

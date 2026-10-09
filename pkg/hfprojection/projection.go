@@ -199,6 +199,26 @@ func cacheArea(name, area string) bool {
 	return area == "api" && (name == "revision" || name == "paths-info") || area == "files" && name == "resolve"
 }
 
+// Repository reads metadata of exactly one repository without catalogue
+// discovery. An absent repository is not inserted as an empty catalogue entry.
+func (r Reader) Repository(typ, name string) (Repo, error) {
+	k, err := r.key(typ, name)
+	if err != nil {
+		return Repo{}, err
+	}
+	r.metadataCache = make(map[string]metadata)
+	out := Repo{RepoKey: k, Revisions: []Revision{}, Access: "unknown"}
+	out.Revisions, err = r.revisions(k)
+	if err != nil {
+		return out, err
+	}
+	if len(out.Revisions) == 0 {
+		return out, os.ErrNotExist
+	}
+	out.Access, err = r.access(k, out.Revisions)
+	return out, err
+}
+
 type metadata struct {
 	SHA      string          `json:"sha"`
 	Private  *bool           `json:"private"`

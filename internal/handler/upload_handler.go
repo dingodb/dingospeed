@@ -22,6 +22,11 @@ func NewUploadHandler(uploadService *service.UploadService) *UploadHandler {
 	return &UploadHandler{uploadService: uploadService}
 }
 
+// NewSyncHandler reuses the same upload service and its concurrency limits.
+func (h *UploadHandler) NewSyncHandler() *RepositorySyncHandler {
+	return NewRepositorySyncHandler(h.uploadService)
+}
+
 func (h *UploadHandler) DeleteRepository(c echo.Context) error {
 	result, err := h.uploadService.DeleteRepository(requestRepoKey(c))
 	if err != nil {

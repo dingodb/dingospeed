@@ -1108,28 +1108,49 @@ func (d *CacheAdminDao) purgeOne(item DeleteItem) *DeleteResult {
 // 的动作，必须与正在写入的分块上传互斥。Linux 上少了这条，unlink 之后分块 writer
 // 会继续往孤儿 inode 上写，位图更新全部丢失且无人知晓。
 func reclaimBlobFile(repoType, orgRepo, sha string) error {
+	_, err := reclaimBlobFileIf(repoType, orgRepo, sha, nil)
+	return err
+}
+
+// eligible is evaluated under the writer lock, after any in-flight upload.
+func reclaimBlobFileIf(repoType, orgRepo, sha string, eligible func(os.FileInfo) bool) (bool, error) {
 	if err := validateRepoKey(repoKey{RepoType: repoType, OrgRepo: orgRepo}); err != nil {
-		return err
+		return false, err
 	}
 	if err := repository.Segment(sha); err != nil {
-		return err
+		return false, err
 	}
 	if err := repository.SafePath(config.SysConfig.Repos(), BlobPath(repoType, orgRepo, sha)); err != nil {
-		return err
+		return false, err
 	}
 	blobPath := localBlobPath(repoType, orgRepo, sha)
 	blobKey := uploadBlobLockKey(repoType, orgRepo, sha)
 	uploadBlobLocks.Lock(blobKey)
 	defer uploadBlobLocks.Unlock(blobKey)
+	if syncManifestPinned(repoType, orgRepo, sha) {
+		return false, fmt.Errorf("content is pinned by an active synchronization")
+	}
+	if eligible != nil {
+		info, err := os.Lstat(blobPath)
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if !info.Mode().IsRegular() || !eligible(info) {
+			return false, nil
+		}
+	}
 	// 拿到写锁之后再查句柄：分块上传在写锁下已经被挡住了，这里挡的是**下载**——
 	// 下载链路不走 blob 锁，只在 DingCacheManager 里登记引用计数。
 	if downloader.GetInstance().IsInUse(blobPath) {
-		return fmt.Errorf("content is in use by a running transfer")
+		return false, fmt.Errorf("content is in use by a running transfer")
 	}
 	if err := os.Remove(blobPath); err != nil && !os.IsNotExist(err) {
-		return err
+		return false, err
 	}
-	return nil
+	return true, nil
 }
 
 func validateRepoKey(key repoKey) error {

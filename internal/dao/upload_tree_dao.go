@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"dingospeed/pkg/config"
 	"dingospeed/pkg/util"
 
 	"github.com/bytedance/sonic"
@@ -20,7 +21,7 @@ import (
 // 不是增量批次。发布路径做的是并集合并，因此永远无法让清单变短；仓库编辑要把
 // 新增与删除合成一次提交，只能由调用方声明“提交之后应该是什么样”。
 //
-// BaseCommit 是必填的乐观锁：调用方基于某个快照编辑，提交时该快照必须仍是
+// BaseCommit 是编辑时必填的乐观锁：调用方基于某个快照编辑，提交时该快照必须仍是
 // revision 的当前指向，否则说明别人已经改过，静默覆盖会丢掉对方的提交。
 type LocalPublishTreeParam struct {
 	RepoType   string
@@ -28,7 +29,13 @@ type LocalPublishTreeParam struct {
 	Repo       string
 	Revision   string
 	BaseCommit string
-	Files      []LocalManifestFile
+	// ExpectedAbsent creates the complete revision only if it is still absent.
+	// It is mutually exclusive with BaseCommit; the default remains edit-only.
+	ExpectedAbsent bool
+	Files          []LocalManifestFile
+	// Optional task binding; legacy editor calls leave both fields empty.
+	PublicationID string
+	RequestDigest string
 }
 
 type LocalPublishTreeResult struct {
@@ -76,6 +83,13 @@ func supersededMarkerPath(repoType, orgRepo, commit string) string {
 // 与 PublishFiles 共用 manifestCommit 与 writeEffectiveMetadata：两条路径算出的
 // 标识必须来自同一份序列化，否则同样的内容会得到两个标识，客户端会白白重下一遍。
 func (u *UploadDao) PublishTree(param LocalPublishTreeParam) (*LocalPublishTreeResult, error) {
+	publication, err := treePublication(param)
+	if err != nil {
+		return nil, err
+	}
+	if param.ExpectedAbsent && param.BaseCommit != "" {
+		return nil, localUploadError{status: http.StatusBadRequest, code: "PUBLISH_TREE_INVALID_ARGUMENT", msg: "expectedAbsent and baseCommit are mutually exclusive"}
+	}
 	release := holdRepository(param.RepoType, param.Namespace, param.Repo)
 	defer release()
 	if err := RegisterHosted(param.RepoType, param.Namespace, param.Repo); err != nil {
@@ -101,20 +115,48 @@ func (u *UploadDao) PublishTree(param LocalPublishTreeParam) (*LocalPublishTreeR
 	if err := u.recoverInventoryLocked(RepositoryKey(param.RepoType, orgRepo)); err != nil {
 		return nil, err
 	}
+	if publication != nil {
+		previous, err := readPublication(publication)
+		if err != nil && !os.IsNotExist(err) {
+			return nil, err
+		}
+		if previous != nil && previous.State == "published" {
+			return &LocalPublishTreeResult{Namespace: param.Namespace, RepoType: param.RepoType, Repo: param.Repo,
+				Revision: param.Revision, Commit: previous.Commit, PreviousCommit: previous.PreviousCommit,
+				FileCount: len(param.Files), Changed: previous.Commit != previous.PreviousCommit, Status: "published"}, nil
+		}
+		if previous != nil && previous.State == "conflict" {
+			return nil, localUploadError{status: http.StatusConflict, code: "REVISION_CHANGED", msg: "publication was fenced by a newer revision"}
+		}
+	}
 
 	revisionLockKey := fmt.Sprintf("upload-revision:%s:%s:%s", param.RepoType, orgRepo, param.Revision)
 	uploadRevisionLocks.Lock(revisionLockKey)
 	defer uploadRevisionLocks.Unlock(revisionLockKey)
 
+	if param.ExpectedAbsent {
+		// Absence must be proven by the metadata entry, not a failed decode.
+		// currentManifestOf intentionally hides legacy read errors; using it
+		// alone here could overwrite an existing but damaged revision.
+		metaPath := filepath.Join(RepositoryKey(param.RepoType, orgRepo).Revision(config.SysConfig.Repos(), param.Revision), "meta_get.json")
+		if _, err := os.Lstat(metaPath); err == nil {
+			return nil, localUploadError{status: http.StatusConflict, code: "REVISION_CHANGED", msg: fmt.Sprintf("revision %s was created after the target was selected", param.Revision)}
+		} else if !os.IsNotExist(err) {
+			return nil, localMetadataError(err)
+		}
+	}
 	currentCommit, currentManifest := u.currentManifestOf(param.RepoType, orgRepo, param.Revision)
-	if currentCommit == "" {
+	if param.ExpectedAbsent && currentCommit != "" {
+		return nil, localUploadError{status: http.StatusConflict, code: "REVISION_CHANGED", msg: fmt.Sprintf("revision %s was created after the target was selected", param.Revision)}
+	}
+	if !param.ExpectedAbsent && currentCommit == "" {
 		return nil, localUploadError{
 			status: http.StatusNotFound,
 			code:   "REVISION_NOT_FOUND",
 			msg:    fmt.Sprintf("revision %s does not exist; use publish to create it", param.Revision),
 		}
 	}
-	if currentCommit != param.BaseCommit {
+	if !param.ExpectedAbsent && currentCommit != param.BaseCommit {
 		return nil, localUploadError{
 			status: http.StatusConflict,
 			code:   "REVISION_CHANGED",
@@ -152,9 +194,19 @@ func (u *UploadDao) PublishTree(param LocalPublishTreeParam) (*LocalPublishTreeR
 		Removed:        removed,
 		Unchanged:      unchanged,
 	}
+	if publication != nil {
+		if err = savePublication(publication, "prepared"); err != nil {
+			return nil, err
+		}
+	}
 
 	// 目标与当前逐字节相同：不重写任何元数据，也不产生待回收快照。
 	if commit == currentCommit {
+		if publication != nil {
+			if err = savePublication(publication, "published"); err != nil {
+				return nil, err
+			}
+		}
 		result.Changed = false
 		result.Status = "unchanged"
 		return result, nil
@@ -162,8 +214,17 @@ func (u *UploadDao) PublishTree(param LocalPublishTreeParam) (*LocalPublishTreeR
 
 	// 新快照完整写完之后，writeEffectiveMetadata 最后才改标签的指向；
 	// 中途失败时 revision 仍指向旧快照，不会出现指向半份内容的窗口。
-	if err = u.writeEffectiveMetadata(param.RepoType, orgRepo, param.Revision, commit, manifest); err != nil {
+	if err = u.writeEffectiveMetadataWithPublication(param.RepoType, orgRepo, param.Revision, commit, manifest, publication); err != nil {
 		return nil, err
+	}
+	if publication != nil {
+		receipt, err := readPublication(publication)
+		if err != nil {
+			return nil, err
+		}
+		if receipt.State != "published" {
+			return nil, localUploadError{status: http.StatusConflict, code: "REVISION_CHANGED", msg: "publication was fenced by a newer revision"}
+		}
 	}
 	u.retireSupersededCommit(param.RepoType, orgRepo, param.Revision, currentCommit, commit)
 

@@ -2,41 +2,61 @@ package hfprojection
 
 import (
 	"context"
-	"os"
+	"sort"
+	"strings"
 	"sync"
 )
 
-// Index is the read-only projection used by repository catalogue queries. A
-// refresh reads repository metadata only. File manifests are loaded lazily for
-// the requested repository and revision, then reused until refresh/invalidation.
+// Index caches local projection metadata. Specific manifest reads never build
+// the catalogue and never wait for its potentially slow full refresh.
 type Index struct {
-	mu          sync.RWMutex
-	refreshGate chan struct{}
-	scopes      map[string]indexedScope
+	mu             sync.RWMutex
+	refreshGate    chan struct{}
+	scopes         map[string]indexedScope
+	readCatalog    func(context.Context, string, string) (Catalog, error)
+	readRepository func(context.Context, string, string, string) (Repo, error)
 }
-
 type indexedScope struct {
-	generation *int
-	catalog    Catalog
-	manifests  map[string]Manifest
-	errors     map[string]error
+	generation            *int
+	reset                 *int
+	repositoryGenerations map[string]*int
+	catalog               Catalog
+	manifests             map[string]Manifest
+	errors                map[string]error
 }
 
+func newScope() indexedScope {
+	return indexedScope{generation: new(int), reset: new(int), repositoryGenerations: make(map[string]*int), manifests: make(map[string]Manifest), errors: make(map[string]error)}
+}
 func NewIndex() *Index {
-	return &Index{scopes: make(map[string]indexedScope), refreshGate: make(chan struct{}, 1)}
+	return &Index{scopes: make(map[string]indexedScope), refreshGate: make(chan struct{}, 1),
+		readCatalog: func(ctx context.Context, root, typ string) (Catalog, error) {
+			return (Reader{Root: root, Context: ctx}).Catalog(typ)
+		}, readRepository: func(ctx context.Context, root, typ, repo string) (Repo, error) {
+			return (Reader{Root: root, Context: ctx}).Repository(typ, repo)
+		}}
 }
 
 var DefaultIndex = NewIndex()
 
 func scopeKey(root, repoType string) string    { return root + "\x00" + repoType }
 func manifestKey(repo, revision string) string { return repo + "\x00" + revision }
-
-// Refresh rebuilds only from local cache files. It never calls HF and never
-// writes the provider cache or its database.
+func (i *Index) scope(key string) indexedScope {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	s, ok := i.scopes[key]
+	if !ok {
+		s = newScope()
+		i.scopes[key] = s
+	}
+	return s
+}
 func (i *Index) Refresh(root, repoType string) (Catalog, error) {
 	return i.RefreshContext(context.Background(), root, repoType)
 }
 
+// RefreshContext retains explicit full-catalogue refresh. Concurrent precise
+// changes prevent an older disk read from replacing newer index state.
 func (i *Index) RefreshContext(ctx context.Context, root, repoType string) (Catalog, error) {
 	select {
 	case i.refreshGate <- struct{}{}:
@@ -44,26 +64,29 @@ func (i *Index) RefreshContext(ctx context.Context, root, repoType string) (Cata
 	case <-ctx.Done():
 		return Catalog{}, ctx.Err()
 	}
-	return i.refreshContext(ctx, root, repoType)
-}
-
-func (i *Index) refreshContext(ctx context.Context, root, repoType string) (Catalog, error) {
-	reader := Reader{Root: root, Context: ctx}
-	catalog, err := reader.Catalog(repoType)
-	if err != nil {
-		return Catalog{}, err
+	key := scopeKey(root, repoType)
+	for {
+		before := i.scope(key)
+		catalog, err := i.readCatalog(ctx, root, repoType)
+		if err != nil {
+			return Catalog{}, err
+		}
+		if err := ctx.Err(); err != nil {
+			return Catalog{}, err
+		}
+		i.mu.Lock()
+		current := i.scopes[key]
+		if current.generation != before.generation {
+			i.mu.Unlock()
+			continue
+		}
+		next := newScope()
+		next.catalog = catalog
+		i.scopes[key] = next
+		i.mu.Unlock()
+		return catalog, nil
 	}
-	if err := ctx.Err(); err != nil {
-		return Catalog{}, err
-	}
-	scope := indexedScope{generation: new(int), catalog: catalog, manifests: make(map[string]Manifest), errors: make(map[string]error)}
-
-	i.mu.Lock()
-	i.scopes[scopeKey(root, repoType)] = scope
-	i.mu.Unlock()
-	return catalog, nil
 }
-
 func (i *Index) Manifest(root, repoType, repo, revision string) (Manifest, error) {
 	return i.ManifestContext(context.Background(), root, repoType, repo, revision)
 }
@@ -71,69 +94,132 @@ func (i *Index) ManifestContext(ctx context.Context, root, repoType, repo, revis
 	if err := ctx.Err(); err != nil {
 		return Manifest{}, err
 	}
-	key := scopeKey(root, repoType)
+	key, mk := scopeKey(root, repoType), manifestKey(repo, revision)
+	scope := i.scope(key)
 	i.mu.RLock()
-	_, exists := i.scopes[key]
+	repoGeneration := scope.repositoryGenerations[repo]
+	manifest, ok := scope.manifests[mk]
 	i.mu.RUnlock()
-	if !exists {
-		if _, err := i.RefreshContext(ctx, root, repoType); err != nil {
-			return Manifest{}, err
-		}
+	if ok {
+		return manifest, nil
 	}
-
-	i.mu.RLock()
-	scope := i.scopes[key]
-	manifest, ok := scope.manifests[manifestKey(repo, revision)]
-	readErr := scope.errors[manifestKey(repo, revision)]
-	i.mu.RUnlock()
-	if readErr != nil {
-		return Manifest{}, readErr
+	manifest, err := (Reader{Root: root, Context: ctx}).Manifest(repoType, repo, revision)
+	if err != nil {
+		return Manifest{}, err
 	}
-	if !ok {
-		known := false
-		for _, candidate := range scope.catalog.Repos {
-			if candidate.Repo == repo {
-				for _, rev := range candidate.Revisions {
-					if rev.Name == revision || rev.Commit == revision {
-						known = true
-					}
-				}
-			}
-		}
-		if !known {
-			return Manifest{}, os.ErrNotExist
-		}
-		manifest, readErr = (Reader{Root: root, Context: ctx}).Manifest(repoType, repo, revision)
-		if readErr != nil {
-			return Manifest{}, readErr
-		}
-		i.mu.Lock()
-		current, exists := i.scopes[key]
-		if exists && current.manifests != nil && current.generation == scope.generation {
-			current.manifests[manifestKey(repo, revision)] = manifest
-		}
-		i.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return Manifest{}, err
 	}
+	i.mu.Lock()
+	current := i.scopes[key]
+	if current.reset == scope.reset && current.repositoryGenerations[repo] == repoGeneration {
+		current.manifests[mk] = manifest
+	}
+	i.mu.Unlock()
 	return manifest, nil
 }
 
-// Invalidate makes the next catalogue or manifest read rebuild local facts.
-// It is called after a cache task changes HF bytes.
+// InvalidateRevision evicts a named alias/commit and aliases resolving to that
+// commit. Moving an alias preserves cached old immutable commits and other
+// revisions. Call after the metadata write completes.
+func (i *Index) InvalidateRevision(root, repoType, repo, revision string) {
+	i.invalidateRepository(root, repoType, repo, revision)
+}
+
+// InvalidateRepository evicts manifests of one repository, without waiting for
+// full-catalogue I/O or invalidating any sibling repository.
+func (i *Index) InvalidateRepository(root, repoType, repo string) {
+	i.invalidateRepository(root, repoType, repo, "")
+}
+func (i *Index) invalidateRepository(root, repoType, repo, revision string) {
+	if i == nil {
+		return
+	}
+	key := scopeKey(root, repoType)
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	s, ok := i.scopes[key]
+	if !ok {
+		s = newScope()
+	}
+	s.generation = new(int)
+	s.repositoryGenerations[repo] = new(int)
+	// This is an in-memory O(cached manifests + catalogue entries) filter;
+	// it performs no filesystem work while holding the index lock.
+	for k, m := range s.manifests {
+		if strings.HasPrefix(k, repo+"\x00") && (revision == "" || k == manifestKey(repo, revision) || m.Commit == revision) {
+			delete(s.manifests, k)
+		}
+	}
+	// Catalog callers explicitly refresh; discard only this stale entry until
+	// RefreshRepositoryContext supplies current local metadata.
+	repos := make([]Repo, 0, len(s.catalog.Repos))
+	for _, r := range s.catalog.Repos {
+		if r.Repo != repo {
+			repos = append(repos, r)
+		}
+	}
+	s.catalog.Repos = repos
+	i.scopes[key] = s
+}
+
+// RefreshRepositoryContext updates only this repository's catalogue metadata.
+// It never enumerates sibling repositories or builds file manifests.
+func (i *Index) RefreshRepositoryContext(ctx context.Context, root, repoType, repo string) (Repo, error) {
+	key := scopeKey(root, repoType)
+	for {
+		if err := ctx.Err(); err != nil {
+			return Repo{}, err
+		}
+		before := i.scope(key)
+		i.mu.RLock()
+		repoGeneration := before.repositoryGenerations[repo]
+		i.mu.RUnlock()
+		r, err := i.readRepository(ctx, root, repoType, repo)
+		if err != nil {
+			return Repo{}, err
+		}
+		if err := ctx.Err(); err != nil {
+			return Repo{}, err
+		}
+		i.mu.Lock()
+		s := i.scopes[key]
+		if s.reset != before.reset || s.repositoryGenerations[repo] != repoGeneration {
+			i.mu.Unlock()
+			continue
+		}
+		s.generation = new(int)
+		s.repositoryGenerations[repo] = new(int)
+		repos := make([]Repo, 0, len(s.catalog.Repos)+1)
+		for _, old := range s.catalog.Repos {
+			if old.Repo != repo {
+				repos = append(repos, old)
+			}
+		}
+		repos = append(repos, r)
+		sort.Slice(repos, func(a, b int) bool { return repos[a].Repo < repos[b].Repo })
+		s.catalog = Catalog{Namespace: r.Namespace, RepoType: repoType, Repos: repos}
+		i.scopes[key] = s
+		i.mu.Unlock()
+		return r, nil
+	}
+}
+
+// Invalidate retains whole-type/root semantics without waiting for disk I/O.
+// Generation tokens stop an in-flight refresh resurrecting old data.
 func (i *Index) Invalidate(root, repoType string) {
 	if i == nil {
 		return
 	}
-	i.refreshGate <- struct{}{}
-	defer func() { <-i.refreshGate }()
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if repoType == "" {
 		for key := range i.scopes {
-			if len(key) > len(root) && key[:len(root)+1] == root+"\x00" {
-				delete(i.scopes, key)
+			if strings.HasPrefix(key, root+"\x00") {
+				i.scopes[key] = newScope()
 			}
 		}
-		return
+	} else {
+		i.scopes[scopeKey(root, repoType)] = newScope()
 	}
-	delete(i.scopes, scopeKey(root, repoType))
 }

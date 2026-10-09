@@ -115,6 +115,17 @@ func (d *DownloaderDao) FileDownload(startPos, endPos int64, isInnerRequest bool
 }
 
 func (d *DownloaderDao) constructTask(startPos, endPos int64, isInnerRequest bool, taskParam *downloader.TaskParam) ([]common.DownloadTask, error) {
+	if taskParam.NodeSourceOnly {
+		if err := taskParam.RepoKey.Validate(); err != nil {
+			return nil, err
+		}
+		if !taskParam.LocalOnly || taskParam.Source == nil || taskParam.Source.Fetch == nil || taskParam.RepoKey.Namespace == repository.HuggingFace || taskParam.RepoKey.Namespace == repository.ModelScope {
+			return nil, fmt.Errorf("node-only transfer requires an uploaded identity and explicit local source")
+		}
+		taskParam.Peer = false // Source.Fetch handles node transport; no fallback.
+		taskParam.Domain = taskParam.Source.Domain
+		return getContiguousRanges(startPos, endPos, taskParam), nil
+	}
 	var (
 		tasks        []common.DownloadTask
 		ctx          = taskParam.Context
@@ -122,12 +133,12 @@ func (d *DownloaderDao) constructTask(startPos, endPos int64, isInnerRequest boo
 		curPos       int64
 	)
 	// 小于这个值的文件将不参与调度
-	if taskParam.FileSize <= config.SysConfig.GetMinimumFileSize() {
+	if taskParam.FileSize <= config.SysConfig.GetMinimumFileSize() && !taskParam.NativeSync {
 		goto localTask
 	}
 	// 分析下载类型是否全部存在，若文件不完整，返回当前已缓存的最大偏移量
 	fileComplete, curPos = analysisFilePosition(taskParam.DingFile, startPos, endPos)
-	if !fileComplete && !config.SysConfig.Online() { // 文件不完整，且当前节点为离线
+	if !fileComplete && !config.SysConfig.Online() && !taskParam.NativeSync { // 文件不完整，且当前节点为离线
 		return nil, myerr.NewAppendCode(http.StatusNotFound, "Entry not found")
 	}
 	// isInnerRequest为true，即内部请求，是已经被调度过后，设置为内部域名的请求，这种请求将不会再次参与调度，直接做下载即可。
@@ -184,6 +195,9 @@ func upstreamDomain(p *downloader.TaskParam) string {
 }
 
 func (d *DownloaderDao) getRequestDomainScheduler(dataType, orgRepo, fileName, etag string, startPos, endPos, fileSize int64) (*manager.SchedulerFileResponse, error) {
+	if d.schedulerDao == nil || d.schedulerDao.Client == nil {
+		return nil, fmt.Errorf("scheduler client unavailable")
+	}
 	key, err := repository.ParseID(dataType, orgRepo)
 	if err != nil {
 		return nil, err
@@ -334,6 +348,14 @@ func getContiguousRanges(startPos, endPos int64, taskParam *downloader.TaskParam
 
 func splitRemoteRange(startPos, endPos int64, taskNo *int, taskParam *downloader.TaskParam) []common.DownloadTask {
 	rangeSize := config.SysConfig.Download.RemoteFileRangeSize
+	if taskParam.NodeSourceOnly && rangeSize > 0 {
+		block := taskParam.DingFile.GetBlockSize()
+		if rangeSize < block {
+			rangeSize = block
+		} else {
+			rangeSize = rangeSize / block * block
+		}
+	}
 	remoteTasks := make([]common.DownloadTask, 0)
 	if rangeSize == 0 {
 		c := createRemoteTask(*taskNo, startPos, endPos, taskParam)
@@ -389,7 +411,9 @@ func (d *DownloaderDao) reconcileCachedFile(p *downloader.TaskParam) {
 
 func createRemoteTask(taskNo int, start, end int64, taskParam *downloader.TaskParam) *downloader.RemoteFileTask {
 	remote := downloader.NewRemoteFileTask(taskNo, start, end)
+	remote.NativeSync = taskParam.NativeSync
 	remote.Source = taskParam.Source
+	remote.OnNetworkBytes = taskParam.OnNetworkBytes
 	remote.LocalOnly = taskParam.LocalOnly
 	remote.Context = taskParam.Context
 	remote.DingFile = taskParam.DingFile
@@ -414,6 +438,11 @@ func createRemoteTask(taskNo int, start, end int64, taskParam *downloader.TaskPa
 }
 
 func peerFileURI(p *downloader.TaskParam) string {
+	if p.NativeSync {
+		q := url.Values{"repo": {p.RepoKey.Repo}, "commit": {p.Revision}, "path": {p.FileName}, "oid": {p.Etag}, "size": {fmt.Sprint(p.FileSize)}}
+		return "/api/repository-sync/" + url.PathEscape(p.RepoKey.RepoType) + "/" + url.PathEscape(p.RepoKey.Namespace) + "/remote-content?" + q.Encode()
+	}
+
 	if p.RepoKey.Namespace == repository.HuggingFace {
 		prefix := ""
 		if p.RepoKey.RepoType != "models" {

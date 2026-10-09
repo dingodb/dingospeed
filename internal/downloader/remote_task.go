@@ -36,10 +36,12 @@ import (
 )
 
 type RemoteFileTask struct {
-	Source      *RemoteSource
-	LocalOnly   bool
-	Peer        bool
-	UpstreamURI string
+	NativeSync     bool
+	OnNetworkBytes func(int64)
+	Source         *RemoteSource
+	LocalOnly      bool
+	Peer           bool
+	UpstreamURI    string
 	*DownloadTask
 	Authorization string
 	Domain        string
@@ -189,7 +191,7 @@ func (r *RemoteFileTask) DoTask() {
 	rawBlock := streamCache.Bytes()
 	if curBlock == r.DingFile.getBlockNumber()-1 {
 		// 对不足一个block的数据做补全
-		if int64(len(rawBlock)) == r.DingFile.GetFileSize()%r.DingFile.GetBlockSize() {
+		if remainder := r.DingFile.GetFileSize() % r.DingFile.GetBlockSize(); remainder > 0 && curPos == r.DingFile.GetFileSize() && int64(len(rawBlock)) == remainder {
 			padding := bytes.Repeat([]byte{0}, int(r.DingFile.GetBlockSize())-len(rawBlock))
 			rawBlock = append(rawBlock, padding...)
 		}
@@ -331,6 +333,9 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 					default:
 						chunk := make([]byte, config.SysConfig.Download.RespChunkSize)
 						n, err = resp.Body.Read(chunk)
+						if n > 0 && r.OnNetworkBytes != nil {
+							r.OnNetworkBytes(int64(n))
+						}
 						if n > 0 {
 							if contentEncoding != "" { // 数据有编码，先收集，后面解码
 								rawData = append(rawData, chunk[:n]...)
@@ -371,7 +376,7 @@ func (r *RemoteFileTask) getFileRangeFromRemote(startPos, endPos int64, contentC
 				return r.Context.Err()
 			}
 			var t myerr.Error
-			if errors.As(err, &t) {
+			if errors.As(err, &t) && !(r.NativeSync && r.Peer) {
 				break
 			}
 			// 若从内部其他节点获取数据出现异常，则切换到对应 provider 的官网获取。

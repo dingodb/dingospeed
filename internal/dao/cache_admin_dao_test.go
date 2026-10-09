@@ -793,6 +793,7 @@ func TestRecycledUploadIsReclaimedAfterRetention(t *testing.T) {
 		t.Fatalf("soft delete failed: %v", err)
 	}
 	ageTombstone(t, "models", orgRepo, sha, 200*time.Hour)
+	ageBlob(t, "models", orgRepo, sha, 200*time.Hour)
 
 	removed, err := u.CleanupUnreferencedBlobs(168 * time.Hour)
 	if err != nil {

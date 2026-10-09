@@ -159,38 +159,42 @@ func writeMountedFile(target string, body io.Reader) error {
 }
 
 func (p *PreheatCacheTask) preheatViaRepositoryAPI(k repository.RepoKey) error {
-	q := url.Values{"repo": {k.Repo}, "revision": {p.Sha.Sha}}
-	for _, file := range p.Sha.Siblings {
+	// Preserve sequential provider transfers while sharing cancellation/joining.
+	return ExecuteManifest(p.Ctx, 1, len(p.Sha.Siblings), func(ctx context.Context, i int) (func(context.Context) error, error) {
+		file := p.Sha.Siblings[i]
 		if err := repository.Relative(file.Rfilename); err != nil {
-			return err
+			return nil, err
 		}
-		q.Set("path", file.Rfilename)
-		resp, err := repositoryRequest(p.Ctx, k, p.Authorization, "file", q)
-		if err != nil {
-			return err
-		}
-		// Count bytes as the provider response is consumed. Updating only after
-		// io.Copy returned made one large ModelScope file look stuck for its
-		// entire download even though data was arriving normally.
-		_, err = io.Copy(io.Discard, &cacheProgressReader{reader: resp.Body, add: p.stockLen.Add})
-		resp.Body.Close()
-		if ctxErr := p.Ctx.Err(); ctxErr != nil {
-			return ctxErr
-		}
-		if k.Namespace == repository.ModelScope && resp.Trailer.Get("X-Dingo-Cache-Complete") != "true" {
-			if reason := resp.Trailer.Get("X-Dingo-Cache-Error"); reason != "" {
-				return fmt.Errorf("ModelScope file cache incomplete: %s: %s", file.Rfilename, reason)
+		return func(ctx context.Context) error {
+			q := url.Values{"repo": {k.Repo}, "revision": {p.Sha.Sha}}
+			q.Set("path", file.Rfilename)
+			resp, err := repositoryRequest(ctx, k, p.Authorization, "file", q)
+			if err != nil {
+				return err
+			}
+			// Count bytes as the provider response is consumed. Updating only after
+			// io.Copy returned made one large ModelScope file look stuck for its
+			// entire download even though data was arriving normally.
+			_, err = io.Copy(io.Discard, &cacheProgressReader{reader: resp.Body, add: p.stockLen.Add})
+			resp.Body.Close()
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			if k.Namespace == repository.ModelScope && resp.Trailer.Get("X-Dingo-Cache-Complete") != "true" {
+				if reason := resp.Trailer.Get("X-Dingo-Cache-Error"); reason != "" {
+					return fmt.Errorf("ModelScope file cache incomplete: %s: %s", file.Rfilename, reason)
+				}
+				if err != nil {
+					return fmt.Errorf("ModelScope file transfer failed: %s: %w", file.Rfilename, err)
+				}
+				return fmt.Errorf("ModelScope file transfer did not complete its cache: %s", file.Rfilename)
 			}
 			if err != nil {
-				return fmt.Errorf("ModelScope file transfer failed: %s: %w", file.Rfilename, err)
+				return err
 			}
-			return fmt.Errorf("ModelScope file transfer did not complete its cache: %s", file.Rfilename)
-		}
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+			return nil
+		}, nil
+	})
 }
 
 type cacheProgressReader struct {
