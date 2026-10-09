@@ -148,6 +148,9 @@ func (m *MetaDao) RefreshPreheatMetadataContext(ctx context.Context, k repositor
 			return nil, err
 		}
 	}
+	if err := repository.Register(config.SysConfig.Repos(), repository.Remote(k)); err != nil {
+		return nil, err
+	}
 	headers := resp.ExtractHeaders(resp.Headers)
 	if err := m.writeApiMetaFile(k.RepoType, k.ID(), meta.Sha, "get", resp.StatusCode, headers, resp.Body); err != nil {
 		return nil, err
