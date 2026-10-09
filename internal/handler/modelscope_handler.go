@@ -38,7 +38,7 @@ func (m *ModelscopeHandler) ModelInfoHandler(c echo.Context) error {
 	if err := key.Validate(); err != nil {
 		return echo.NewHTTPError(400, err.Error())
 	}
-	if err := repository.Register(config.SysConfig.Repos(), repository.Remote(key)); err != nil {
+	if err := repository.CheckRegistration(config.SysConfig.Repos(), repository.Remote(key)); err != nil {
 		return err
 	}
 	if err := m.modelscopeService.ForwardModelInfo(c, org, repo, repoType); err != nil {
@@ -61,7 +61,7 @@ func (m *ModelscopeHandler) RevisionsHandler(c echo.Context) error {
 	if err := key.Validate(); err != nil {
 		return echo.NewHTTPError(400, err.Error())
 	}
-	if err := repository.Register(config.SysConfig.Repos(), repository.Remote(key)); err != nil {
+	if err := repository.CheckRegistration(config.SysConfig.Repos(), repository.Remote(key)); err != nil {
 		return err
 	}
 	if err := m.modelscopeService.ForwardRevisions(c, org, repo, repoType); err != nil {
@@ -84,7 +84,7 @@ func (m *ModelscopeHandler) FileListHandler(c echo.Context) error {
 	if err := key.Validate(); err != nil {
 		return echo.NewHTTPError(400, err.Error())
 	}
-	if err := repository.Register(config.SysConfig.Repos(), repository.Remote(key)); err != nil {
+	if err := repository.CheckRegistration(config.SysConfig.Repos(), repository.Remote(key)); err != nil {
 		return err
 	}
 	if err := m.modelscopeService.ForwardFileList(c, org, repo, repoType); err != nil {
@@ -107,7 +107,7 @@ func (m *ModelscopeHandler) FileDownloadHandler(c echo.Context) error {
 	if err := key.Validate(); err != nil {
 		return echo.NewHTTPError(400, err.Error())
 	}
-	if err := repository.Register(config.SysConfig.Repos(), repository.Remote(key)); err != nil {
+	if err := repository.CheckRegistration(config.SysConfig.Repos(), repository.Remote(key)); err != nil {
 		return err
 	}
 	return m.modelscopeService.HandleFileDownload(c, org, repo, repoType)
@@ -127,7 +127,7 @@ func (m *ModelscopeHandler) FileTreeHandler(c echo.Context) error {
 	if err := key.Validate(); err != nil {
 		return echo.NewHTTPError(400, err.Error())
 	}
-	if err := repository.Register(config.SysConfig.Repos(), repository.Remote(key)); err != nil {
+	if err := repository.CheckRegistration(config.SysConfig.Repos(), repository.Remote(key)); err != nil {
 		return err
 	}
 	if err := m.modelscopeService.ForwardRepoTree(c, org, repo, repoType); err != nil {

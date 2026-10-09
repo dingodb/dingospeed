@@ -107,6 +107,20 @@ func (m *ModelscopeService) forwardRequest(c echo.Context, officialURL string) e
 	}
 	defer resp.Body.Close()
 
+	// Preserve the provider response while registering only verified metadata.
+	if resp.StatusCode == http.StatusOK && c.Param("org") != "" && c.Param("repo") != "" {
+		raw, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return readErr
+		}
+		resp.Body = io.NopCloser(bytes.NewReader(raw))
+		if validModelscopeMetadata(raw) {
+			key := repository.RepoKey{Namespace: repository.ModelScope, RepoType: c.Param("repoType"), Repo: c.Param("org") + "/" + c.Param("repo")}
+			if err := repository.Register(config.SysConfig.Repos(), repository.Remote(key)); err != nil {
+				return err
+			}
+		}
+	}
 	var body io.Reader = resp.Body
 	if resp.StatusCode == 200 && strings.HasSuffix(c.Request().URL.Path, "/repo/files") && strings.EqualFold(c.QueryParam("Recursive"), "true") && c.QueryParam("Root") == "" {
 		raw, readErr := io.ReadAll(resp.Body)
@@ -114,7 +128,7 @@ func (m *ModelscopeService) forwardRequest(c echo.Context, officialURL string) e
 			return readErr
 		}
 		var envelope modelscopeEnvelope
-		if json.Unmarshal(raw, &envelope) == nil && (envelope.Code == 0 || envelope.Code == 200) && (envelope.Data.LatestCommitter.Id != "" || envelope.Data.LatestCommitter.ShortId != "") {
+		if validModelscopeMetadata(raw) && json.Unmarshal(raw, &envelope) == nil && (envelope.Data.LatestCommitter.Id != "" || envelope.Data.LatestCommitter.ShortId != "") {
 			revision := c.QueryParam("Revision")
 			if revision == "" {
 				revision = "master"

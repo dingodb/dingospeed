@@ -613,6 +613,35 @@ func registrationConflicts(root string, d Descriptor, all []Descriptor) error {
 	return nil
 }
 
+// CheckRegistration validates a prospective identity without creating a marker.
+// Register repeats these checks under its locks when metadata has been verified.
+func CheckRegistration(root string, d Descriptor) error {
+	if err := d.Validate(); err != nil {
+		return err
+	}
+	if err := SafePath(root, filepath.Join(d.APIRoot(root), Marker)); err != nil {
+		return err
+	}
+	if err := SafePath(root, filepath.Join(d.FilesRoot(root), ".check")); err != nil {
+		return err
+	}
+	registrationMu.Lock()
+	defer registrationMu.Unlock()
+	if old, err := Read(root, d.RepoKey); err == nil {
+		if old == d {
+			return nil
+		}
+		return fmt.Errorf("repository identity or source conflict")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	all, err := listConflicts(root, d)
+	if err != nil {
+		return err
+	}
+	return registrationConflicts(root, d, all)
+}
+
 // Register serializes case and ancestor checks with marker creation. The lock
 // file also rejects concurrent registration by another process sharing root.
 func Register(root string, d Descriptor) error {

@@ -40,6 +40,12 @@ type modelscopeEnvelope struct {
 // ModelScope's own protocol remains byte-for-byte proxied. These methods only
 // project its published Files/RevisionMap response into the control-plane API.
 func (m *ModelscopeService) repositoryJSON(c echo.Context, k repository.RepoKey, operation string, q url.Values) (*modelscopeEnvelope, error) {
+	return m.repositoryJSONWithRegistration(c, k, operation, q, true)
+}
+func (m *ModelscopeService) repositoryJSONReadOnly(c echo.Context, k repository.RepoKey, operation string, q url.Values) (*modelscopeEnvelope, error) {
+	return m.repositoryJSONWithRegistration(c, k, operation, q, false)
+}
+func (m *ModelscopeService) repositoryJSONWithRegistration(c echo.Context, k repository.RepoKey, operation string, q url.Values, register bool) (*modelscopeEnvelope, error) {
 	if err := k.Validate(); err != nil {
 		return nil, err
 	}
@@ -50,7 +56,12 @@ func (m *ModelscopeService) repositoryJSON(c echo.Context, k repository.RepoKey,
 	if err != nil {
 		return nil, err
 	}
-	if err := repository.Register(config.SysConfig.Repos(), repository.Remote(k)); err != nil {
+	if err := func() error {
+		if register {
+			return repository.CheckRegistration(config.SysConfig.Repos(), repository.Remote(k))
+		}
+		return nil
+	}(); err != nil {
 		return nil, err
 	}
 	uri := base + "/api/v1/" + k.RepoType + "/" + escapeRepoPath(upstream) + operation
@@ -87,12 +98,23 @@ func (m *ModelscopeService) repositoryJSON(c echo.Context, k repository.RepoKey,
 		return nil, echo.NewHTTPError(resp.StatusCode, "ModelScope request rejected")
 	}
 	var envelope modelscopeEnvelope
-	decoder := json.NewDecoder(io.LimitReader(resp.Body, 32<<20))
-	if err = decoder.Decode(&envelope); err != nil {
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if err != nil {
+		return nil, err
+	}
+	if !validModelscopeMetadata(raw) {
+		return nil, echo.NewHTTPError(502, "invalid ModelScope metadata response")
+	}
+	if err = json.Unmarshal(raw, &envelope); err != nil {
 		return nil, err
 	}
 	if envelope.Code != 0 && envelope.Code != 200 {
 		return nil, echo.NewHTTPError(502, "ModelScope application error")
+	}
+	if register {
+		if err := repository.Register(config.SysConfig.Repos(), repository.Remote(k)); err != nil {
+			return nil, err
+		}
 	}
 	return &envelope, nil
 }
@@ -178,4 +200,27 @@ func (m *ModelscopeService) RepositoryMetadata(c echo.Context, k repository.Repo
 }
 func (m *ModelscopeService) RepositoryFile(c echo.Context, k repository.RepoKey, revision, path string) error {
 	return m.serveFile(c, k, revision, path)
+}
+
+// A successful HTTP status alone does not establish a remote repository.
+func validModelscopeMetadata(raw []byte) bool {
+	var result struct {
+		Code    *int
+		Success *bool
+		Data    json.RawMessage
+	}
+	if json.Unmarshal(raw, &result) != nil {
+		return false
+	}
+	if result.Success != nil && !*result.Success {
+		return false
+	}
+	if result.Code != nil && *result.Code != 0 && *result.Code != 200 {
+		return false
+	}
+	if result.Code == nil && (result.Success == nil || !*result.Success) {
+		return false
+	}
+	var data map[string]json.RawMessage
+	return json.Unmarshal(result.Data, &data) == nil && data != nil
 }
