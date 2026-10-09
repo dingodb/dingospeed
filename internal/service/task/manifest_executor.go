@@ -25,6 +25,12 @@ func ExecuteManifest(ctx context.Context, limit, count int, prepare func(context
 		}
 		transfer, err := prepare(workCtx, i)
 		if err != nil {
+			// Metadata clients may flatten cancellation into an opaque error.
+			// Preserve cancellation identity so a failed transfer remains the
+			// cause when it cancelled concurrent preparation.
+			if workCtx.Err() != nil {
+				err = workCtx.Err()
+			}
 			prepareErr = err
 			cancel()
 			break
