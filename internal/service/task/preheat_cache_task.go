@@ -249,7 +249,12 @@ func (p *PreheatCacheTask) preheatProcess(orgRepo string) error {
 func (p *PreheatCacheTask) startPreheatContext(ctx context.Context, hfUri, orgRepo, fileName, commit, etag, authorization string, fileSize, offset int64) error {
 	// Preheat is background work: it must leave transfer slots to interactive
 	// downloads, and it only counts bytes, so its ranges may complete out of order.
-	bgCtx := transfersettings.WithBackground(context.WithValue(ctx, consts.PromSource, "localhost"))
+	// A failing stream cancels only this file. Handing the downloader the job's
+	// CancelFunc made one dropped connection stop the whole job and look like a
+	// user stop, which also suppressed the manifest retry.
+	fileCtx, fileCancel := context.WithCancel(ctx)
+	defer fileCancel()
+	bgCtx := transfersettings.WithBackground(context.WithValue(fileCtx, consts.PromSource, "localhost"))
 	responseChan := make(chan []byte, config.SysConfig.Download.RespChanSize)
 	blobsFile := dao.BlobPath(p.Job.Datatype, orgRepo, etag)
 	filesPath := dao.ResolvePath(p.Job.Datatype, orgRepo, commit, fileName)
@@ -275,7 +280,7 @@ func (p *PreheatCacheTask) startPreheatContext(ctx context.Context, hfUri, orgRe
 	}
 	taskParam.Context = bgCtx
 	taskParam.ResponseChan = responseChan
-	taskParam.Cancel = p.CancelFunc
+	taskParam.Cancel = fileCancel
 	if err := p.DownloaderDao.FileDownload(offset, fileSize, false, taskParam); err != nil {
 		return err
 	}
