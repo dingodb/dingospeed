@@ -128,25 +128,26 @@ func (p *PreheatCacheTask) DoTask() {
 	p.SchedulerDao.ExecUpdateCacheJobStatus(p.TaskNo, consts.RunningStatusJobComplete, p.Job.InstanceId, p.Job.Namespace, p.Job.Repo, "", p.StockProcess)
 }
 
-// preheatRetryBackoff spaces out reruns of a failed manifest. Preheat jobs run
-// for hours through shared exits: one dropped connection or metadata timeout
-// used to fail a 1.7 TB job at 87%. A rerun skips completed files and resumes
-// partial ones from their cached offset, so retrying is cheap.
-var preheatRetryBackoff = []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 5 * time.Minute,
+// PreheatRetryBackoff spaces out reruns of a failed manifest; empty disables
+// retries. Preheat jobs run for hours through shared exits: one dropped
+// connection or metadata timeout used to fail a 1.7 TB job at 87%. A rerun
+// skips completed files and resumes partial ones from their cached offset, so
+// retrying is cheap.
+var PreheatRetryBackoff = []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 5 * time.Minute,
 	10 * time.Minute, 10 * time.Minute, 10 * time.Minute, 10 * time.Minute}
 
 func (p *PreheatCacheTask) preheatWithRetry(orgRepo string) error {
 	for attempt := 0; ; attempt++ {
 		err := p.preheatProcess(orgRepo)
-		if err == nil || attempt >= len(preheatRetryBackoff) || !retryablePreheatError(p.Ctx, err) {
+		if err == nil || attempt >= len(PreheatRetryBackoff) || !retryablePreheatError(p.Ctx, err) {
 			return err
 		}
 		zap.S().Warnf("preheat job %d (%s) failed, retry %d/%d in %s: %v",
-			p.TaskNo, orgRepo, attempt+1, len(preheatRetryBackoff), preheatRetryBackoff[attempt], err)
+			p.TaskNo, orgRepo, attempt+1, len(PreheatRetryBackoff), PreheatRetryBackoff[attempt], err)
 		select {
 		case <-p.Ctx.Done():
 			return err
-		case <-time.After(preheatRetryBackoff[attempt]):
+		case <-time.After(PreheatRetryBackoff[attempt]):
 		}
 		// The rerun counts cached offsets again as it walks the manifest.
 		p.stockLen.Store(0)

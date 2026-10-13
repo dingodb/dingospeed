@@ -14,11 +14,11 @@ import (
 
 func fastPreheatRetries(t *testing.T, n int) {
 	t.Helper()
-	old := preheatRetryBackoff
-	t.Cleanup(func() { preheatRetryBackoff = old })
-	preheatRetryBackoff = make([]time.Duration, n)
-	for i := range preheatRetryBackoff {
-		preheatRetryBackoff[i] = time.Millisecond
+	old := PreheatRetryBackoff
+	t.Cleanup(func() { PreheatRetryBackoff = old })
+	PreheatRetryBackoff = make([]time.Duration, n)
+	for i := range PreheatRetryBackoff {
+		PreheatRetryBackoff[i] = time.Millisecond
 	}
 }
 
