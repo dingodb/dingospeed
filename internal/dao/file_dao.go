@@ -637,6 +637,43 @@ requestRemoteFileInfo:
 	return pathInfo, nil
 }
 
+// GetPathsSizesContext 批量查询快照内文件大小，每 128 个路径一次 paths-info 请求。
+// 上游必须逐一返回请求的路径，缺失或多出的条目都视为错误。
+func (f *FileDao) GetPathsSizesContext(ctx context.Context, repoType, orgRepo, commit, authorization string, paths []string) (map[string]int64, error) {
+	upstream, err := UpstreamRepo(repoType, orgRepo)
+	if err != nil {
+		return nil, err
+	}
+	pathsInfoUri := fmt.Sprintf("/api/%s/%s/paths-info/%s", repoType, repository.EscapeURLPath(upstream), repository.EscapeURLPath(commit))
+	sizes := make(map[string]int64, len(paths))
+	for start := 0; start < len(paths); start += 128 {
+		batch := paths[start:min(start+128, len(paths))]
+		response, err := f.requestFilePathInfoContext(ctx, pathsInfoUri, authorization, batch)
+		if err != nil {
+			return nil, err
+		}
+		infos := make([]common.PathsInfo, 0, len(batch))
+		if err = sonic.Unmarshal(response.Body, &infos); err != nil {
+			return nil, myerr.NewAppendCode(http.StatusInternalServerError, fmt.Sprintf("%v", err))
+		}
+		expected := make(map[string]bool, len(batch))
+		for _, path := range batch {
+			expected[path] = true
+		}
+		for _, info := range infos {
+			if !expected[info.Path] {
+				return nil, fmt.Errorf("upstream returned unexpected path %q", info.Path)
+			}
+			delete(expected, info.Path)
+			sizes[info.Path] = info.Size
+		}
+		if len(expected) > 0 {
+			return nil, myerr.NewAppendCode(http.StatusNotFound, fmt.Sprintf("upstream paths-info missing %d of %d paths", len(expected), len(batch)))
+		}
+	}
+	return sizes, nil
+}
+
 func (f *FileDao) requestFileResolve(fileResolveUri, authorization string) (*common.Response, error) {
 	return f.requestFileResolveContext(context.Background(), fileResolveUri, authorization)
 }
