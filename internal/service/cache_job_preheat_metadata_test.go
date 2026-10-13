@@ -15,6 +15,7 @@ import (
 	"dingospeed/internal/dao"
 	"dingospeed/internal/data"
 	"dingospeed/internal/model/query"
+	task2 "dingospeed/internal/service/task"
 	"dingospeed/pkg/app"
 	"dingospeed/pkg/config"
 	"dingospeed/pkg/consts"
@@ -190,4 +191,56 @@ func preheatTestService(t *testing.T, upstreamURL string) *CacheJobService {
 	svc := NewCacheJobService(fileDao, dao.NewMetaDao(fileDao, locks, base), downloads, nil)
 	t.Cleanup(svc.cachePool.Close)
 	return svc
+}
+
+// 2026-10-14: the downloader cancelled the job's own context when a stream
+// dropped, so the job failed and the manifest retry treated it as a user stop.
+func TestPreheatRetriesAfterDroppedStream(t *testing.T) {
+	oldBackoff := task2.PreheatRetryBackoff
+	task2.PreheatRetryBackoff = []time.Duration{time.Millisecond, time.Millisecond}
+	defer func() { task2.PreheatRetryBackoff = oldBackoff }()
+	payload := strings.Repeat("abcdefgh", 4096)
+	var downloads atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/revision/") && r.URL.Query().Get("blobs") == "true":
+			fmt.Fprintf(w, `{"sha":"commit-1","siblings":[{"rfilename":"model.bin","size":%d}]}`, len(payload))
+		case strings.Contains(r.URL.Path, "/revision/"):
+			fmt.Fprint(w, `{"sha":"commit-1","siblings":[{"rfilename":"model.bin"}]}`)
+		case strings.Contains(r.URL.Path, "/paths-info/"):
+			fmt.Fprintf(w, `[{"type":"file","path":"model.bin","oid":"file-oid","size":%d}]`, len(payload))
+		case strings.Contains(r.URL.Path, "/resolve/"):
+			start, end := 0, len(payload)-1
+			if v := r.Header.Get("Range"); v != "" {
+				fmt.Sscanf(v, "bytes=%d-%d", &start, &end)
+				w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(payload)))
+			}
+			w.Header().Set("Content-Length", fmt.Sprint(end-start+1))
+			if start > 0 {
+				w.WriteHeader(206)
+			}
+			if downloads.Add(1) == 1 {
+				w.Write([]byte(payload[start : start+1024])) // short body: unexpected EOF
+				return
+			}
+			w.Write([]byte(payload[start : end+1]))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer upstream.Close()
+	svc := preheatTestService(t, upstream.URL)
+	config.SysConfig.Scheduler.Mode = "standalone"
+	config.SysConfig.Download.RemoteFileRangeSize = 0
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest("POST", "/api/cacheJob/create", nil).WithContext(app.NewContext(ctx, app.New(app.Context(ctx))))
+	result, err := svc.CreateCacheJobResult(echo.New().NewContext(req, httptest.NewRecorder()), &query.CreateCacheJobReq{Type: consts.CacheTypePreheat, Namespace: "huggingface", Datatype: "models", Repo: "owner/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitCacheJob(t, svc, result.ID, "complete")
+	if downloads.Load() < 2 {
+		t.Fatalf("dropped stream was not retried: %d downloads", downloads.Load())
+	}
 }
