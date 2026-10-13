@@ -369,26 +369,25 @@ func (p *CacheJobService) preheatMetadata(ctx context.Context, key repository.Re
 		}
 		// HF usedStorage may include multiple versions; count the pinned snapshot.
 		meta.UsedStorage = 0
-		prefix := ""
-		if key.RepoType != "models" {
-			prefix = "/" + key.RepoType
-		}
+		paths := make([]string, 0, len(meta.Siblings))
 		for _, file := range meta.Siblings {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
 			if err := repository.Relative(file.Rfilename); err != nil {
 				return nil, err
 			}
-			uri := prefix + "/" + repository.EscapeURLPath(key.Repo) + "/resolve/" + repository.EscapeURLPath(meta.Sha) + "/" + repository.EscapeURLPath(file.Rfilename)
-			info, err := p.fileDao.GetPathsInfoContext(ctx, uri, key.RepoType, key.ID(), meta.Sha, authorization, file.Rfilename)
-			if err != nil {
-				return nil, err
-			}
-			if info == nil || info.Size < 0 || info.Size > math.MaxInt64-meta.UsedStorage {
+			paths = append(paths, file.Rfilename)
+		}
+		// One batched paths-info call per 128 files: per-file requests made
+		// large repositories exceed the scheduler's request timeout.
+		sizes, err := p.fileDao.GetPathsSizesContext(ctx, key.RepoType, key.ID(), meta.Sha, authorization, paths)
+		if err != nil {
+			return nil, err
+		}
+		for _, path := range paths {
+			size := sizes[path]
+			if size < 0 || size > math.MaxInt64-meta.UsedStorage {
 				return nil, fmt.Errorf("invalid snapshot file size")
 			}
-			meta.UsedStorage += info.Size
+			meta.UsedStorage += size
 		}
 		return meta, nil
 	}
