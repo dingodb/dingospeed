@@ -65,8 +65,14 @@ func (p *CacheJobService) reusableCacheJob(key repository.RepoKey, snapshot *dao
 			}
 		}
 	}
-	if completed != nil && dao.PreheatCacheComplete(key, snapshot) {
-		return completed, nil
+	if completed != nil {
+		// A create request only carries the upstream size estimate; the
+		// completed job recorded the measured size of this commit.
+		measured := *snapshot
+		measured.UsedStorage = int64(completed.TotalBytes)
+		if dao.PreheatCacheComplete(key, &measured) {
+			return completed, nil
+		}
 	}
 	return nil, nil
 }

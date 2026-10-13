@@ -160,6 +160,8 @@ message UpdateCacheJobStatusReq{
     string org = 5;
     string repo = 6;
     float process = 7;
+    // Exact snapshot size once the job has measured it; 0 leaves the stored value.
+    int64 usedStorage = 8;
 }
 
 message UpdateRepositoryMountStatusReq{
