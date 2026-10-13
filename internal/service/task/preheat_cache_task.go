@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"dingospeed/internal/model/query"
 	"dingospeed/pkg/config"
 	"dingospeed/pkg/consts"
+	myerr "dingospeed/pkg/error"
 	"dingospeed/pkg/hfprojection"
 	"dingospeed/pkg/repository"
 	"dingospeed/pkg/transfersettings"
@@ -96,7 +98,7 @@ func (p *PreheatCacheTask) DoTask() {
 			defer close(progressDone)
 			p.realTimeSpeed(ctx)
 		}()
-		err = p.preheatProcess(orgRepo)
+		err = p.preheatWithRetry(orgRepo)
 		// Stop sampling before recording the terminal progress; a late tick must
 		// not overwrite 100% with the last in-flight percentage.
 		cancelFunc()
@@ -124,6 +126,48 @@ func (p *PreheatCacheTask) DoTask() {
 		hfprojection.DefaultIndex.InvalidateRepository(config.SysConfig.Repos(), p.Job.Datatype, p.Job.Repo)
 	}
 	p.SchedulerDao.ExecUpdateCacheJobStatus(p.TaskNo, consts.RunningStatusJobComplete, p.Job.InstanceId, p.Job.Namespace, p.Job.Repo, "", p.StockProcess)
+}
+
+// preheatRetryBackoff spaces out reruns of a failed manifest. Preheat jobs run
+// for hours through shared exits: one dropped connection or metadata timeout
+// used to fail a 1.7 TB job at 87%. A rerun skips completed files and resumes
+// partial ones from their cached offset, so retrying is cheap.
+var preheatRetryBackoff = []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 5 * time.Minute,
+	10 * time.Minute, 10 * time.Minute, 10 * time.Minute, 10 * time.Minute}
+
+func (p *PreheatCacheTask) preheatWithRetry(orgRepo string) error {
+	for attempt := 0; ; attempt++ {
+		err := p.preheatProcess(orgRepo)
+		if err == nil || attempt >= len(preheatRetryBackoff) || !retryablePreheatError(p.Ctx, err) {
+			return err
+		}
+		zap.S().Warnf("preheat job %d (%s) failed, retry %d/%d in %s: %v",
+			p.TaskNo, orgRepo, attempt+1, len(preheatRetryBackoff), preheatRetryBackoff[attempt], err)
+		select {
+		case <-p.Ctx.Done():
+			return err
+		case <-time.After(preheatRetryBackoff[attempt]):
+		}
+		// The rerun counts cached offsets again as it walks the manifest.
+		p.stockLen.Store(0)
+	}
+}
+
+// retryablePreheatError reports whether a failed manifest is worth rerunning:
+// not when the job itself was stopped, canceled or shut down, and not when the
+// upstream refused or lacks the repository.
+func retryablePreheatError(jobCtx context.Context, err error) bool {
+	if jobCtx.Err() != nil {
+		return false
+	}
+	var appErr myerr.Error
+	if errors.As(err, &appErr) {
+		switch appErr.StatusCode() {
+		case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+			return false
+		}
+	}
+	return true
 }
 
 // preheatFileConcurrency bounds how many files a preheat job transfers at once.
@@ -271,7 +315,10 @@ func (p *PreheatCacheTask) realTimeSpeed(ctx context.Context) {
 		select {
 		case <-ticker.C:
 			currentBytes := p.stockLen.Load()
-			delta := currentBytes - lastBytes
+			delta := uint64(0)
+			if currentBytes > lastBytes { // a retry restarts the count
+				delta = currentBytes - lastBytes
+			}
 			p.progressMu.Lock()
 			p.StockSpeed = formatSpeed(delta, 1*time.Second) // 采样间隔 1 秒
 			// 计算下载进度（百分比）
