@@ -74,6 +74,11 @@ func TestModelScopeFailedTaskRetriesPinnedCache(t *testing.T) {
 	defer release()
 	msConfig(t, upstream.URL)
 	config.SysConfig.Download.RemoteFileRangeSize = 0
+	// This test drives the failed -> manual resume path; keep the job from
+	// recovering on its own first.
+	oldBackoff := task.PreheatRetryBackoff
+	task.PreheatRetryBackoff = nil
+	defer func() { task.PreheatRetryBackoff = oldBackoff }()
 	key := repository.RepoKey{Namespace: repository.ModelScope, RepoType: "models", Repo: "owner/model"}
 	provider := NewModelscopeService()
 	e := echo.New()
