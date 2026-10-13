@@ -3,7 +3,9 @@ package dao
 import (
 	"context"
 	"dingospeed/pkg/repository"
+	"errors"
 	"google.golang.org/protobuf/proto"
+	"sync/atomic"
 	"time"
 
 	"dingospeed/internal/data"
@@ -15,8 +17,32 @@ import (
 	"go.uber.org/zap"
 )
 
+// 下载路径上的调度调用（选取对等节点、上报文件已缓存）失败时都有退路：
+// 回源下载，或写入本地队列稍后重放。短超时加冷却期，避免调度器或其数据库
+// 卡住时，每个文件都要等满 RpcRequestTimeout，并在调度器的写锁上排队。
+var (
+	SchedulerFastTimeout  = 5 * time.Second
+	SchedulerFastCooldown = 30 * time.Second
+)
+
+var errSchedulerCooling = errors.New("scheduler calls paused after a recent failure")
+
 type SchedulerDao struct {
-	Client manager.ManagerClient
+	Client        manager.ManagerClient
+	fastSkipUntil atomic.Int64
+}
+
+func (s *SchedulerDao) fastCall(call func(context.Context) error) error {
+	if time.Now().UnixNano() < s.fastSkipUntil.Load() {
+		return errSchedulerCooling
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), SchedulerFastTimeout)
+	defer cancel()
+	if err := call(ctx); err != nil {
+		s.fastSkipUntil.Store(time.Now().Add(SchedulerFastCooldown).UnixNano())
+		return err
+	}
+	return nil
 }
 
 func NewSchedulerDao() *SchedulerDao {
@@ -66,26 +92,47 @@ func (s *SchedulerDao) SchedulerFile(req *manager.SchedulerFileRequest) (*manage
 		req.Org, req.Repo = org, repo
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), consts.RpcRequestTimeout)
-	defer cancel()
-	resp, err := s.Client.SchedulerFile(ctx, req)
+	var resp *manager.SchedulerFileResponse
+	err := s.fastCall(func(ctx context.Context) (err error) {
+		resp, err = s.Client.SchedulerFile(ctx, req)
+		return err
+	})
 	return resp, err
 }
 
 func (s *SchedulerDao) SyncFileProcess(req *manager.SyncFileProcessReq) error {
+	req, err := storageFileProcess(req)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), consts.RpcRequestTimeout)
+	defer cancel()
+	_, err = s.Client.SyncFileProcess(ctx, req)
+	return err
+}
+
+// ReportCachedFile 在下载路径上同步执行，失败由调用方写入本地队列重放。
+func (s *SchedulerDao) ReportCachedFile(req *manager.SyncFileProcessReq) error {
+	req, err := storageFileProcess(req)
+	if err != nil {
+		return err
+	}
+	return s.fastCall(func(ctx context.Context) error {
+		_, err := s.Client.SyncFileProcess(ctx, req)
+		return err
+	})
+}
+
+func storageFileProcess(req *manager.SyncFileProcessReq) (*manager.SyncFileProcessReq, error) {
 	req = proto.Clone(req).(*manager.SyncFileProcessReq)
 	for _, e := range req.FileProcessEntries {
 		org, repo, err := (repository.RepoKey{Namespace: e.Org, RepoType: e.DataType, Repo: e.Repo}).Storage()
 		if err != nil {
-			return err
+			return nil, err
 		}
 		e.Org, e.Repo = org, repo
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), consts.RpcRequestTimeout)
-	defer cancel()
-	_, err := s.Client.SyncFileProcess(ctx, req)
-	return err
+	return req, nil
 }
 
 func (s *SchedulerDao) ReportFileProcess(request *manager.FileProcessRequest) error {
