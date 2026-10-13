@@ -22,6 +22,7 @@ import (
 	"dingospeed/pkg/repository"
 
 	"github.com/labstack/echo/v4"
+	"go.uber.org/zap"
 )
 
 type CacheJobService struct {
@@ -108,10 +109,10 @@ func (p *CacheJobService) CreateCacheJobResult(c echo.Context, jobReq *query.Cre
 		if key.Namespace == repository.ModelScope {
 			revision = "master"
 		}
-		// Bound preparation across all retries, while the accepted download keeps
-		// its application lifetime independently of the browser request.
+		// Only the commit is resolved here; the snapshot is measured by the task
+		// (sizeSnapshot), so the scheduler's request does not wait on it.
 		prepareCtx, prepareCancel := context.WithTimeout(c.Request().Context(), 45*time.Second)
-		sha, err := p.preheatMetadata(prepareCtx, key, revision, authorization)
+		sha, err := p.preheatRevision(prepareCtx, key, revision, authorization)
 		prepareCancel()
 		if err != nil {
 			cancelFunc()
@@ -167,6 +168,9 @@ func (p *CacheJobService) CreateCacheJobResult(c echo.Context, jobReq *query.Cre
 			Sha:           sha,
 			Authorization: authorization,
 			UsedStorage:   uint64(sha.UsedStorage),
+		}
+		if key.Namespace == repository.HuggingFace {
+			task.(*task2.PreheatCacheTask).Prepare = p.sizeSnapshot(task.(*task2.PreheatCacheTask), key)
 		}
 		if err := trackCacheJob(task.(*task2.PreheatCacheTask), key, appInfo.Ctx()); err != nil {
 			cancelFunc()
@@ -339,6 +343,10 @@ func (p *CacheJobService) ResumeCacheJob(c echo.Context, req *query.ResumeCacheJ
 		if err != nil {
 			preheat.OnFinish(err)
 			cancel()
+			return
+		}
+		if !local {
+			p.schedulerDao.ReportCacheJobRunning(preheat.TaskNo, instance, previous.Namespace, previous.Repo, sha.UsedStorage)
 		}
 	}()
 	return nil
@@ -361,37 +369,84 @@ func (p *CacheJobService) RealtimeCacheJob(realtimeReq *query.RealtimeReq) []*qu
 	return ret
 }
 
-func (p *CacheJobService) preheatMetadata(ctx context.Context, key repository.RepoKey, revision, authorization string) (*dao.CommitHfSha, error) {
+// preheatRevision resolves the pinned commit and its file list, the only
+// metadata a create request waits for.
+func (p *CacheJobService) preheatRevision(ctx context.Context, key repository.RepoKey, revision, authorization string) (*dao.CommitHfSha, error) {
 	if key.Namespace == repository.HuggingFace {
-		meta, err := p.metaDao.RefreshPreheatMetadataContext(ctx, key, revision, authorization)
-		if err != nil {
-			return nil, err
-		}
-		// HF usedStorage may include multiple versions; count the pinned snapshot.
-		meta.UsedStorage = 0
-		paths := make([]string, 0, len(meta.Siblings))
-		for _, file := range meta.Siblings {
-			if err := repository.Relative(file.Rfilename); err != nil {
-				return nil, err
-			}
-			paths = append(paths, file.Rfilename)
-		}
-		// One batched paths-info call per 128 files: per-file requests made
-		// large repositories exceed the scheduler's request timeout.
-		sizes, err := p.fileDao.GetPathsSizesContext(ctx, key.RepoType, key.ID(), meta.Sha, authorization, paths)
-		if err != nil {
-			return nil, err
-		}
-		for _, path := range paths {
-			size := sizes[path]
-			if size < 0 || size > math.MaxInt64-meta.UsedStorage {
-				return nil, fmt.Errorf("invalid snapshot file size")
-			}
-			meta.UsedStorage += size
-		}
-		return meta, nil
+		return p.metaDao.RefreshPreheatMetadataContext(ctx, key, revision, authorization)
 	}
 	return task2.ReadRepositoryMetadata(ctx, key, revision, authorization)
+}
+
+// preheatSnapshotSize measures the pinned snapshot. HF usedStorage may include
+// multiple versions, so sizes come from one revision?blobs=true request, or
+// from batched paths-info when the upstream omits them.
+func (p *CacheJobService) preheatSnapshotSize(ctx context.Context, key repository.RepoKey, meta *dao.CommitHfSha, authorization string) (int64, error) {
+	paths := make([]string, 0, len(meta.Siblings))
+	for _, file := range meta.Siblings {
+		if err := repository.Relative(file.Rfilename); err != nil {
+			return 0, err
+		}
+		paths = append(paths, file.Rfilename)
+	}
+	sizes, err := p.fileDao.GetSnapshotSizesContext(ctx, key.RepoType, key.ID(), meta.Sha, authorization, paths)
+	if err != nil {
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
+		}
+		zap.S().Warnf("snapshot sizes for %s via revision?blobs=true: %v; falling back to paths-info", key.ID(), err)
+		if sizes, err = p.fileDao.GetPathsSizesContext(ctx, key.RepoType, key.ID(), meta.Sha, authorization, paths); err != nil {
+			return 0, err
+		}
+	}
+	var total int64
+	for _, path := range paths {
+		size := sizes[path]
+		if size < 0 || size > math.MaxInt64-total {
+			return 0, fmt.Errorf("invalid snapshot file size")
+		}
+		total += size
+	}
+	return total, nil
+}
+
+func (p *CacheJobService) preheatMetadata(ctx context.Context, key repository.RepoKey, revision, authorization string) (*dao.CommitHfSha, error) {
+	meta, err := p.preheatRevision(ctx, key, revision, authorization)
+	if err != nil || key.Namespace != repository.HuggingFace {
+		return meta, err
+	}
+	if meta.UsedStorage, err = p.preheatSnapshotSize(ctx, key, meta, authorization); err != nil {
+		return nil, err
+	}
+	return meta, nil
+}
+
+// sizeSnapshot replaces the create-time estimate with the measured snapshot
+// size before any transfer, then reports it to the scheduler.
+func (p *CacheJobService) sizeSnapshot(preheat *task2.PreheatCacheTask, key repository.RepoKey) func(context.Context) error {
+	return func(ctx context.Context) error {
+		size, err := p.preheatSnapshotSize(ctx, key, preheat.Sha, preheat.Authorization)
+		if err != nil {
+			return err
+		}
+		preheat.Sha.UsedStorage = size
+		preheat.UsedStorage = uint64(size)
+		cacheStateMu.Lock()
+		current, err := readCacheJobStatus(int64(preheat.TaskNo))
+		if err == nil && current.State == "running" {
+			next := current
+			next.TotalBytes = preheat.UsedStorage
+			err = commitCacheSnapshot(current, &next)
+		}
+		cacheStateMu.Unlock()
+		if err != nil {
+			return err
+		}
+		if !preheat.LocalJob && preheat.SchedulerDao != nil {
+			preheat.SchedulerDao.ReportCacheJobRunning(preheat.TaskNo, preheat.Job.InstanceId, preheat.Job.Namespace, preheat.Job.Repo, size)
+		}
+		return nil
+	}
 }
 
 func legacyJobKey(typ, org, repo, id string) (repository.RepoKey, error) {

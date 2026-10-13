@@ -1117,14 +1117,16 @@ func (x *CreateCacheJobResp) GetId() int64 {
 }
 
 type UpdateCacheJobStatusReq struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            int64                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
-	Status        int32                  `protobuf:"varint,2,opt,name=status,proto3" json:"status,omitempty"`
-	ErrorMsg      string                 `protobuf:"bytes,3,opt,name=errorMsg,proto3" json:"errorMsg,omitempty"`
-	InstanceId    string                 `protobuf:"bytes,4,opt,name=instanceId,proto3" json:"instanceId,omitempty"`
-	Org           string                 `protobuf:"bytes,5,opt,name=org,proto3" json:"org,omitempty"`
-	Repo          string                 `protobuf:"bytes,6,opt,name=repo,proto3" json:"repo,omitempty"`
-	Process       float32                `protobuf:"fixed32,7,opt,name=process,proto3" json:"process,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Id         int64                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	Status     int32                  `protobuf:"varint,2,opt,name=status,proto3" json:"status,omitempty"`
+	ErrorMsg   string                 `protobuf:"bytes,3,opt,name=errorMsg,proto3" json:"errorMsg,omitempty"`
+	InstanceId string                 `protobuf:"bytes,4,opt,name=instanceId,proto3" json:"instanceId,omitempty"`
+	Org        string                 `protobuf:"bytes,5,opt,name=org,proto3" json:"org,omitempty"`
+	Repo       string                 `protobuf:"bytes,6,opt,name=repo,proto3" json:"repo,omitempty"`
+	Process    float32                `protobuf:"fixed32,7,opt,name=process,proto3" json:"process,omitempty"`
+	// Exact snapshot size once the job has measured it; 0 leaves the stored value.
+	UsedStorage   int64 `protobuf:"varint,8,opt,name=usedStorage,proto3" json:"usedStorage,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1204,6 +1206,13 @@ func (x *UpdateCacheJobStatusReq) GetRepo() string {
 func (x *UpdateCacheJobStatusReq) GetProcess() float32 {
 	if x != nil {
 		return x.Process
+	}
+	return 0
+}
+
+func (x *UpdateCacheJobStatusReq) GetUsedStorage() int64 {
+	if x != nil {
+		return x.UsedStorage
 	}
 	return 0
 }
@@ -1538,7 +1547,7 @@ const file_manager_proto_rawDesc = "" +
 	"\x06commit\x18\a \x01(\tR\x06commit\x12\x16\n" +
 	"\x06status\x18\b \x01(\x05R\x06status\"$\n" +
 	"\x12CreateCacheJobResp\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\x03R\x02id\"\xbd\x01\n" +
+	"\x02id\x18\x01 \x01(\x03R\x02id\"\xdf\x01\n" +
 	"\x17UpdateCacheJobStatusReq\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\x05R\x06status\x12\x1a\n" +
@@ -1548,7 +1557,8 @@ const file_manager_proto_rawDesc = "" +
 	"instanceId\x12\x10\n" +
 	"\x03org\x18\x05 \x01(\tR\x03org\x12\x12\n" +
 	"\x04repo\x18\x06 \x01(\tR\x04repo\x12\x18\n" +
-	"\aprocess\x18\a \x01(\x02R\aprocess\"d\n" +
+	"\aprocess\x18\a \x01(\x02R\aprocess\x12 \n" +
+	"\vusedStorage\x18\b \x01(\x03R\vusedStorage\"d\n" +
 	"\x1eUpdateRepositoryMountStatusReq\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\x05R\x06status\x12\x1a\n" +

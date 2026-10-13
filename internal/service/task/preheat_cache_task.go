@@ -62,6 +62,10 @@ type PreheatCacheTask struct {
 	OnFinish      func(error)
 	OnStart       func()
 	InitialState  string
+	// Prepare runs before any transfer. Creating a job only resolves the commit;
+	// measuring a large snapshot can take minutes upstream, so it happens here
+	// instead of inside the scheduler's create request.
+	Prepare func(context.Context) error
 	// transfer moves one file's bytes. It defaults to startPreheatContext; tests set it
 	// to observe how transfers are scheduled without touching the network.
 	transfer func(hfUri, orgRepo, fileName, commit, etag, authorization string, fileSize, offset int64) error
@@ -80,18 +84,24 @@ func (p *PreheatCacheTask) DoTask() {
 		p.OnStart()
 	}
 	orgRepo := fmt.Sprintf("%s/%s", p.Job.Namespace, p.Job.Repo)
-	ctx, cancelFunc := context.WithCancel(p.Ctx)
-	defer cancelFunc()
-	progressDone := make(chan struct{})
-	go func() {
-		defer close(progressDone)
-		p.realTimeSpeed(ctx)
-	}()
-	err := p.preheatProcess(orgRepo)
-	// Stop sampling before recording the terminal progress; a late tick must
-	// not overwrite 100% with the last in-flight percentage.
-	cancelFunc()
-	<-progressDone
+	var err error
+	if p.Prepare != nil {
+		// Before the progress sampler starts: Prepare sets UsedStorage.
+		err = p.Prepare(p.Ctx)
+	}
+	if err == nil {
+		ctx, cancelFunc := context.WithCancel(p.Ctx)
+		progressDone := make(chan struct{})
+		go func() {
+			defer close(progressDone)
+			p.realTimeSpeed(ctx)
+		}()
+		err = p.preheatProcess(orgRepo)
+		// Stop sampling before recording the terminal progress; a late tick must
+		// not overwrite 100% with the last in-flight percentage.
+		cancelFunc()
+		<-progressDone
+	}
 	if p.OnFinish != nil {
 		if err == nil && p.Job.Namespace == repository.HuggingFace {
 			hfprojection.DefaultIndex.InvalidateRepository(config.SysConfig.Repos(), p.Job.Datatype, p.Job.Repo)

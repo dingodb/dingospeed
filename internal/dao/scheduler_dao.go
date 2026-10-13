@@ -216,6 +216,23 @@ func (s *SchedulerDao) ExecUpdateCacheJobStatus(jobId int, status int32, instanc
 	}
 }
 
+// ReportCacheJobRunning tells the scheduler a job is running and how large its
+// snapshot is. It is best effort and deliberately not queued for replay: a
+// replayed "running" could land after the job's terminal status.
+func (s *SchedulerDao) ReportCacheJobRunning(jobId int, instanceId, org, repo string, usedStorage int64) {
+	request := &manager.UpdateCacheJobStatusReq{
+		Id:          int64(jobId),
+		InstanceId:  instanceId,
+		Status:      consts.RunningStatusJobIng,
+		Org:         org,
+		Repo:        repo,
+		UsedStorage: usedStorage,
+	}
+	if err := s.UpdateCacheJobStatus(request); err != nil {
+		zap.S().Warnf("report cache job %d running: %v", jobId, err)
+	}
+}
+
 func (s *SchedulerDao) UpdateRepositoryMountStatus(request *manager.UpdateRepositoryMountStatusReq) error {
 	zap.S().Infof("updateRepositoryMountStatus id:%d, status:%d, %s", request.Id, request.Status, request.ErrorMsg)
 	ctx, cancel := context.WithTimeout(context.Background(), consts.RpcRequestTimeout)

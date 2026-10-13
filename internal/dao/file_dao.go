@@ -637,6 +637,57 @@ requestRemoteFileInfo:
 	return pathInfo, nil
 }
 
+// GetSnapshotSizesContext 用一次 revision?blobs=true 请求取得快照内全部文件大小。
+// 上游缺少任一路径的大小时返回错误，由调用方退回分批 paths-info。
+func (f *FileDao) GetSnapshotSizesContext(ctx context.Context, repoType, orgRepo, commit, authorization string, paths []string) (map[string]int64, error) {
+	upstream, err := UpstreamRepo(repoType, orgRepo)
+	if err != nil {
+		return nil, err
+	}
+	uri := fmt.Sprintf("/api/%s/%s/revision/%s?blobs=true", repoType, repository.EscapeURLPath(upstream), repository.EscapeURLPath(commit))
+	headers := map[string]string{}
+	if authorization != "" {
+		headers["authorization"] = authorization
+	}
+	response, err := util.RetryRequestContext(ctx, func() (*common.Response, error) {
+		return util.GetContext(ctx, uri, headers)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("remote metadata request: %w", err)
+	}
+	if response.StatusCode != http.StatusOK {
+		return nil, myerr.NewAppendCode(response.StatusCode, "snapshot sizes request failed")
+	}
+	var meta struct {
+		Sha      string `json:"sha"`
+		Siblings []struct {
+			Rfilename string `json:"rfilename"`
+			Size      *int64 `json:"size"`
+		} `json:"siblings"`
+	}
+	if err = sonic.Unmarshal(response.Body, &meta); err != nil {
+		return nil, err
+	}
+	if meta.Sha != commit {
+		return nil, fmt.Errorf("upstream returned commit %q, want %q", meta.Sha, commit)
+	}
+	listed := make(map[string]int64, len(meta.Siblings))
+	for _, sibling := range meta.Siblings {
+		if sibling.Size != nil {
+			listed[sibling.Rfilename] = *sibling.Size
+		}
+	}
+	sizes := make(map[string]int64, len(paths))
+	for _, path := range paths {
+		size, ok := listed[path]
+		if !ok {
+			return nil, fmt.Errorf("upstream omitted size for %q", path)
+		}
+		sizes[path] = size
+	}
+	return sizes, nil
+}
+
 // GetPathsSizesContext 批量查询快照内文件大小，每 128 个路径一次 paths-info 请求。
 // 上游必须逐一返回请求的路径，缺失或多出的条目都视为错误。
 func (f *FileDao) GetPathsSizesContext(ctx context.Context, repoType, orgRepo, commit, authorization string, paths []string) (map[string]int64, error) {
