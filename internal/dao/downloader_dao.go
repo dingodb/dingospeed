@@ -399,7 +399,7 @@ func (d *DownloaderDao) reconcileCachedFile(p *downloader.TaskParam) {
 		InstanceId: config.SysConfig.Registration().NodeID,
 		StartPos:   p.FileSize, EndPos: p.FileSize, Status: consts.StatusDownloaded,
 	}
-	if err := d.schedulerDao.SyncFileProcess(&manager.SyncFileProcessReq{FileProcessEntries: []*manager.FileProcessEntry{entry}}); err != nil {
+	if err := d.schedulerDao.ReportCachedFile(&manager.SyncFileProcessReq{FileProcessEntries: []*manager.FileProcessEntry{entry}}); err != nil {
 		zap.S().Errorf("reconcile cached file %s/%s: %v", p.OrgRepo, p.FileName, err)
 		data.WriteLocalOperationChan(consts.OperationProcess, &data.FileProcessParam{
 			Datatype: p.DataType, Org: p.RepoKey.Namespace, Repo: p.RepoKey.Repo,
