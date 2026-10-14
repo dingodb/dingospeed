@@ -49,7 +49,7 @@ type RepoTreeItem struct {
 	Type string      `json:"type"`
 	Path string      `json:"path"`
 	Oid  string      `json:"oid"`
-	Size int64       `json:"size,omitempty"`
+	Size int64       `json:"size"`
 	Lfs  *common.Lfs `json:"lfs,omitempty"`
 }
 
