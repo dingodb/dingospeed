@@ -58,6 +58,7 @@ type PreheatCacheTask struct {
 	DownloaderDao *dao.DownloaderDao
 	UsedStorage   uint64
 	stockLen      atomic.Uint64
+	fetchedBytes  atomic.Uint64 // bytes received from upstream, never reset
 	progressMu    sync.RWMutex
 	StockSpeed    string
 	StockProcess  float32
@@ -136,10 +137,25 @@ func (p *PreheatCacheTask) DoTask() {
 var PreheatRetryBackoff = []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 5 * time.Minute,
 	10 * time.Minute, 10 * time.Minute, 10 * time.Minute, 10 * time.Minute}
 
+// PreheatRetryResetBytes is how much a failed run must fetch for the retry
+// budget to start over.
+var PreheatRetryResetBytes uint64 = 1 << 30
+
 func (p *PreheatCacheTask) preheatWithRetry(orgRepo string) error {
-	for attempt := 0; ; attempt++ {
+	attempt := 0
+	for {
+		before := p.fetchedBytes.Load()
 		err := p.preheatProcess(orgRepo)
-		if err == nil || attempt >= len(PreheatRetryBackoff) || !retryablePreheatError(p.Ctx, err) {
+		if err == nil || !retryablePreheatError(p.Ctx, err) {
+			return err
+		}
+		// The budget bounds consecutive failures, not a job's lifetime: a
+		// multi-day download meets many unrelated upstream hiccups, and a run
+		// that fetched real data before failing starts the count afresh.
+		if p.fetchedBytes.Load()-before >= PreheatRetryResetBytes {
+			attempt = 0
+		}
+		if attempt >= len(PreheatRetryBackoff) {
 			return err
 		}
 		zap.S().Warnf("preheat job %d (%s) failed, retry %d/%d in %s: %v",
@@ -149,6 +165,7 @@ func (p *PreheatCacheTask) preheatWithRetry(orgRepo string) error {
 			return err
 		case <-time.After(PreheatRetryBackoff[attempt]):
 		}
+		attempt++
 		// The rerun counts cached offsets again as it walks the manifest.
 		p.stockLen.Store(0)
 	}
@@ -307,6 +324,7 @@ func (p *PreheatCacheTask) result(ctx context.Context, responseChan chan []byte)
 				return nil
 			}
 			p.stockLen.Add(uint64(len(b)))
+			p.fetchedBytes.Add(uint64(len(b)))
 		case <-ctx.Done():
 			return ctx.Err()
 		}
