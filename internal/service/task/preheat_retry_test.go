@@ -78,3 +78,28 @@ func TestPreheatRetryGivesUp(t *testing.T) {
 		})
 	}
 }
+
+// A long job meets unrelated hiccups hours apart; only consecutive failures
+// without progress should exhaust the budget.
+func TestPreheatRetryBudgetResetsAfterProgress(t *testing.T) {
+	fastPreheatRetries(t, 2)
+	old := PreheatRetryResetBytes
+	t.Cleanup(func() { PreheatRetryResetBytes = old })
+	PreheatRetryResetBytes = 10
+	p := preheatFixture(t, 1)
+	var calls atomic.Int32
+	p.transfer = func(_, _, _, _, _, _ string, _, _ int64) error {
+		if calls.Add(1) <= 5 {
+			p.fetchedBytes.Add(100) // fetched data, then the stream dropped
+		}
+		return io.ErrUnexpectedEOF
+	}
+	if err := p.preheatWithRetry("huggingface/owner/model"); err == nil {
+		t.Fatal("failure swallowed")
+	}
+	// 5 runs that made progress; the budget restarts after the last one, so 2
+	// retries without progress follow before giving up.
+	if calls.Load() != 7 {
+		t.Fatalf("attempted %d times, want 7", calls.Load())
+	}
+}
