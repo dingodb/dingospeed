@@ -40,7 +40,21 @@ RUN mkdir -p bin/ \
 #                         trust store to reach huggingface.co / hf-mirror.com.
 #   zoneinfo            — keeps log timestamps and the cache-cleanup schedule
 #                         on Asia/Shanghai.
-FROM debian:bookworm-slim
+#
+# The offline instance's "cache to public" job (internal/service/task/
+# mount_cache_task.go) shells out to the Hugging Face CLI, `hf download`.
+# bookworm-slim has no `hf`, so since the 2026-10-10 images every mount failed
+# with `exec: "hf": executable file not found in $PATH`. python:slim is the same
+# Debian base with Python preinstalled; pip goes to a domestic mirror because
+# PyPI, like deb.debian.org, is unreachable from build containers. Override
+# with --build-arg PIP_INDEX_URL. click/typer are listed because
+# huggingface_hub 1.2.3 does not pull in the CLI's own dependencies.
+FROM python:3.12-slim-bookworm
+
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+RUN pip install --no-cache-dir -i "${PIP_INDEX_URL}" \
+        "huggingface_hub==1.2.3" "click" "typer" \
+    && hf version
 
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
