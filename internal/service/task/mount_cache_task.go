@@ -2,7 +2,9 @@ package task
 
 import (
 	"bufio"
+	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -71,28 +73,22 @@ func (m *MountCacheTask) DoTask() {
 		return
 	}
 	token := getToken(m.Authorization)
-	var cmd *exec.Cmd
+	args := []string{"download", "--repo-type", repoType, upstream, "--local-dir", localModelDir}
 	if token != "" {
-		cmd = exec.Command("hf", "download", "--repo-type",
-			repoType, upstream, "--local-dir", localModelDir, "--token", token)
-	} else {
-		cmd = exec.Command("hf", "download", "--repo-type",
-			repoType, upstream, "--local-dir", localModelDir)
+		args = append(args, "--token", token)
 	}
-	cmd.Env = append(os.Environ(), fmt.Sprintf("HF_ENDPOINT=%s", hfEndpoint))
-	cmd.Stdout = logF
-	cmd.Stderr = logF
-	go func() {
-		<-m.Ctx.Done()
-		if cmd.Process != nil {
-			if err = cmd.Process.Kill(); err != nil {
-				zap.S().Errorf("kill process fail (%s, pid: %d): %v", orgRepo, cmd.Process.Pid, err)
-			} else {
-				zap.S().Infof("cancel process (%s, pid: %d)", orgRepo, cmd.Process.Pid)
-			}
+	newCmd := func() *exec.Cmd {
+		cmd := exec.CommandContext(m.Ctx, "hf", args...)
+		cmd.Env = append(os.Environ(), fmt.Sprintf("HF_ENDPOINT=%s", hfEndpoint))
+		cmd.Stdout = logF
+		cmd.Stderr = logF
+		cmd.Cancel = func() error {
+			zap.S().Infof("cancel process (%s, pid: %d)", orgRepo, cmd.Process.Pid)
+			return cmd.Process.Kill()
 		}
-	}()
-	if err = cmd.Run(); err != nil {
+		return cmd
+	}
+	if err = runMountWithRetry(m.Ctx, orgRepo, newCmd, logF); err != nil {
 		zap.S().Infof("command fail.%d", m.TaskNo)
 		errMsg := err.Error()
 		lines, err := getLastNLines(logFile, 80)
@@ -108,6 +104,29 @@ func (m *MountCacheTask) DoTask() {
 		zap.S().Infof("command success.%d", m.TaskNo)
 		hfprojection.DefaultIndex.InvalidateRepository(config.SysConfig.Repos(), m.Job.Datatype, key.Repo)
 		m.SchedulerDao.ExecUpdateRepositoryMountStatus(m.TaskNo, consts.RunningStatusJobComplete, "")
+	}
+}
+
+// MountRetryBackoff spaces out reruns of a failed `hf download`; empty disables
+// retries. A rerun skips files already present in the target directory and
+// resumes partial ones, so one transient error (a DNS lookup, a dropped
+// connection) no longer fails a copy that has been running for hours.
+var MountRetryBackoff = []time.Duration{30 * time.Second, 2 * time.Minute, 5 * time.Minute, 10 * time.Minute}
+
+func runMountWithRetry(ctx context.Context, orgRepo string, newCmd func() *exec.Cmd, logW io.Writer) error {
+	for attempt := 0; ; attempt++ {
+		err := newCmd().Run()
+		if err == nil || ctx.Err() != nil || attempt >= len(MountRetryBackoff) {
+			return err
+		}
+		zap.S().Warnf("mount %s failed, retry %d/%d in %s: %v",
+			orgRepo, attempt+1, len(MountRetryBackoff), MountRetryBackoff[attempt], err)
+		fmt.Fprintf(logW, "\n--- attempt %d failed: %v; retry in %s ---\n", attempt+1, err, MountRetryBackoff[attempt])
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(MountRetryBackoff[attempt]):
+		}
 	}
 }
 
