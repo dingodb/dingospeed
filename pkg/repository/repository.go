@@ -184,8 +184,149 @@ func Read(root string, k RepoKey) (Descriptor, error) {
 	return d, d.Validate()
 }
 
+// List returns every registered repository.
+//
+// Upstream repository IDs have at most two segments, so the Hugging Face and
+// ModelScope trees are read two levels deep instead of walked. A walk cannot
+// prune an upstream cache written before repository markers existed: with no
+// marker to stop at, it descends every repository's per-file metadata tree, which
+// on a large mirror node is hundreds of thousands of directories. Hosted names may
+// have any depth, so only the hosted root is walked.
 func List(root string) ([]Descriptor, error) {
-	return listIn(filepath.Join(root, "api"), root)
+	c, err := scanCatalog(root, false)
+	return c.Registered, err
+}
+
+// Catalog is the repository listing shown to people.
+type Catalog struct {
+	Registered []Descriptor
+	// Unregistered holds upstream cache directories that carry cached metadata
+	// but no marker, i.e. caches written before markers existed. They are only
+	// reported: nothing registers them or bases an access decision on them.
+	Unregistered []RepoKey
+}
+
+// ListCatalog returns the registered repositories plus the unregistered upstream
+// caches, at the same bounded cost as List.
+func ListCatalog(root string) (Catalog, error) {
+	return scanCatalog(root, true)
+}
+
+func scanCatalog(root string, unregistered bool) (Catalog, error) {
+	c := Catalog{Registered: []Descriptor{}, Unregistered: []RepoKey{}}
+	for _, repoType := range []string{"datasets", "models", "spaces"} {
+		typeRoot := filepath.Join(root, "api", repoType)
+		names, err := readDirNames(typeRoot)
+		if err != nil {
+			return c, err
+		}
+		for _, name := range names {
+			p := filepath.Join(typeRoot, name)
+			switch name {
+			case Local:
+				found, err := listIn(p, root)
+				if err != nil {
+					return c, err
+				}
+				c.Registered = append(c.Registered, found...)
+			case ModelScope:
+				owners, err := readDirNames(p)
+				if err != nil {
+					return c, err
+				}
+				for _, owner := range owners {
+					if err = scanUpstreamOwner(&c, root, p, repoType, ModelScope, owner, unregistered); err != nil {
+						return c, err
+					}
+				}
+			default:
+				if err = scanUpstreamOwner(&c, root, typeRoot, repoType, HuggingFace, name, unregistered); err != nil {
+					return c, err
+				}
+			}
+		}
+	}
+	return c, nil
+}
+
+// scanUpstreamOwner reads base/owner and its direct children. owner is either a
+// repository of its own (a Hugging Face ID without an organisation) or the
+// organisation of <owner>/<name> repositories; nothing below that is opened.
+func scanUpstreamOwner(c *Catalog, root, base, repoType, namespace, owner string, unregistered bool) error {
+	dir := filepath.Join(base, owner)
+	d, ok, err := readMarker(root, dir)
+	if err != nil {
+		return err
+	}
+	if ok {
+		c.Registered = append(c.Registered, d)
+		return nil
+	}
+	names, err := readDirNames(dir)
+	if err != nil {
+		return err
+	}
+	ownerIsRepository := false
+	for _, name := range names {
+		child := filepath.Join(dir, name)
+		d, ok, err := readMarker(root, child)
+		if err != nil {
+			return err
+		}
+		if ok {
+			c.Registered = append(c.Registered, d)
+			continue
+		}
+		// Unmarked repository data directly below owner means owner itself is an
+		// unregistered repository rather than an organisation.
+		if isDataSubtree(name) {
+			ownerIsRepository = true
+			continue
+		}
+		if unregistered && hasCachedMetadata(child) {
+			c.addUnregistered(RepoKey{Namespace: namespace, RepoType: repoType, Repo: owner + "/" + name})
+		}
+	}
+	if unregistered && ownerIsRepository {
+		c.addUnregistered(RepoKey{Namespace: namespace, RepoType: repoType, Repo: owner})
+	}
+	return nil
+}
+
+func (c *Catalog) addUnregistered(k RepoKey) {
+	if k.Validate() == nil {
+		c.Unregistered = append(c.Unregistered, k)
+	}
+}
+
+// hasCachedMetadata reports whether an unmarked directory holds the metadata a
+// cached upstream repository leaves behind.
+func hasCachedMetadata(dir string) bool {
+	for _, name := range []string{"revision", "paths-info"} {
+		if info, err := os.Lstat(filepath.Join(dir, name)); err == nil && info.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+// readDirNames returns the names of the subdirectories of dir, sorted. A missing
+// dir has none.
+func readDirNames(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			names = append(names, e.Name())
+		}
+	}
+	return names, nil
 }
 
 // ListHosted enumerates only hosted repositories, which live exclusively below
@@ -287,36 +428,9 @@ func listIn(scanRoot, root string) ([]Descriptor, error) {
 		if isRepositoryDataSubtree(scanRoot, p, e.Name()) {
 			return filepath.SkipDir
 		}
-		marker := filepath.Join(p, Marker)
-		info, statErr := os.Lstat(marker)
-		if errors.Is(statErr, os.ErrNotExist) {
-			return nil
-		}
-		if statErr != nil {
-			return statErr
-		}
-		if info.IsDir() {
-			return nil
-		}
-		b, err := os.ReadFile(marker)
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		if err != nil {
+		d, ok, err := readMarker(root, p)
+		if err != nil || !ok {
 			return err
-		}
-		if err = SafePath(root, marker); err != nil {
-			return err
-		}
-		var d Descriptor
-		if err = json.Unmarshal(b, &d); err != nil {
-			return err
-		}
-		if err = d.Validate(); err != nil {
-			return err
-		}
-		if filepath.Clean(filepath.Join(d.APIRoot(root), Marker)) != filepath.Clean(marker) {
-			return fmt.Errorf("repository marker path mismatch: %s", marker)
 		}
 		result = append(result, d)
 		return filepath.SkipDir
@@ -325,6 +439,43 @@ func listIn(scanRoot, root string) ([]Descriptor, error) {
 		return result, nil
 	}
 	return result, err
+}
+
+// readMarker reads the repository marker in dir. A missing marker is not an
+// error; a marker that exists but does not describe the repository at dir is.
+func readMarker(root, dir string) (Descriptor, bool, error) {
+	marker := filepath.Join(dir, Marker)
+	info, err := os.Lstat(marker)
+	if errors.Is(err, os.ErrNotExist) {
+		return Descriptor{}, false, nil
+	}
+	if err != nil {
+		return Descriptor{}, false, err
+	}
+	if info.IsDir() {
+		return Descriptor{}, false, nil
+	}
+	b, err := os.ReadFile(marker)
+	if errors.Is(err, os.ErrNotExist) {
+		return Descriptor{}, false, nil
+	}
+	if err != nil {
+		return Descriptor{}, false, err
+	}
+	if err = SafePath(root, marker); err != nil {
+		return Descriptor{}, false, err
+	}
+	var d Descriptor
+	if err = json.Unmarshal(b, &d); err != nil {
+		return Descriptor{}, false, err
+	}
+	if err = d.Validate(); err != nil {
+		return Descriptor{}, false, err
+	}
+	if filepath.Clean(filepath.Join(d.APIRoot(root), Marker)) != filepath.Clean(marker) {
+		return Descriptor{}, false, fmt.Errorf("repository marker path mismatch: %s", marker)
+	}
+	return d, true, nil
 }
 
 var registrationMu sync.Mutex

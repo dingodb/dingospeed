@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -79,14 +80,23 @@ func (m *MetaDao) WhoamiV2Generator(c echo.Context) error {
 }
 
 func (m *MetaDao) ReposGenerator(c echo.Context) error {
-	all, err := repository.List(config.SysConfig.Repos())
+	catalog, err := repository.ListCatalog(config.SysConfig.Repos())
 	if err != nil {
 		return echo.NewHTTPError(500, "repository registry unavailable")
 	}
-	groups := map[string]interface{}{"datasets_repos": []string{}, "models_repos": []string{}, "spaces_repos": []string{}}
-	for _, d := range all {
-		name := d.RepoType + "_repos"
-		groups[name] = append(groups[name].([]string), d.ID())
+	ids := map[string][]string{"datasets": {}, "models": {}, "spaces": {}}
+	for _, d := range catalog.Registered {
+		ids[d.RepoType] = append(ids[d.RepoType], d.ID())
+	}
+	// Caches written before repository markers existed are still served, so they
+	// are listed too.
+	for _, k := range catalog.Unregistered {
+		ids[k.RepoType] = append(ids[k.RepoType], k.ID())
+	}
+	groups := map[string]interface{}{}
+	for repoType, list := range ids {
+		sort.Strings(list)
+		groups[repoType+"_repos"] = list
 	}
 	return c.Render(http.StatusOK, "repos.html", groups)
 }
